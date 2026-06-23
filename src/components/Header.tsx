@@ -25,7 +25,6 @@ export default function Header() {
 
   const textClass = scrolled ? "text-warm-900" : "text-white";
   const mutedClass = scrolled ? "text-warm-800/50" : "text-white/60";
-  const borderClass = scrolled ? "border-warm-900" : "border-white";
 
   return (
     <header
