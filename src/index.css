@@ -1,0 +1,36 @@
+@import "tailwindcss";
+
+@theme {
+  --color-sand-50: oklch(97.5% 0.009 70);
+  --color-sand-100: oklch(94% 0.015 70);
+  --color-sand-200: oklch(88% 0.022 70);
+  --color-sand-300: oklch(80% 0.032 68);
+  --color-sea-400: oklch(61% 0.095 185);
+  --color-sea-500: oklch(51% 0.085 196);
+  --color-sea-600: oklch(42% 0.072 200);
+  --color-sea-700: oklch(33% 0.055 200);
+  --color-palm-500: oklch(42% 0.1 152);
+  --color-palm-600: oklch(30% 0.08 152);
+  --color-coral-400: oklch(65% 0.13 38);
+  --color-coral-500: oklch(56% 0.125 36);
+  --color-coral-600: oklch(47% 0.115 34);
+  --color-warm-800: oklch(27% 0.022 58);
+  --color-warm-900: oklch(19% 0.018 56);
+  --font-heading: "DM Sans", sans-serif;
+  --font-body: "Inter", sans-serif;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  opacity: 0.4;
+  cursor: pointer;
+}
