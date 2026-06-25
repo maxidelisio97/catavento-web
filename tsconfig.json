@@ -1,3 +1,6 @@
+// Configuracion raiz de TypeScript que conecta los configs de app y Vite.
+// Aca debo cambiar referencias si el proyecto suma otros paquetes o entornos.
+// No define pantallas ni componentes visuales.
 {
   "files": [],
   "references": [

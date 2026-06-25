@@ -1,3 +1,9 @@
+/*
+ * Contiene Tailwind y los estilos globales del sitio.
+ * Aca debo cambiar colores, fuentes, tokens de tema y reglas globales.
+ * No es para estilos puntuales de una sola seccion.
+ */
+
 @import "tailwindcss";
 
 @theme {

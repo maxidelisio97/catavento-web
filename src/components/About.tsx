@@ -1,8 +1,12 @@
-"use client";
-
+/*
+ * Presenta la pousada con texto institucional, imagen y estadisticas.
+ * Aca debo cambiar la descripcion general o los datos destacados.
+ * No controla navegacion ni reservas.
+ */
 import { motion, useReducedMotion } from "motion/react";
+import { EASE } from "../lib/motion";
 
-const ease = [0.16, 1, 0.3, 1] as const;
+const ease = EASE;
 
 const STATS = [
   { value: "10+", label: "Anos de hospitalidade" },

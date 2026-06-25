@@ -1,3 +1,9 @@
+/*
+ * Define la estructura general de la pagina principal.
+ * Aca se decide el orden de las secciones que componen el sitio.
+ * Si necesito agregar, quitar o reordenar secciones, este es el archivo.
+ */
+
 import Header from "./components/Header";
 import Hero from "./components/Hero";
 import About from "./components/About";

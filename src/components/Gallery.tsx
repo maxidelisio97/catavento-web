@@ -1,8 +1,12 @@
-"use client";
-
+/*
+ * Renderiza la galeria filtrable de imagenes del sitio.
+ * Aca debo agregar, quitar o categorizar fotos de la galeria.
+ * No cambia datos de habitaciones ni informacion de contacto.
+ */
 import { useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { cn } from "../lib/utils";
+import { EASE } from "../lib/motion";
 
 const IMAGES = [
   { src: "https://picsum.photos/seed/catavento-pool-1/1200/800", alt: "Piscina da Pousada Catavento", category: "pousada", cols: "md:col-span-2" },
@@ -23,7 +27,7 @@ const FILTERS = [
 
 type FilterId = (typeof FILTERS)[number]["id"];
 
-const ease = [0.16, 1, 0.3, 1] as const;
+const ease = EASE;
 
 export default function Gallery() {
   const [filter, setFilter] = useState<FilterId>("all");

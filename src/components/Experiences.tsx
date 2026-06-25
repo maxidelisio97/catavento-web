@@ -1,8 +1,12 @@
-"use client";
-
+/*
+ * Muestra las experiencias disponibles en Taiba mediante pestanas.
+ * Aca debo editar textos, iconos e imagenes de actividades.
+ * Tambien controla que experiencia esta activa.
+ */
 import { useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { MdWaves, MdSpa, MdRestaurant, MdNature } from "react-icons/md";
+import { EASE } from "../lib/motion";
 
 const EXPERIENCES = [
   {
@@ -43,7 +47,7 @@ const EXPERIENCES = [
   },
 ] as const;
 
-const ease = [0.16, 1, 0.3, 1] as const;
+const ease = EASE;
 
 export default function Experiences() {
   const [active, setActive] = useState<string>("kitesurf");

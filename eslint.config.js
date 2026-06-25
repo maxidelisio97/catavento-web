@@ -1,3 +1,9 @@
+/*
+ * Define las reglas de lint para TypeScript y React.
+ * Aca debo cambiar validaciones de codigo o archivos ignorados.
+ * No afecta el resultado visual, solo la calidad del codigo.
+ */
+
 import js from '@eslint/js'
 import globals from 'globals'
 import reactHooks from 'eslint-plugin-react-hooks'

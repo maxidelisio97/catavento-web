@@ -1,3 +1,6 @@
+// Configuracion de TypeScript para el codigo React dentro de src.
+// Aca debo ajustar reglas del compilador que afectan componentes y utilidades.
+// Si TypeScript marca errores del frontend, este archivo puede ser relevante.
 {
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",

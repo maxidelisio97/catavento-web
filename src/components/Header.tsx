@@ -1,17 +1,12 @@
-"use client";
-
+/*
+ * Maneja el encabezado fijo del sitio.
+ * Contiene logo, navegacion, boton de reserva y menu mobile.
+ * Si necesito modificar el header o sus links, este es el archivo.
+ */
 import { useState, useEffect } from "react";
 import { MdMenu, MdClose } from "react-icons/md";
+import { NAV_ITEMS, WHATSAPP_URL } from "../config/site";
 
-const NAV_ITEMS = [
-  { label: "Início", href: "#hero" },
-  { label: "Experiências", href: "#experiencias" },
-  { label: "Quartos", href: "#quartos" },
-  { label: "Taíba", href: "#taiba" },
-  { label: "Galeria", href: "#galeria" },
-] as const;
-
-const WHATSAPP_URL = "https://wa.link/gzgaap";
 
 export default function Header() {
   const [scrolled, setScrolled] = useState(false);

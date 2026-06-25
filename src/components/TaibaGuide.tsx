@@ -1,7 +1,12 @@
-"use client";
-
+/*
+ * Explica los atractivos de Taiba y muestra datos destacados del destino.
+ * Aca debo cambiar beneficios, textos turisticos, fondo o enlace al mapa.
+ * Es una seccion informativa, no maneja reservas.
+ */
 import { motion, useReducedMotion } from "motion/react";
 import { MdWbSunny, MdAir, MdSurfing, MdLocationOn } from "react-icons/md";
+import { MAPS_URL } from "../config/site";
+import { EASE } from "../lib/motion";
 
 const HIGHLIGHTS = [
   {
@@ -30,7 +35,7 @@ const HIGHLIGHTS = [
   },
 ] as const;
 
-const ease = [0.16, 1, 0.3, 1] as const;
+const ease = EASE;
 
 export default function TaibaGuide() {
   const reduce = useReducedMotion();
@@ -103,7 +108,7 @@ export default function TaibaGuide() {
           transition={{ duration: 0.5, delay: 0.4, ease }}
         >
           <a
-            href="https://www.google.com/maps/search/Pousada+Catavento+Taiba"
+            href={MAPS_URL}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-2 font-body text-sm text-white/50 hover:text-white/80 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white rounded"

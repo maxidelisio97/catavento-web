@@ -1,11 +1,15 @@
-"use client";
-
+/*
+ * Construye la primera seccion visible de la homepage.
+ * Incluye imagen principal, textos, CTAs y barra de busqueda de reserva.
+ * Si necesito cambiar el hero o el formulario inicial, debo editar aca.
+ */
 import { useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { MdWhatsapp } from "react-icons/md";
+import { BOOKING_URL, WHATSAPP_NUMBER } from "../config/site";
+import { EASE } from "../lib/motion";
 
-const WHATSAPP_NUMBER = "5599992325903";
-const ease = [0.16, 1, 0.3, 1] as const;
+const ease = EASE;
 
 export default function Hero() {
   const reduce = useReducedMotion();
@@ -84,7 +88,7 @@ export default function Hero() {
             Reservar via WhatsApp
           </a>
           <a
-            href="https://www.booking.com/hotel/br/pousada-catavento.html"
+            href={BOOKING_URL}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-2 border border-white/45 text-white hover:bg-white/10 font-body font-medium text-sm px-7 py-3.5 rounded-full transition-all duration-200 active:scale-[0.97] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"

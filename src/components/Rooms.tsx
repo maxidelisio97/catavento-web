@@ -1,9 +1,12 @@
-"use client";
-
+/*
+ * Renderiza la seccion de habitaciones y sus tarjetas.
+ * Aca debo cambiar nombres, descripciones, imagenes y amenities de cuartos.
+ * Tambien arma el enlace de reserva por WhatsApp para cada habitacion.
+ */
 import { motion, useReducedMotion } from "motion/react";
 import { MdPeople, MdWhatsapp, MdStar } from "react-icons/md";
-
-const WHATSAPP_NUMBER = "5599992325903";
+import { BOOKING_URL, WHATSAPP_NUMBER } from "../config/site";
+import { EASE } from "../lib/motion";
 
 const ROOMS = [
   {
@@ -29,7 +32,7 @@ const ROOMS = [
   },
 ] as const;
 
-const ease = [0.16, 1, 0.3, 1] as const;
+const ease = EASE;
 
 function buildWhatsAppUrl(roomName: string) {
   const msg = encodeURIComponent(
@@ -127,7 +130,7 @@ export default function Rooms() {
                     Reservar
                   </a>
                   <a
-                    href="https://www.booking.com/hotel/br/pousada-catavento.html"
+                    href={BOOKING_URL}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center justify-center gap-1.5 border border-sea-600 text-sea-600 hover:bg-sea-600 hover:text-white font-body font-semibold text-[11px] uppercase tracking-[0.1em] py-2.5 rounded transition-all duration-200 active:scale-[0.97] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sea-500"

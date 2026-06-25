@@ -1,23 +1,25 @@
-"use client";
-
+/*
+ * Construye el footer y la llamada final a reservar.
+ * Contiene contacto, redes, navegacion secundaria y direccion.
+ * Si necesito editar informacion de contacto o pie de pagina, voy aca.
+ */
 import { motion, useReducedMotion } from "motion/react";
 import { MdWhatsapp, MdPhone, MdStar, MdLocationOn } from "react-icons/md";
 import { FaInstagram } from "react-icons/fa";
+import {
+  BOOKING_URL,
+  INSTAGRAM_URL,
+  MAPS_URL,
+  NAV_ITEMS,
+  PHONE_DISPLAY,
+  WHATSAPP_NUMBER,
+  WHATSAPP_URL,
+} from "../config/site";
+import { EASE } from "../lib/motion";
 
-const WHATSAPP_URL = "https://wa.link/gzgaap";
-const WHATSAPP_NUMBER = "5599992325903";
-const PHONE_DISPLAY = "+55 99 99232-5903";
-const INSTAGRAM_URL = "https://www.instagram.com/pousadacatavento";
 
-const ease = [0.16, 1, 0.3, 1] as const;
+const ease = EASE;
 
-const NAV_LINKS = [
-  { label: "Início", href: "#hero" },
-  { label: "Experiências", href: "#experiencias" },
-  { label: "Quartos", href: "#quartos" },
-  { label: "Taíba", href: "#taiba" },
-  { label: "Galeria", href: "#galeria" },
-] as const;
 
 export default function Reservation() {
   const reduce = useReducedMotion();
@@ -61,7 +63,7 @@ export default function Reservation() {
               Reservar pelo WhatsApp
             </a>
             <a
-              href="https://www.booking.com/hotel/br/pousada-catavento.html"
+              href={BOOKING_URL}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center justify-center gap-2 border border-white/25 text-white hover:bg-white/8 font-body font-medium text-[11px] uppercase tracking-[0.12em] px-7 py-3.5 rounded-full transition-all duration-200 active:scale-[0.97] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
@@ -116,7 +118,7 @@ export default function Reservation() {
             Navegação
           </h4>
           <ul className="flex flex-col gap-3">
-            {NAV_LINKS.map((link) => (
+            {NAV_ITEMS.map((link) => (
               <li key={link.href}>
                 <a
                   href={link.href}
@@ -174,7 +176,7 @@ export default function Reservation() {
             Localização
           </h4>
           <a
-            href="https://www.google.com/maps/search/Pousada+Catavento+Taiba"
+            href={MAPS_URL}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-start gap-2.5 font-body text-sm text-white/60 hover:text-white transition-colors leading-[1.6] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white rounded"
