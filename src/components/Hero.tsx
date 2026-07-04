@@ -6,7 +6,7 @@
 import { useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { MdWhatsapp } from "react-icons/md";
-import { BOOKING_URL, WHATSAPP_NUMBER } from "../config/site";
+import { assetPath, BOOKING_URL, WHATSAPP_NUMBER } from "../config/site";
 import { EASE } from "../lib/motion";
 
 const ease = EASE;
@@ -31,7 +31,7 @@ export default function Hero() {
       {/* Full-bleed background */}
       <div className="absolute inset-0">
         <img
-          src="https://picsum.photos/seed/catavento-hero-wide/1920/1080"
+          src={assetPath("images/IMG_6798.webp")}
           alt="Vista da Pousada Catavento com jardim e piscina"
           className="w-full h-full object-cover"
           loading="eager"

@@ -5,28 +5,29 @@
  */
 import { motion, useReducedMotion } from "motion/react";
 import { MdPeople, MdWhatsapp, MdStar } from "react-icons/md";
-import { BOOKING_URL, WHATSAPP_NUMBER } from "../config/site";
+import { assetPath, BOOKING_URL, WHATSAPP_NUMBER } from "../config/site";
 import { EASE } from "../lib/motion";
+import RevealImage from "./RevealImage";
 
 const ROOMS = [
   {
     name: "Suíte Master",
     description: "Quarto espaçoso com cama king-size, varanda com rede e vista para o jardim exuberante.",
-    image: "https://picsum.photos/seed/catavento-master/900/1200",
+    image: assetPath("images/IMG_4631.webp"),
     guests: 2,
     features: ["Ar condicionado", "Wi-Fi", "Frigobar", "Varanda"],
   },
   {
     name: "Quarto Família",
     description: "Ideal para famílias. Duas camas queen, área de estar integrada e espaço generoso.",
-    image: "https://picsum.photos/seed/catavento-family/900/1200",
+    image: assetPath("images/triple.webp"),
     guests: 4,
     features: ["Ar condicionado", "Wi-Fi", "Cafeteira"],
   },
   {
     name: "Chalé Premium",
     description: "Chalé privativo com ofurô ao ar livre, lounge exclusivo e total privacidade.",
-    image: "https://picsum.photos/seed/catavento-chale/900/1200",
+    image: assetPath("images/IMG_7570.webp"),
     guests: 2,
     features: ["Ofurô", "Ar condicionado", "Wi-Fi", "Frigobar"],
   },
@@ -82,14 +83,15 @@ export default function Rooms() {
               transition={{ duration: 0.6, delay: 0.1 + i * 0.1, ease }}
             >
               {/* Image */}
-              <div className="aspect-[3/4] overflow-hidden">
-                <img
+                <RevealImage
                   src={room.image}
                   alt={room.name}
                   className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
+                  wrapperClassName="aspect-[3/4]"
                   loading="lazy"
+                  delay={0.12 + i * 0.08}
+                  amount={0.15}
                 />
-              </div>
 
               {/* Content */}
               <div className="flex flex-col flex-1 p-6 pt-5">

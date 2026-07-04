@@ -7,15 +7,17 @@ import { useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { cn } from "../lib/utils";
 import { EASE } from "../lib/motion";
+import { assetPath } from "../config/site";
+import RevealImage from "./RevealImage";
 
 const IMAGES = [
-  { src: "https://picsum.photos/seed/catavento-pool-1/1200/800", alt: "Piscina da Pousada Catavento", category: "pousada", cols: "md:col-span-2" },
-  { src: "https://picsum.photos/seed/catavento-room-1/600/900", alt: "Quarto aconchegante", category: "pousada", cols: "row-span-2" },
-  { src: "https://picsum.photos/seed/catavento-garden-1/600/500", alt: "Jardim da pousada", category: "pousada", cols: "" },
-  { src: "https://picsum.photos/seed/catavento-beach-1/600/500", alt: "Praia da Taíba", category: "praia", cols: "" },
-  { src: "https://picsum.photos/seed/catavento-sunset-1/1200/700", alt: "Pôr do sol em Taíba", category: "natureza", cols: "md:col-span-2" },
-  { src: "https://picsum.photos/seed/catavento-area-1/600/500", alt: "Área de convivência", category: "pousada", cols: "" },
-  { src: "https://picsum.photos/seed/catavento-food-1/600/500", alt: "Culinária cearense", category: "pousada", cols: "" },
+  { src: assetPath("images/IMG_6798.webp"), alt: "Piscina da Pousada Catavento", category: "pousada", cols: "md:col-span-2" },
+  { src: assetPath("images/triple.webp"), alt: "Quarto aconchegante", category: "pousada", cols: "row-span-2" },
+  { src: assetPath("images/IMG_6376.webp"), alt: "Jardim da pousada", category: "pousada", cols: "" },
+  { src: assetPath("images/IMG_3224.webp"), alt: "Praia da Taíba", category: "praia", cols: "" },
+  { src: assetPath("images/IMG_4051.webp"), alt: "Pôr do sol em Taíba", category: "natureza", cols: "md:col-span-2" },
+  { src: assetPath("images/IMG_6611.webp"), alt: "Área de convivência", category: "pousada", cols: "" },
+  { src: assetPath("images/IMG_6383.webp"), alt: "Culinária cearense", category: "pousada", cols: "" },
 ] as const;
 
 const FILTERS = [
@@ -93,11 +95,14 @@ export default function Gallery() {
                 exit={reduce ? undefined : { opacity: 0, scale: 0.97 }}
                 transition={{ duration: 0.4, delay: 0.03 * i, ease }}
               >
-                <img
+                <RevealImage
                   src={img.src}
                   alt={img.alt}
                   className="w-full h-full object-cover hover:scale-105 transition-transform duration-700"
+                  wrapperClassName="h-full"
                   loading="lazy"
+                  delay={0.03 * i}
+                  amount={0.15}
                 />
               </motion.figure>
             ))}

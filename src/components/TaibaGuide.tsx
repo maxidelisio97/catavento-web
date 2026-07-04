@@ -5,15 +5,15 @@
  */
 import { motion, useReducedMotion } from "motion/react";
 import { MdWbSunny, MdAir, MdSurfing, MdLocationOn } from "react-icons/md";
-import { MAPS_URL } from "../config/site";
+import { assetPath, MAPS_URL } from "../config/site";
 import { EASE } from "../lib/motion";
 
 const HIGHLIGHTS = [
   {
     icon: MdAir,
-    title: "Vento Perfeito",
+    title: "Vento e Esportes de Prancha",
     description:
-      "Ventos constantes entre 18 e 25 nós o ano todo — ideais para kitesurf e windsurf em qualquer nível.",
+      "Taíba é conhecida pelo vento constante que atrai kitesurf, wingsurf e outros esportes de prancha, mantendo a vila conectada ao ritmo do mar.",
   },
   {
     icon: MdWbSunny,
@@ -45,7 +45,7 @@ export default function TaibaGuide() {
       {/* Background texture */}
       <div className="absolute inset-0">
         <img
-          src="https://picsum.photos/seed/catavento-taiba-bg/1920/1080"
+          src={assetPath("images/IMG_3221.webp")}
           alt=""
           className="w-full h-full object-cover opacity-15"
           loading="lazy"

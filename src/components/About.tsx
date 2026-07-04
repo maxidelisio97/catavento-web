@@ -4,7 +4,9 @@
  * No controla navegacion ni reservas.
  */
 import { motion, useReducedMotion } from "motion/react";
+import { assetPath } from "../config/site";
 import { EASE } from "../lib/motion";
+import RevealImage from "./RevealImage";
 
 const ease = EASE;
 
@@ -30,14 +32,14 @@ export default function About() {
           viewport={{ once: true, amount: 0.25 }}
           transition={{ duration: 0.8, ease }}
         >
-          <div className="aspect-[4/5] overflow-hidden rounded-sm">
-            <img
-              src="https://picsum.photos/seed/catavento-garden/900/1125"
-              alt="Jardim e piscina da Pousada Catavento"
-              className="w-full h-full object-cover"
-              loading="lazy"
-            />
-          </div>
+          <RevealImage
+            src={assetPath("images/IMG_6787.webp")}
+            alt="Jardim e piscina da Pousada Catavento"
+            className="w-full h-full object-cover"
+            wrapperClassName="aspect-[4/5] rounded-sm"
+            loading="lazy"
+            amount={0.25}
+          />
           {/* Accent block */}
           <div className="absolute -bottom-8 -right-8 w-40 h-40 bg-sand-100 -z-10" />
         </motion.div>

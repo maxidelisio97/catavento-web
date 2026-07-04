@@ -7,16 +7,17 @@ import { useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { MdWaves, MdSpa, MdRestaurant, MdNature } from "react-icons/md";
 import { EASE } from "../lib/motion";
+import { assetPath } from "../config/site";
 
 const EXPERIENCES = [
   {
     id: "kitesurf",
     icon: MdWaves,
     label: "Kitesurf",
-    title: "Kitesurf & Esportes Náuticos",
+    title: "Kitesurf, Surf & Wingsurf",
     description:
-      "Taíba é um dos melhores destinos de kitesurf do Brasil. Ventos constantes entre 18 e 25 nós, águas calmas e escola de kite a poucos metros da pousada. Iniciante ou experiente — o cenário é perfeito.",
-    image: "https://picsum.photos/seed/catavento-kitesurf/1200/900",
+      "Taíba atrai quem vive o mar e o vento. Com dias de vento constante para kite e wingsurf, além de mar que também conversa com o surf, a pousada funciona como base relaxada para entrar e sair da água sem pressa.",
+    image: assetPath("images/IMG_3220.webp"),
   },
   {
     id: "relax",
@@ -25,7 +26,7 @@ const EXPERIENCES = [
     title: "Paz à Beira da Piscina",
     description:
       "Uma rede na varanda, um livro, a brisa do mar. Nossa piscina e jardim são feitos para quem quer desacelerar de verdade. Sem agenda, sem pressa — só você e o silêncio que a natureza oferece.",
-    image: "https://picsum.photos/seed/catavento-pool/1200/900",
+    image: assetPath("images/IMG_6798.webp"),
   },
   {
     id: "natureza",
@@ -34,7 +35,7 @@ const EXPERIENCES = [
     title: "Falésias, Coqueirais e Pôr do Sol",
     description:
       "Explore as falésias, trilhas e lagoas ao redor de Taíba. O pôr do sol aqui é um espetáculo — cores que pintam o céu e se refletem no mar em tons de ouro e coral. Imperdível.",
-    image: "https://picsum.photos/seed/catavento-sunset/1200/900",
+    image: assetPath("images/IMG_4053.webp"),
   },
   {
     id: "gastronomia",
@@ -43,7 +44,7 @@ const EXPERIENCES = [
     title: "Sabores do Ceará",
     description:
       "Peixes frescos, lagosta, frutos do mar e a tradicional tapioca nos restaurantes vizinhos. A culinária cearense é um patrimônio à parte — e Taíba tem alguns dos melhores frutos do mar da costa.",
-    image: "https://picsum.photos/seed/catavento-food/1200/900",
+    image: assetPath("images/IMG_7574.webp"),
   },
 ] as const;
 

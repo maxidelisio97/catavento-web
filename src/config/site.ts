@@ -18,3 +18,7 @@ export const PHONE_DISPLAY = "+55 99 99232-5903";
 export const INSTAGRAM_URL = "https://www.instagram.com/pousadacatavento";
 export const BOOKING_URL = "https://www.booking.com/hotel/br/pousada-catavento.html";
 export const MAPS_URL = "https://www.google.com/maps/search/Pousada+Catavento+Taiba";
+
+export function assetPath(path: string) {
+  return `${import.meta.env.BASE_URL}${path.replace(/^\/+/, "")}`;
+}
