@@ -16,6 +16,10 @@ dist-ssr
 .atl/
 excalidraw.log
 
+# Playwright verification artifacts
+.screenshots/
+.playwright-mcp/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

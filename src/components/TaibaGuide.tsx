@@ -31,7 +31,7 @@ const HIGHLIGHTS = [
     icon: MdLocationOn,
     title: "Acesso Fácil",
     description:
-      "A apenas 90 km de Fortaleza, com estrada asfaltada até a pousada. Chegou, relaxou.",
+      "A apenas 70 km de Fortaleza, com estrada asfaltada até a pousada. Chegou, relaxou.",
   },
 ] as const;
 
@@ -41,23 +41,23 @@ export default function TaibaGuide() {
   const reduce = useReducedMotion();
 
   return (
-    <section id="taiba" className="relative py-24 md:py-36 bg-sea-700 overflow-hidden">
-      {/* Background texture */}
+    <section id="taiba" className="relative py-24 md:py-36 bg-warm-900 overflow-hidden">
+      {/* Background photo */}
       <div className="absolute inset-0">
         <img
-          src={assetPath("images/IMG_3221.webp")}
+          src={assetPath("images/dron.webp")}
           alt=""
-          className="w-full h-full object-cover opacity-15"
+          className="w-full h-full object-cover opacity-45"
           loading="lazy"
         />
-        <div className="absolute inset-0 bg-sea-700/60" />
+        <div className="absolute inset-0 bg-gradient-to-b from-warm-900/75 via-warm-900/55 to-warm-900/80" />
       </div>
 
       <div className="relative z-10 max-w-[1440px] mx-auto px-6 md:px-10">
         {/* Section header */}
         <motion.div
-          initial={reduce ? false : { opacity: 0, y: 16 }}
-          whileInView={reduce ? undefined : { opacity: 1, y: 0 }}
+          initial={reduce ? false : { y: 16 }}
+          whileInView={reduce ? undefined : { y: 0 }}
           viewport={{ once: true, amount: 0.2 }}
           transition={{ duration: 0.6, ease }}
         >
@@ -67,7 +67,7 @@ export default function TaibaGuide() {
               Conheça Taíba
             </span>
           </div>
-          <h2 className="font-heading text-4xl md:text-5xl font-bold text-white uppercase leading-[0.92] tracking-tight">
+          <h2 className="font-heading text-4xl md:text-5xl font-semibold text-white leading-[0.98] tracking-tight">
             O paraíso espera<br />
             por você
           </h2>
@@ -78,9 +78,9 @@ export default function TaibaGuide() {
           {HIGHLIGHTS.map((item, i) => (
             <motion.div
               key={item.title}
-              className="flex gap-5 p-8 bg-sea-700/80 hover:bg-sea-600/60 transition-colors duration-300"
-              initial={reduce ? false : { opacity: 0, y: 16 }}
-              whileInView={reduce ? undefined : { opacity: 1, y: 0 }}
+              className="flex gap-5 p-8 bg-warm-900/70 hover:bg-warm-800/60 transition-colors duration-300"
+              initial={reduce ? false : { y: 16 }}
+              whileInView={reduce ? undefined : { y: 0 }}
               viewport={{ once: true, amount: 0.15 }}
               transition={{ duration: 0.5, delay: 0.08 + i * 0.08, ease }}
             >
@@ -88,7 +88,7 @@ export default function TaibaGuide() {
                 <item.icon className="text-white/70" size={18} />
               </div>
               <div>
-                <h3 className="font-heading text-base font-bold text-white uppercase tracking-[0.08em]">
+                <h3 className="font-heading text-base font-semibold text-white tracking-[0.01em]">
                   {item.title}
                 </h3>
                 <p className="mt-2 font-body text-sm leading-[1.7] text-white/60">
@@ -102,8 +102,8 @@ export default function TaibaGuide() {
         {/* Location link */}
         <motion.div
           className="mt-10"
-          initial={reduce ? false : { opacity: 0, y: 16 }}
-          whileInView={reduce ? undefined : { opacity: 1, y: 0 }}
+          initial={reduce ? false : { y: 16 }}
+          whileInView={reduce ? undefined : { y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.5, delay: 0.4, ease }}
         >

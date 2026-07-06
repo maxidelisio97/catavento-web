@@ -26,8 +26,8 @@ export default function RevealImage({
   return (
     <motion.div
       className={cn("overflow-hidden", wrapperClassName)}
-      initial={reduce ? false : { opacity: 0, y: 20 }}
-      whileInView={reduce ? undefined : { opacity: 1, y: 0 }}
+      initial={reduce ? false : { y: 20 }}
+      whileInView={reduce ? undefined : { y: 0 }}
       viewport={{ once: true, amount }}
       transition={{ duration: 0.65, delay, ease }}
     >

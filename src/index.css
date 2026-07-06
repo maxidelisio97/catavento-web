@@ -11,18 +11,18 @@
   --color-sand-100: oklch(94% 0.015 70);
   --color-sand-200: oklch(88% 0.022 70);
   --color-sand-300: oklch(80% 0.032 68);
-  --color-sea-400: oklch(61% 0.095 185);
-  --color-sea-500: oklch(51% 0.085 196);
-  --color-sea-600: oklch(42% 0.072 200);
-  --color-sea-700: oklch(33% 0.055 200);
-  --color-palm-500: oklch(42% 0.1 152);
-  --color-palm-600: oklch(30% 0.08 152);
+  --color-stone-200: oklch(85% 0.012 75);
+  --color-stone-300: oklch(76% 0.014 75);
+  --color-stone-400: oklch(64% 0.016 75);
+  --color-stone-500: oklch(52% 0.016 75);
+  --color-stone-600: oklch(40% 0.014 75);
+  --color-coral-200: oklch(85% 0.08 45);
   --color-coral-400: oklch(65% 0.13 38);
   --color-coral-500: oklch(56% 0.125 36);
   --color-coral-600: oklch(47% 0.115 34);
   --color-warm-800: oklch(27% 0.022 58);
   --color-warm-900: oklch(19% 0.018 56);
-  --font-heading: "DM Sans", sans-serif;
+  --font-heading: "Fraunces", serif;
   --font-body: "Inter", sans-serif;
 }
 
@@ -40,3 +40,174 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   opacity: 0.4;
   cursor: pointer;
 }
+
+/* Popover de fechas do formulario de reserva (react-day-picker).
+   Tipografia e cores via CSS puro (nunca via prop `classNames` do
+   componente: esse prop substitui a classe default de cada parte em vez
+   de concatenar, e sobrescrever ex. "day_button" remove "rdp-day_button"
+   do elemento e quebra silenciosamente os estilos de range_start/range_end
+   que dependem dessa classe base). */
+.rdp-root.booking-daypicker {
+  --rdp-accent-color: var(--color-coral-500);
+  --rdp-accent-background-color: oklch(93% 0.035 42);
+  --rdp-today-color: var(--color-coral-600);
+  --rdp-day-width: 2.5rem;
+  --rdp-day-height: 2.5rem;
+  --rdp-day_button-width: 2.25rem;
+  --rdp-day_button-height: 2.25rem;
+  --rdp-selected-border: none;
+  --rdp-disabled-opacity: 1;
+  --rdp-nav-height: 2.5rem;
+}
+
+.rdp-root.booking-daypicker .rdp-month_caption {
+  font-family: var(--font-heading);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-warm-900);
+}
+
+.rdp-root.booking-daypicker .rdp-weekday {
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-stone-500);
+}
+
+/* Dias de meses vizinhos (showOutsideDays): atenuados, mas clicaveis se a
+   data for valida — nao usar a mesma cor de .rdp-disabled (essa e para dias
+   realmente bloqueados). Esta regra vem ANTES da regra .rdp-disabled abaixo
+   de proposito: quando um dia "outside" tambem esta no passado (ex. 28-30 de
+   junho ja vencidos), .rdp-disabled precisa vencer por ordem de origem
+   (mesma especificidade, definida depois no arquivo). */
+.rdp-root.booking-daypicker {
+  --rdp-outside-opacity: 1;
+}
+
+.rdp-root.booking-daypicker .rdp-outside .rdp-day_button {
+  color: var(--color-stone-400);
+}
+
+.rdp-root.booking-daypicker .rdp-disabled .rdp-day_button {
+  color: var(--color-stone-300);
+  cursor: not-allowed;
+}
+
+/* Botao "Verificar": molino estatico (a rotacao do rotor foi removida —
+   com o path assimetrico das 8 pontas, a rotacao nao lia como "girar", so
+   parecia quebrada na metade do ciclo). O vento agora e comunicado so pelos
+   tracos de .verificar-wind, que correm em loop sutil mesmo em repouso; no
+   hover o molino voa para fora do botao com fade enquanto uma seta entra do
+   lado oposto e os tracos de vento aceleram. */
+
+/* Morph hover (icone -> seta) so existe em md+: em touch nao ha :hover real,
+   entao em mobile o icone fica sempre em repouso (so texto + botao full-width
+   comunicam a acao). Escopar evita que um :hover "preso" de touch (comum em
+   navegadores mobile apos o tap) desloque o icone sem nada para substitui-lo. */
+@media (min-width: 768px) {
+  .verificar-icon,
+  .verificar-arrow {
+    transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
+  }
+
+  .verificar-arrow {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+
+  .verificar-btn:hover .verificar-icon,
+  .verificar-btn:focus-visible .verificar-icon {
+    opacity: 0;
+    transform: translateX(14px) rotate(9deg);
+  }
+
+  .verificar-btn:hover .verificar-arrow,
+  .verificar-btn:focus-visible .verificar-arrow {
+    opacity: 1;
+    transform: translateX(0);
+  }
+
+  /* Tracos finos de vento: em repouso correm num loop lento e sutil (ritmo
+     de brisa) atras do molino estatico — e o unico sinal de "vento" que
+     resta, entao precisa se ler mesmo parado. No hover aceleram num flash
+     rapido enquanto o molino voa para fora do botao. */
+  @keyframes cv-wind-idle {
+    0%, 100% {
+      opacity: 0;
+      transform: translateX(-8px);
+    }
+    50% {
+      opacity: 0.4;
+      transform: translateX(8px);
+    }
+  }
+
+  @keyframes cv-wind-streak {
+    0%, 100% {
+      opacity: 0;
+      transform: translateX(-8px);
+    }
+    45% {
+      opacity: 0.7;
+    }
+    75% {
+      opacity: 0;
+      transform: translateX(16px);
+    }
+  }
+
+  .verificar-wind {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  .verificar-wind span {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 11px;
+    height: 1.5px;
+    border-radius: 1px;
+    background: currentColor;
+    opacity: 0;
+    animation: cv-wind-idle 3.4s ease-in-out infinite;
+  }
+
+  .verificar-wind span:first-child {
+    margin-top: -7px;
+  }
+
+  .verificar-wind span:last-child {
+    width: 7px;
+    margin-top: 5px;
+    animation-delay: 1.1s;
+  }
+
+  .verificar-btn:hover .verificar-wind span,
+  .verificar-btn:focus-visible .verificar-wind span {
+    animation: cv-wind-streak 0.5s ease-out;
+  }
+
+  .verificar-btn:hover .verificar-wind span:last-child,
+  .verificar-btn:focus-visible .verificar-wind span:last-child {
+    animation-delay: 0.07s;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .verificar-icon,
+  .verificar-arrow {
+    transition: opacity 0.2s ease;
+    transform: none !important;
+  }
+
+  .verificar-wind span {
+    animation: none !important;
+    opacity: 0 !important;
+  }
+}
+
+/* Isotipo do molino no header: totalmente estatico (sem rotacao, nem em
+   repouso nem no hover). */

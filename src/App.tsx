@@ -7,11 +7,14 @@
 import Header from "./components/Header";
 import Hero from "./components/Hero";
 import About from "./components/About";
+import BrandQuote from "./components/BrandQuote";
 import Experiences from "./components/Experiences";
 import Rooms from "./components/Rooms";
+import Testimonials from "./components/Testimonials";
 import TaibaGuide from "./components/TaibaGuide";
 import Gallery from "./components/Gallery";
 import Reservation from "./components/Reservation";
+import WhatsAppFloatButton from "./components/WhatsAppFloatButton";
 
 function App() {
   return (
@@ -20,12 +23,15 @@ function App() {
       <main>
         <Hero />
         <About />
+        <BrandQuote />
         <Experiences />
         <Rooms />
+        <Testimonials />
         <TaibaGuide />
         <Gallery />
       </main>
       <Reservation />
+      <WhatsAppFloatButton />
     </>
   );
 }
