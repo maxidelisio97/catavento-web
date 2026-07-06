@@ -5,7 +5,8 @@
  */
 import { useState, useEffect } from "react";
 import { MdMenu, MdClose } from "react-icons/md";
-import { NAV_ITEMS, WHATSAPP_URL } from "../config/site";
+import { NAV_ITEMS } from "../config/site";
+import CataventoIcon from "./CataventoIcon";
 
 
 export default function Header() {
@@ -29,12 +30,18 @@ export default function Header() {
     >
       <nav className="max-w-[1440px] mx-auto flex items-center justify-between px-6 md:px-10 h-[72px] md:h-20">
         {/* Logo */}
-        <a href="#hero" className="flex flex-col leading-none group">
-          <span className={`font-heading font-bold text-sm tracking-[0.2em] uppercase transition-colors duration-300 ${textClass}`}>
-            Catavento
-          </span>
-          <span className={`font-body font-light text-[9px] tracking-[0.3em] uppercase transition-colors duration-300 ${mutedClass}`}>
-            Pousada
+        <a href="#hero" className="flex items-center gap-2.5">
+          <CataventoIcon
+            height={64}
+            className={`header-icon shrink-0 transition-colors duration-300 ${textClass}`}
+          />
+          <span className="flex flex-col leading-none">
+            <span className={`font-heading font-bold text-sm tracking-[0.2em] uppercase transition-colors duration-300 ${textClass}`}>
+              Catavento
+            </span>
+            <span className={`font-body font-light text-[9px] tracking-[0.3em] uppercase transition-colors duration-300 ${mutedClass}`}>
+              Pousada
+            </span>
           </span>
         </a>
 
@@ -44,7 +51,7 @@ export default function Header() {
             <li key={item.href}>
               <a
                 href={item.href}
-                className={`font-body text-[11px] font-medium uppercase tracking-[0.15em] transition-opacity duration-200 hover:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sea-500 rounded ${textClass}`}
+                className={`font-body text-sm font-medium tracking-[0.02em] transition-opacity duration-200 hover:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral-500 rounded ${textClass}`}
               >
                 {item.label}
               </a>
@@ -55,12 +62,10 @@ export default function Header() {
         {/* CTA + mobile */}
         <div className="flex items-center gap-3">
           <a
-            href={WHATSAPP_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={`hidden md:inline-flex items-center font-body text-[11px] font-semibold uppercase tracking-[0.15em] px-5 py-2.5 border rounded-full transition-all duration-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sea-500 ${
+            href="#quartos"
+            className={`hidden md:inline-flex items-center font-body text-sm font-semibold tracking-[0.02em] px-5 py-2.5 border rounded-full transition-all duration-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral-500 ${
               scrolled
-                ? "border-sea-600 text-sea-600 hover:bg-sea-600 hover:text-white"
+                ? "border-coral-600 text-coral-600 hover:bg-coral-600 hover:text-white"
                 : "border-white text-white hover:bg-white hover:text-warm-900"
             }`}
           >
@@ -69,7 +74,7 @@ export default function Header() {
 
           <button
             type="button"
-            className={`md:hidden p-2 rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sea-500 ${textClass}`}
+            className={`md:hidden p-2 rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral-500 ${textClass}`}
             onClick={() => setOpen(!open)}
             aria-label={open ? "Fechar menu" : "Abrir menu"}
             aria-expanded={open}
@@ -87,7 +92,7 @@ export default function Header() {
               <li key={item.href}>
                 <a
                   href={item.href}
-                  className="block py-3 font-body text-sm font-medium text-warm-800 hover:text-sea-500 transition-colors border-b border-sand-100 last:border-0"
+                  className="block py-3 font-body text-sm font-medium text-warm-800 hover:text-coral-600 transition-colors border-b border-sand-100 last:border-0"
                   onClick={() => setOpen(false)}
                 >
                   {item.label}
@@ -96,10 +101,8 @@ export default function Header() {
             ))}
             <li className="pt-4">
               <a
-                href={WHATSAPP_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="block text-center bg-sea-600 text-white font-body font-semibold text-sm uppercase tracking-[0.1em] py-3 rounded-full"
+                href="#quartos"
+                className="block text-center bg-coral-600 text-white font-body font-semibold text-sm tracking-[0.02em] py-3 rounded-full"
                 onClick={() => setOpen(false)}
               >
                 Reservar agora
