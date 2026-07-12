@@ -117,8 +117,9 @@ export default function Hero() {
 
     {/* Card de reserva: en desktop se superpone al borde inferior del hero (mitad
         foto, mitad fondo); en mobile va debajo, a ancho completo, sin overlap. */}
-    <div className="relative z-20 md:px-6 lg:px-10 md:-mt-14 lg:-mt-16">
+    <div id="booking-form" className="relative z-20 scroll-mt-[72px] md:scroll-mt-20 md:px-6 lg:px-10 md:-mt-14 lg:-mt-16">
       <motion.div
+        id="booking-form-card"
         className="bg-sand-50 px-6 py-10 md:max-w-4xl md:mx-auto md:rounded-sm md:border md:border-sand-200 md:p-10 md:shadow-xl md:shadow-warm-900/15"
         initial={reduce ? false : { opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}

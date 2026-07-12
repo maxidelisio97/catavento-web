@@ -21,17 +21,14 @@ import { ptBR } from "react-day-picker/locale";
 import "react-day-picker/style.css";
 import { LuArrowRight, LuCalendar, LuChevronDown, LuCircleAlert, LuMinus, LuPlus, LuUsers } from "react-icons/lu";
 import { buildHqbedsUrl } from "../config/site";
+import { useBookingDates } from "../lib/bookingDates";
+import { toIsoDate } from "../lib/dates";
 import CataventoIcon from "./CataventoIcon";
 
 function startOfToday() {
   const date = new Date();
   date.setHours(0, 0, 0, 0);
   return date;
-}
-
-function toIsoDate(date: Date) {
-  const offsetMs = date.getTimezoneOffset() * 60_000;
-  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 10);
 }
 
 function isSameDay(a: Date, b: Date) {
@@ -107,7 +104,7 @@ function GuestCounterRow({ label, hint, value, min, max, onChange }: GuestCounte
 }
 
 export default function BookingForm() {
-  const [range, setRange] = useState<DateRange | undefined>(undefined);
+  const { range, setRange } = useBookingDates();
   const [hoveredDay, setHoveredDay] = useState<Date | undefined>(undefined);
   const [adults, setAdults] = useState(2);
   const [children, setChildren] = useState(0);

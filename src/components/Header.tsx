@@ -5,13 +5,19 @@
  */
 import { useState, useEffect } from "react";
 import { MdMenu, MdClose } from "react-icons/md";
+import { LuCalendarCheck } from "react-icons/lu";
+import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { NAV_ITEMS } from "../config/site";
 import CataventoIcon from "./CataventoIcon";
+import { goToBookingForm } from "../lib/scroll";
 
 
 export default function Header() {
   const [scrolled, setScrolled] = useState(false);
   const [open, setOpen] = useState(false);
+  const [formInView, setFormInView] = useState(true);
+  const [footerInView, setFooterInView] = useState(false);
+  const reduce = useReducedMotion();
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 60);
@@ -19,6 +25,26 @@ export default function Header() {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
+  // El CTA "Reservar" del header desktop solo aparece una vez que el
+  // formulario real deja de estar en pantalla, y se oculta de nuevo
+  // cerca del footer (que ya tiene sus propios CTA de reserva).
+  useEffect(() => {
+    const form = document.getElementById("booking-form");
+    const footer = document.getElementById("reservar");
+    if (!form || !footer) return;
+
+    const formObserver = new IntersectionObserver(([entry]) => setFormInView(entry.isIntersecting));
+    const footerObserver = new IntersectionObserver(([entry]) => setFooterInView(entry.isIntersecting));
+    formObserver.observe(form);
+    footerObserver.observe(footer);
+
+    return () => {
+      formObserver.disconnect();
+      footerObserver.disconnect();
+    };
+  }, []);
+
+  const showReserveCta = !formInView && !footerInView;
   const textClass = scrolled ? "text-warm-900" : "text-white";
   const mutedClass = scrolled ? "text-warm-800/50" : "text-white/60";
 
@@ -28,7 +54,7 @@ export default function Header() {
         scrolled ? "bg-white shadow-[0_1px_0_0_oklch(88%_0.022_70)]" : "bg-transparent"
       }`}
     >
-      <nav className="max-w-[1440px] mx-auto flex items-center justify-between px-6 md:px-10 h-[72px] md:h-20">
+      <nav className="max-w-[1440px] mx-auto flex md:grid md:grid-cols-3 items-center justify-between px-6 md:px-10 h-[72px] md:h-20">
         {/* Logo */}
         <a href="#hero" className="flex items-center gap-2.5">
           <CataventoIcon
@@ -45,8 +71,10 @@ export default function Header() {
           </span>
         </a>
 
-        {/* Desktop nav */}
-        <ul className="hidden md:flex items-center gap-10">
+        {/* Desktop nav: justify-self-center (no md:justify-between del pai)
+            centraliza este bloco na coluna do meio, independente da largura
+            do logo a esquerda e do toggle (vazio em desktop) a direita. */}
+        <ul className="hidden md:flex md:justify-self-center items-center gap-10">
           {NAV_ITEMS.map((item) => (
             <li key={item.href}>
               <a
@@ -59,18 +87,29 @@ export default function Header() {
           ))}
         </ul>
 
-        {/* CTA + mobile */}
-        <div className="flex items-center gap-3">
-          <a
-            href="#quartos"
-            className={`hidden md:inline-flex items-center font-body text-sm font-semibold tracking-[0.02em] px-5 py-2.5 border rounded-full transition-all duration-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral-500 ${
-              scrolled
-                ? "border-coral-600 text-coral-600 hover:bg-coral-600 hover:text-white"
-                : "border-white text-white hover:bg-white hover:text-warm-900"
-            }`}
-          >
-            Reservar
-          </a>
+        {/* CTA (aparece con fade-in al pasar el formulario, desktop y mobile) + toggle */}
+        <div className="flex items-center justify-end md:justify-self-end gap-2 md:gap-3">
+          <AnimatePresence>
+            {showReserveCta && (
+              <motion.a
+                href="#booking-form"
+                aria-label="Reservar"
+                onClick={(e) => {
+                  e.preventDefault();
+                  goToBookingForm();
+                }}
+                className="flex items-center justify-center gap-1.5 font-body text-sm font-semibold tracking-[0.02em] w-10 h-10 md:w-auto md:h-auto md:px-5 md:py-2.5 rounded-full bg-coral-600 hover:bg-coral-500 text-white transition-colors duration-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral-400"
+                initial={reduce ? false : { opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={reduce ? undefined : { opacity: 0 }}
+                transition={{ duration: 0.3 }}
+              >
+                <LuCalendarCheck size={18} className="md:hidden" aria-hidden />
+                <LuCalendarCheck size={16} className="hidden md:block" aria-hidden />
+                <span className="hidden md:inline">Reservar</span>
+              </motion.a>
+            )}
+          </AnimatePresence>
 
           <button
             type="button"
@@ -99,15 +138,6 @@ export default function Header() {
                 </a>
               </li>
             ))}
-            <li className="pt-4">
-              <a
-                href="#quartos"
-                className="block text-center bg-coral-600 text-white font-body font-semibold text-sm tracking-[0.02em] py-3 rounded-full"
-                onClick={() => setOpen(false)}
-              >
-                Reservar agora
-              </a>
-            </li>
           </ul>
         </div>
       )}

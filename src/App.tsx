@@ -15,24 +15,30 @@ import TaibaGuide from "./components/TaibaGuide";
 import Gallery from "./components/Gallery";
 import Reservation from "./components/Reservation";
 import WhatsAppFloatButton from "./components/WhatsAppFloatButton";
+import CookieConsent from "./components/CookieConsent";
+import { BookingDatesProvider } from "./lib/bookingDates";
+import { ToastProvider } from "./lib/toast";
 
 function App() {
   return (
-    <>
-      <Header />
-      <main>
-        <Hero />
-        <About />
-        <BrandQuote />
-        <Experiences />
-        <Rooms />
-        <Testimonials />
-        <TaibaGuide />
-        <Gallery />
-      </main>
-      <Reservation />
-      <WhatsAppFloatButton />
-    </>
+    <BookingDatesProvider>
+      <ToastProvider>
+        <Header />
+        <main>
+          <Hero />
+          <About />
+          <BrandQuote />
+          <Experiences />
+          <Rooms />
+          <Testimonials />
+          <TaibaGuide />
+          <Gallery />
+        </main>
+        <Reservation />
+        <WhatsAppFloatButton />
+        <CookieConsent />
+      </ToastProvider>
+    </BookingDatesProvider>
   );
 }
 

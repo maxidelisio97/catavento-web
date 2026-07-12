@@ -13,9 +13,9 @@ import {
   PHONE_DISPLAY,
   WHATSAPP_NUMBER,
   WHATSAPP_URL,
-  buildHqbedsUrl,
 } from "../config/site";
 import { EASE } from "../lib/motion";
+import { goToBookingForm } from "../lib/scroll";
 
 
 const ease = EASE;
@@ -54,9 +54,11 @@ export default function Reservation() {
             transition={{ duration: 0.6, delay: 0.1, ease }}
           >
             <a
-              href={buildHqbedsUrl()}
-              target="_blank"
-              rel="noopener noreferrer"
+              href="#booking-form"
+              onClick={(e) => {
+                e.preventDefault();
+                goToBookingForm();
+              }}
               className="inline-flex items-center justify-center gap-2 bg-coral-600 hover:bg-coral-500 text-white font-body font-semibold text-[11px] uppercase tracking-[0.12em] px-7 py-3.5 rounded-full transition-all duration-200 active:scale-[0.97] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
             >
               Reservar

@@ -30,6 +30,17 @@ html {
   scroll-behavior: smooth;
 }
 
+/* Tailwind v4 preflight deixa <button> com cursor: default (padrao nativo).
+   Aqui todo botao clicavel deve ter cursor de mao. Precisa estar dentro de
+   @layer base: fora de layer, CSS "unlayered" sempre vence sobre qualquer
+   @layer do Tailwind (base/components/utilities) independente da
+   especificidade — isso sobrescrevia o utilitario disabled:cursor-not-allowed. */
+@layer base {
+  button {
+    cursor: pointer;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;

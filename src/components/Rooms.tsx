@@ -4,6 +4,7 @@
  * Tambien arma el enlace de reserva por WhatsApp para cada habitacion.
  */
 import { motion, useReducedMotion } from "motion/react";
+import type { IconType } from "react-icons";
 import {
   MdPeople,
   MdAcUnit,
@@ -12,10 +13,19 @@ import {
   MdSquareFoot,
   MdKingBed,
   MdSingleBed,
+  MdChildFriendly,
+  MdPets,
+  MdCheck,
+  MdClose,
+  MdFreeBreakfast,
 } from "react-icons/md";
-import { PiFanFill } from "react-icons/pi";
+import { PiFanFill, PiTowel } from "react-icons/pi";
 import { assetPath, buildHqbedsUrl } from "../config/site";
 import { EASE } from "../lib/motion";
+import { useBookingDates } from "../lib/bookingDates";
+import { toIsoDate } from "../lib/dates";
+import { goToBookingForm } from "../lib/scroll";
+import { useToast } from "../lib/toast";
 import Carousel from "./Carousel";
 
 const AMENITIES = [
@@ -23,13 +33,13 @@ const AMENITIES = [
   { icon: PiFanFill, label: "Ventilador de teto" },
   { icon: MdWifi, label: "Wi-Fi gratuito" },
   { icon: MdShower, label: "Banheiro privativo com água quente" },
+  { icon: PiTowel, label: "Roupa de cama e toalhas" },
 ] as const;
 
 const ROOMS = [
   {
     name: "Suíte Casal",
-    description:
-      "Suíte para até 2 pessoas, equipada com 1 cama de casal. Ideal para casais ou viajantes individuais que buscam conforto e tranquilidade em Taíba.",
+    description: "Ideal para casais ou viajantes individuais.",
     images: [
       { src: assetPath("images/Cuarto Casal/Cuarto-Casal6.webp"), alt: "Suíte Casal — cama e varanda" },
       { src: assetPath("images/Cuarto Casal/Cuarto-Casal8.webp"), alt: "Suíte Casal — cama com vista para a varanda" },
@@ -37,14 +47,13 @@ const ROOMS = [
     ],
     guests: 2,
     area: 15,
-    priceWeekday: 180,
-    priceWeekend: 220,
     beds: [{ icon: MdKingBed, count: 1, label: "Cama de casal" }],
+    allowsChildren: false,
+    allowsPets: false,
   },
   {
     name: "Suíte Triplo",
-    description:
-      "Acomodação para até 3 pessoas, com 1 cama de casal e 1 cama de solteiro. Ideal para casais, pequenas famílias ou amigos.",
+    description: "Ideal para casais, pequenas famílias ou amigos.",
     images: [
       { src: assetPath("images/Cuarto triplo/Cuarto-triple2.webp"), alt: "Suíte Triplo — camas e ventilador de teto" },
       { src: assetPath("images/Cuarto triplo/Cuarto-triple5.webp"), alt: "Suíte Triplo — cama de casal e cama de solteiro" },
@@ -52,40 +61,70 @@ const ROOMS = [
       { src: assetPath("images/Cuarto triplo/Cuarto-triple6.webp"), alt: "Suíte Triplo — varanda com rede" },
     ],
     guests: 3,
-    area: 20,
-    priceWeekday: 240,
-    priceWeekend: 280,
+    area: 25,
     beds: [
       { icon: MdKingBed, count: 1, label: "Cama de casal" },
       { icon: MdSingleBed, count: 1, label: "Cama de solteiro" },
     ],
+    allowsChildren: true,
+    allowsPets: true,
   },
   {
     name: "Suíte Quádruplo",
-    description:
-      "Acomodação para até 4 pessoas, com 1 cama de casal e 2 camas de solteiro. Ideal para famílias, grupos de amigos ou viajantes.",
+    description: "Ideal para famílias, grupos de amigos ou viajantes.",
     images: [
       { src: assetPath("images/Cuarto Cuadruplo/Cuarto-Cuadruple1.webp"), alt: "Suíte Quádruplo — camas" },
       { src: assetPath("images/Cuarto Cuadruplo/Cuarto-Cuadruple2.webp"), alt: "Suíte Quádruplo — banheiro privativo" },
     ],
     guests: 4,
-    area: 25,
-    priceWeekday: 280,
-    priceWeekend: 320,
+    area: 30,
     beds: [
       { icon: MdKingBed, count: 1, label: "Cama de casal" },
       { icon: MdSingleBed, count: 2, label: "Camas de solteiro" },
     ],
+    allowsChildren: true,
+    allowsPets: true,
   },
 ] as const;
 
-// Precos de referencia (tarifa padrao, com cafe da manha) tal como no motor HQBeds.
-// Sujeitos a variacao por temporada — o valor real e sempre validado no motor ao reservar.
-
 const ease = EASE;
+
+type PolicyBadgeProps = { icon: IconType; allowed: boolean; label: string };
+
+function PolicyBadge({ icon: Icon, allowed, label }: PolicyBadgeProps) {
+  return (
+    <span
+      className="flex items-center gap-1 rounded-full border border-stone-300 px-2 py-0.5 text-stone-500"
+      title={`${label}: ${allowed ? "permitido" : "não permitido"}`}
+      aria-label={`${label}: ${allowed ? "permitido" : "não permitido"}`}
+    >
+      <Icon size={13} />
+      {allowed ? <MdCheck size={12} className="text-coral-600" /> : <MdClose size={12} className="text-stone-400" />}
+    </span>
+  );
+}
 
 export default function Rooms() {
   const reduce = useReducedMotion();
+  const { range } = useBookingDates();
+  const toast = useToast();
+
+  // Se o usuario ja escolheu datas completas no BookingForm, leva elas
+  // junto ao ir para o HQBeds — em vez de mandar sem datas, so com a
+  // capacidade maxima do quarto (comportamento antigo, mantido como
+  // fallback quando ainda nao ha datas selecionadas).
+  const hasCompleteRange = Boolean(range?.from && range?.to && range.to.getTime() !== range.from.getTime());
+
+  function buildRoomUrl(guests: number) {
+    if (hasCompleteRange) {
+      return buildHqbedsUrl({
+        arrival: toIsoDate(range!.from!),
+        departure: toIsoDate(range!.to!),
+        adults: guests,
+      });
+    }
+    return buildHqbedsUrl({ adults: guests });
+  }
 
   return (
     <section id="quartos" className="relative py-24 md:py-36 bg-sand-50">
@@ -128,35 +167,48 @@ export default function Rooms() {
               <Carousel
                 images={room.images}
                 className="w-full h-full object-cover"
-                wrapperClassName="aspect-[3/4]"
+                wrapperClassName="aspect-[4/3]"
                 delay={0.12 + i * 0.08}
                 amount={0.15}
               />
 
               {/* Content */}
-              <div className="flex flex-col flex-1 p-6 pt-5">
+              <div className="flex flex-col flex-1 p-5">
                 <div className="flex items-start justify-between gap-3 mb-3">
                   <h3 className="font-heading text-lg font-semibold text-warm-900 tracking-[0.01em]">
                     {room.name}
                   </h3>
-                  <span className="flex items-center gap-2.5 text-warm-800/45 shrink-0 mt-0.5">
-                    <span className="flex items-center gap-1 text-xs font-body" aria-label={`${room.area} metros quadrados`}>
-                      <MdSquareFoot size={13} />
+                  <span className="flex items-center gap-1.5 shrink-0 mt-0.5">
+                    <span
+                      className="flex items-center gap-1 rounded-full bg-coral-600 text-white px-2 py-0.5 text-[10px] font-bold tracking-wide"
+                      aria-label={`${room.area} metros quadrados`}
+                    >
+                      <MdSquareFoot size={12} />
                       {room.area}m²
                     </span>
-                    <span className="flex items-center gap-1 text-xs font-body" aria-label={`Até ${room.guests} pessoas`}>
-                      <MdPeople size={13} />
-                      {room.guests}
+                    <span
+                      className="flex items-center gap-1 rounded-full bg-coral-600 text-white px-2 py-0.5 text-[10px] font-bold tracking-wide"
+                      aria-label={`Capacidade máxima: ${room.guests} pessoas`}
+                    >
+                      <MdPeople size={12} />
+                      Até {room.guests}
+                    </span>
+                    <span
+                      className="flex items-center gap-1 rounded-full bg-coral-600 text-white px-2 py-0.5 text-[10px] font-bold tracking-wide"
+                      aria-label="Café da manhã incluído"
+                    >
+                      <MdFreeBreakfast size={12} />
+                      Café da manhã
                     </span>
                   </span>
                 </div>
 
-                <p className="font-body text-sm leading-[1.7] text-warm-800/65 flex-1">
+                <p className="font-body text-sm leading-[1.6] text-warm-800/65 line-clamp-2">
                   {room.description}
                 </p>
 
-                {/* Beds */}
-                <div className="mt-4 flex flex-wrap items-center gap-3">
+                {/* Beds + politica de criancas/animais */}
+                <div className="mt-5 flex flex-wrap items-center gap-3">
                   {room.beds.map((bed) => (
                     <span
                       key={bed.label}
@@ -169,47 +221,49 @@ export default function Rooms() {
                       </span>
                     </span>
                   ))}
+                  <PolicyBadge icon={MdChildFriendly} allowed={room.allowsChildren} label="Crianças" />
+                  <PolicyBadge icon={MdPets} allowed={room.allowsPets} label="Animais" />
                 </div>
 
-                {/* Amenities */}
-                <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 border-t border-sand-200 pt-4">
-                  {AMENITIES.map((a) => (
-                    <span
-                      key={a.label}
-                      className="flex items-center gap-1.5 text-stone-500"
-                      title={a.label}
-                      aria-label={a.label}
-                    >
-                      <a.icon size={16} />
-                    </span>
-                  ))}
-                </div>
-
-                {/* Preço de referência — validado sempre no motor ao reservar */}
-                <div className="mt-4 flex items-end justify-between gap-3 border-t border-sand-200 pt-4">
-                  <div>
-                    <span className="font-heading text-2xl font-semibold text-coral-600">
-                      R$ {room.priceWeekday}
-                    </span>
-                    <span className="font-body text-xs text-warm-800/50"> /noite</span>
-                    <p className="font-body text-[10px] text-warm-800/45 mt-0.5">
-                      Sex e sáb: R$ {room.priceWeekend}
-                    </p>
-                  </div>
-                  <span className="font-body text-[10px] text-warm-800/45 text-right leading-tight">
-                    Café da manhã
-                    <br />
-                    incluído
+                {/* Comodidades */}
+                <div className="mt-5 flex flex-col items-center gap-1.5 border-t border-sand-200 pt-4">
+                  <span className="font-body text-[9px] font-semibold uppercase tracking-[0.15em] text-warm-800/40">
+                    Comodidades
                   </span>
+                  <div className="flex items-center gap-3 rounded-full border border-stone-300 px-3.5 py-1.5">
+                    {AMENITIES.map((a) => (
+                      <span
+                        key={a.label}
+                        className="flex items-center gap-1.5 text-stone-500"
+                        title={a.label}
+                        aria-label={a.label}
+                      >
+                        <a.icon size={16} />
+                      </span>
+                    ))}
+                  </div>
                 </div>
 
                 {/* CTA — motor de reservas real (HQBeds). adults = capacidade do quarto,
-                    para que apareça primeiro no listado (nao ha deep-link por quarto). */}
-                <div className="mt-4">
+                    para que apareça primeiro no listado (nao ha deep-link por quarto).
+                    Se ja houver datas escolhidas no BookingForm, vao junto na URL; senao,
+                    leva de volta ao formulario em vez de mandar sem datas.
+                    mt-auto (nao flex-1 na descricao): ancora o botao no fundo do
+                    card independente de quanto cresca o conteudo acima (ex.: linha
+                    de camas quebrando em 2 linhas em algum card) — mantem os 3
+                    botoes alinhados na mesma altura no grid. */}
+                <div className="mt-auto pt-3">
                   <a
-                    href={buildHqbedsUrl({ adults: room.guests })}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                    href={buildRoomUrl(room.guests)}
+                    target={hasCompleteRange ? "_blank" : undefined}
+                    rel={hasCompleteRange ? "noopener noreferrer" : undefined}
+                    onClick={(e) => {
+                      if (!hasCompleteRange) {
+                        e.preventDefault();
+                        goToBookingForm();
+                        toast.show("Escolha as datas de check-in e check-out para continuar");
+                      }
+                    }}
                     className="flex items-center justify-center bg-coral-600 hover:bg-coral-500 text-white font-body font-semibold text-[11px] uppercase tracking-[0.1em] py-2.5 rounded transition-colors duration-200 active:scale-[0.97] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral-500"
                   >
                     Reservar
