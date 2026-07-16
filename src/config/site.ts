@@ -20,6 +20,9 @@ export const INSTAGRAM_URL = "https://www.instagram.com/pousadacatavento";
 export const BOOKING_URL = "https://www.booking.com/hotel/br/pousada-catavento.html";
 export const MAPS_URL = "https://www.google.com/maps/search/Pousada+Catavento+Taiba";
 
+// Formulario de parcerias (Partnerships.tsx) — envia via Formspree, sin backend propio.
+export const FORMSPREE_FORM_ID = "mjgnvvrj";
+
 // Motor de reservas real (HQBeds).
 //
 // Verificado con Playwright (2026-07-05): la habitacion elegida vive en la

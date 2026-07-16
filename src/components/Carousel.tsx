@@ -9,7 +9,10 @@ import { MdChevronLeft, MdChevronRight } from "react-icons/md";
 import { EASE } from "../lib/motion";
 import { cn } from "../lib/utils";
 
-export type CarouselImage = { src: string; alt: string };
+// position: ajuste manual de object-position para fotos cujo enquadramento
+// original nao centra o assunto (ex.: moveis altos e estreitos, cortados pela
+// metade num wrapper 4/3). Default "center" cobre o caso comum.
+export type CarouselImage = { src: string; alt: string; position?: string };
 
 type CarouselProps = {
   images: readonly CarouselImage[];
@@ -60,6 +63,7 @@ export default function Carousel({ images, className, wrapperClassName, delay = 
           alt={images[index].alt}
           loading="lazy"
           className={className}
+          style={{ objectPosition: images[index].position ?? "center" }}
           initial={reduce ? false : { opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={reduce ? undefined : { opacity: 0 }}

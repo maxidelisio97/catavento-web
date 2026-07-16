@@ -13,6 +13,7 @@ import Rooms from "./components/Rooms";
 import Testimonials from "./components/Testimonials";
 import TaibaGuide from "./components/TaibaGuide";
 import Gallery from "./components/Gallery";
+import Partnerships from "./components/Partnerships";
 import Reservation from "./components/Reservation";
 import WhatsAppFloatButton from "./components/WhatsAppFloatButton";
 import CookieConsent from "./components/CookieConsent";
@@ -33,6 +34,7 @@ function App() {
           <Testimonials />
           <TaibaGuide />
           <Gallery />
+          <Partnerships />
         </main>
         <Reservation />
         <WhatsAppFloatButton />

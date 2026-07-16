@@ -41,9 +41,28 @@ const ROOMS = [
     name: "Suíte Casal",
     description: "Ideal para casais ou viajantes individuais.",
     images: [
-      { src: assetPath("images/Cuarto Casal/Cuarto-Casal6.webp"), alt: "Suíte Casal — cama e varanda" },
-      { src: assetPath("images/Cuarto Casal/Cuarto-Casal8.webp"), alt: "Suíte Casal — cama com vista para a varanda" },
-      { src: assetPath("images/Cuarto Casal/Cuarto-Casal2.webp"), alt: "Suíte Casal — banheiro privativo" },
+      { src: assetPath("images/Cuarto Casal/Cuarto-Casal6.webp"), alt: "Suíte Casal — cama de casal com ventilador de teto e vista para a varanda" },
+      { src: assetPath("images/Cuarto Casal/Cuarto-Casal8.webp"), alt: "Suíte Casal — cama de casal com toalhas e estante" },
+      { src: assetPath("images/Cuarto Casal/Cuarto-Casal1.webp"), alt: "Suíte Casal — cama de casal com cabeceira de madeira" },
+      { src: assetPath("images/Cuarto Casal/Cuarto-Casal7.webp"), alt: "Suíte Casal — varanda com porta de vidro e estante" },
+      {
+        src: assetPath("images/Cuarto Casal/Cuarto-Casal3.webp"),
+        alt: "Suíte Casal — cantinho de trabalho com mesa e cadeira",
+        // Foto original e um retrato alto (2:3) forcado num wrapper 4/3, que so
+        // mostra 50% da altura. "center bottom" cortava a mesa e a cadeira pelos
+        // pes sem chao; "center 65%" e o ponto que mantem mesa+livros e a
+        // cadeira inteira dentro do crop.
+        position: "center 65%",
+      },
+      { src: assetPath("images/Cuarto Casal/Cuarto-Casal2.webp"), alt: "Suíte Casal — banheiro com pias em pedra e espelhos" },
+      {
+        src: assetPath("images/Cuarto Casal/Cuarto-Casal4.webp"),
+        alt: "Suíte Casal — banheiro com vaso sanitário e box",
+        // Mesmo caso: retrato 2:3 no wrapper 4/3. Centro cortava a base do vaso
+        // sanitario; ancorando embaixo mostra o vaso inteiro com o piso.
+        position: "center bottom",
+      },
+      { src: assetPath("images/Cuarto Casal/Cuarto-Casal5.webp"), alt: "Suíte Casal — entrada do quarto e varanda com rede" },
     ],
     guests: 2,
     area: 15,
@@ -57,8 +76,10 @@ const ROOMS = [
     images: [
       { src: assetPath("images/Cuarto triplo/Cuarto-triple2.webp"), alt: "Suíte Triplo — camas e ventilador de teto" },
       { src: assetPath("images/Cuarto triplo/Cuarto-triple5.webp"), alt: "Suíte Triplo — cama de casal e cama de solteiro" },
-      { src: assetPath("images/Cuarto triplo/Cuarto-triple3.webp"), alt: "Suíte Triplo — banheiro privativo" },
-      { src: assetPath("images/Cuarto triplo/Cuarto-triple6.webp"), alt: "Suíte Triplo — varanda com rede" },
+      { src: assetPath("images/Cuarto triplo/Cuarto-triple1.webp"), alt: "Suíte Triplo — banheiro com pia moderna e box" },
+      { src: assetPath("images/Cuarto triplo/Cuarto-triple3.webp"), alt: "Suíte Triplo — pia do banheiro com amenities" },
+      { src: assetPath("images/Cuarto triplo/Cuarto-triple6.webp"), alt: "Suíte Triplo — varanda com rede, mesa e cadeiras" },
+      { src: assetPath("images/Cuarto triplo/Cuarto-triple4.webp"), alt: "Suíte Triplo — corredor externo com teto de palha" },
     ],
     guests: 3,
     area: 25,
@@ -73,8 +94,10 @@ const ROOMS = [
     name: "Suíte Quádruplo",
     description: "Ideal para famílias, grupos de amigos ou viajantes.",
     images: [
-      { src: assetPath("images/Cuarto Cuadruplo/Cuarto-Cuadruple1.webp"), alt: "Suíte Quádruplo — camas" },
-      { src: assetPath("images/Cuarto Cuadruplo/Cuarto-Cuadruple2.webp"), alt: "Suíte Quádruplo — banheiro privativo" },
+      { src: assetPath("images/Cuarto Cuadruplo/Cuarto-Cuadruple1.webp"), alt: "Suíte Quádruplo — camas com roupa de cama azul-marinho" },
+      { src: assetPath("images/Cuarto Cuadruplo/Cuarto-Cuadruple2.webp"), alt: "Suíte Quádruplo — banheiro com vaso sanitário e pia" },
+      { src: assetPath("images/Cuarto Cuadruplo/Cuarto-Cuadruple3.webp"), alt: "Suíte Quádruplo — varanda coberta com teto de palha" },
+      { src: assetPath("images/Cuarto Cuadruplo/Cuarto-Cuadruple4.webp"), alt: "Suíte Quádruplo — fachada externa com teto de palha e coqueiros" },
     ],
     guests: 4,
     area: 30,
@@ -174,32 +197,34 @@ export default function Rooms() {
 
               {/* Content */}
               <div className="flex flex-col flex-1 p-5">
-                <div className="flex items-start justify-between gap-3 mb-3">
-                  <h3 className="font-heading text-lg font-semibold text-warm-900 tracking-[0.01em]">
+                {/* Titulo + badges no mesmo flex-wrap: cada badge e um item
+                    irmao do h3, entao vao quebrando de a um conforme falta
+                    espaco, em vez de todos juntos pularem pra uma linha
+                    separada (que era o comportamento com o wrapper proprio). */}
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 mb-3">
+                  <h3 className="font-heading text-lg font-semibold text-warm-900 tracking-[0.01em] mr-1">
                     {room.name}
                   </h3>
-                  <span className="flex items-center gap-1.5 shrink-0 mt-0.5">
-                    <span
-                      className="flex items-center gap-1 rounded-full bg-coral-600 text-white px-2 py-0.5 text-[10px] font-bold tracking-wide"
-                      aria-label={`${room.area} metros quadrados`}
-                    >
-                      <MdSquareFoot size={12} />
-                      {room.area}m²
-                    </span>
-                    <span
-                      className="flex items-center gap-1 rounded-full bg-coral-600 text-white px-2 py-0.5 text-[10px] font-bold tracking-wide"
-                      aria-label={`Capacidade máxima: ${room.guests} pessoas`}
-                    >
-                      <MdPeople size={12} />
-                      Até {room.guests}
-                    </span>
-                    <span
-                      className="flex items-center gap-1 rounded-full bg-coral-600 text-white px-2 py-0.5 text-[10px] font-bold tracking-wide"
-                      aria-label="Café da manhã incluído"
-                    >
-                      <MdFreeBreakfast size={12} />
-                      Café da manhã
-                    </span>
+                  <span
+                    className="flex items-center gap-1 rounded-full bg-coral-600 text-white px-2 py-0.5 text-[10px] font-bold tracking-wide"
+                    aria-label={`${room.area} metros quadrados`}
+                  >
+                    <MdSquareFoot size={12} />
+                    {room.area}m²
+                  </span>
+                  <span
+                    className="flex items-center gap-1 rounded-full bg-coral-600 text-white px-2 py-0.5 text-[10px] font-bold tracking-wide"
+                    aria-label={`Capacidade máxima: ${room.guests} pessoas`}
+                  >
+                    <MdPeople size={12} />
+                    Até {room.guests}
+                  </span>
+                  <span
+                    className="flex items-center gap-1 rounded-full bg-coral-600 text-white px-2 py-0.5 text-[10px] font-bold tracking-wide"
+                    aria-label="Café da manhã incluído"
+                  >
+                    <MdFreeBreakfast size={12} />
+                    Café da manhã
                   </span>
                 </div>
 
