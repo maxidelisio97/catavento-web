@@ -12,6 +12,11 @@ dist
 dist-ssr
 *.local
 
+# Secrets
+.env
+.env.*
+server/.env
+
 # Claude Code internals
 .atl/
 excalidraw.log
