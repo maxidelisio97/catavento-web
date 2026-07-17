@@ -51,25 +51,30 @@ export default function Hero() {
 
         {/* Centered hero content */}
         <div className="relative flex-1 flex flex-col items-center justify-center px-6 pt-32 sm:pt-36 pb-10 text-center">
-          <motion.span
-            className="font-body text-[10px] font-medium uppercase tracking-[0.35em] text-white/65 mb-6"
-            initial={reduce ? false : { opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 1, delay: 0.3 }}
-          >
-            Pousada · Taíba, Ceará
-          </motion.span>
+          {/* h1 unico de la pagina: kicker + titulo, cada uno con su propia
+              animacion (spans internos), sin wrapper animado propio para que
+              el fade de cada linea no se multiplique con el del padre. */}
+          <h1 className="flex flex-col items-center">
+            <motion.span
+              className="font-body text-[10px] font-medium uppercase tracking-[0.35em] text-white/65 mb-6"
+              initial={reduce ? false : { opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 1, delay: 0.3 }}
+            >
+              Pousada · Taíba, Ceará
+            </motion.span>
 
-          <motion.h1
-            className="font-heading text-[clamp(2rem,8.5vw,6.5rem)] font-semibold text-white leading-[1.15] tracking-[-0.005em]"
-            initial={reduce ? false : { opacity: 0, y: 32 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 1, delay: 0.45, ease }}
-          >
-            Chegue como hóspede,
-            <br />
-            <span className="text-coral-200">fique como em casa</span>
-          </motion.h1>
+            <motion.span
+              className="font-heading text-[clamp(2rem,8.5vw,6.5rem)] font-semibold text-white leading-[1.15] tracking-[-0.005em]"
+              initial={reduce ? false : { opacity: 0, y: 32 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 1, delay: 0.45, ease }}
+            >
+              Chegue como hóspede,
+              <br />
+              <span className="text-coral-200">fique como em casa</span>
+            </motion.span>
+          </h1>
 
           <motion.p
             className="mt-6 text-white/70 text-base md:text-lg max-w-[34ch] leading-relaxed"

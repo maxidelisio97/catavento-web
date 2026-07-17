@@ -115,9 +115,9 @@ export default function Reservation() {
           viewport={{ once: true, amount: 0.2 }}
           transition={{ duration: 0.5, delay: 0.08, ease }}
         >
-          <h4 className="font-body text-[10px] font-semibold uppercase tracking-[0.25em] text-white/40 mb-5">
+          <h3 className="font-body text-[10px] font-semibold uppercase tracking-[0.25em] text-white/40 mb-5">
             Navegação
-          </h4>
+          </h3>
           <ul className="flex flex-col gap-3">
             {NAV_ITEMS.map((link) => (
               <li key={link.href}>
@@ -139,9 +139,9 @@ export default function Reservation() {
           viewport={{ once: true, amount: 0.2 }}
           transition={{ duration: 0.5, delay: 0.16, ease }}
         >
-          <h4 className="font-body text-[10px] font-semibold uppercase tracking-[0.25em] text-white/40 mb-5">
+          <h3 className="font-body text-[10px] font-semibold uppercase tracking-[0.25em] text-white/40 mb-5">
             Contato
-          </h4>
+          </h3>
           <ul className="flex flex-col gap-4">
             <li>
               <a
@@ -173,9 +173,9 @@ export default function Reservation() {
           viewport={{ once: true, amount: 0.2 }}
           transition={{ duration: 0.5, delay: 0.24, ease }}
         >
-          <h4 className="font-body text-[10px] font-semibold uppercase tracking-[0.25em] text-white/40 mb-5">
+          <h3 className="font-body text-[10px] font-semibold uppercase tracking-[0.25em] text-white/40 mb-5">
             Localização
-          </h4>
+          </h3>
           <a
             href={MAPS_URL}
             target="_blank"
