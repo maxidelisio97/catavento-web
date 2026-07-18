@@ -3,7 +3,7 @@ module.exports = {
     {
       name: 'catavento-payments',
       cwd: __dirname,
-      script: 'src/index.js',
+      script: 'dist/index.js',
       env: {
         NODE_ENV: 'production',
       },
