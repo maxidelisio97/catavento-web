@@ -1,5 +1,12 @@
 # Pousada Catavento — Taiba
 
+## Alcance de este archivo (monorepo)
+Este repo contiene el frontend (raíz) y el backend (`server/`).
+TODO lo que sigue en este archivo aplica SOLO al frontend. El backend
+tiene su propio `server/CLAUDE.md` con sus reglas — al trabajar dentro
+de `server/`, ese archivo manda y las reglas de screenshots/layout/
+motion de acá no aplican.
+
 ## Contexto obligatorio
 Antes de cualquier tarea de diseño, contenido o UX, lee `PRODUCT.md`.
 Ese archivo define usuarios, objetivo de conversion, personalidad de
@@ -170,3 +177,13 @@ de copy se valida contra ese documento.
   es circunstancia — no la propongas.
 - Si una regla existente quedo obsoleta por un cambio nuevo,
   proponer tambien su actualizacion o eliminacion, no solo agregar.
+
+### Reservas (estrategia comercial)
+- EN DESARROLLO (no implementar nada aun): existe un plan para
+  reemplazar HQBeds por un booking engine propio (backend Node+TS
+  +Fastify+Postgres, pagos via Asaas), planificado en un Project
+  de claude.ai. Mientras no se indique lo contrario, HQBeds sigue
+  siendo el canal 1 y TODAS las reglas de esta seccion siguen
+  vigentes. Cuando el motor propio llegue al flujo de reserva, se
+  reabrira la decision del selector de quarto (la limitacion de
+  deep-link era de HQBeds, no de negocio).
