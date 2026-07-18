@@ -3,7 +3,7 @@ import { config } from '../src/config.js';
 const paymentId = process.argv[2];
 
 if (!paymentId) {
-  console.error('Usage: node scripts/confirm-sandbox-payment.js <paymentId>');
+  console.error('Usage: tsx scripts/confirm-sandbox-payment.ts <paymentId>');
   process.exit(1);
 }
 
