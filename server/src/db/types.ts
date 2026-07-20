@@ -32,6 +32,7 @@ export interface RateOverrides {
 export interface Reservations {
   check_in: Timestamp;
   check_out: Timestamp;
+  code: string | null;
   created_at: Generated<Timestamp>;
   expires_at: Timestamp | null;
   guest_email: string | null;
