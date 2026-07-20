@@ -41,11 +41,14 @@ export interface CreateReservationInput {
   guestPhone?: string;
   notes?: string;
   expiresAt?: Date;
+  /** Public reference code (módulo 3). Undefined for callers that don't use one. */
+  code?: string;
 }
 
 export interface CreateReservationResult {
   id: number;
   totalCents: number;
+  code: string | null;
 }
 
 export async function createReservation(
@@ -118,10 +121,11 @@ export async function createReservation(
         guest_email: input.guestEmail ?? null,
         guest_phone: input.guestPhone ?? null,
         notes: input.notes ?? null,
+        code: input.code ?? null,
       })
-      .returning('id')
+      .returning(['id', 'code'])
       .executeTakeFirstOrThrow();
 
-    return { id: reservation.id, totalCents: price.totalCents };
+    return { id: reservation.id, totalCents: price.totalCents, code: reservation.code };
   });
 }
