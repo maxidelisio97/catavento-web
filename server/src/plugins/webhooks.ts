@@ -1,6 +1,10 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { timingSafeEqual } from 'node:crypto';
+import type { Kysely } from 'kysely';
+import type { DB } from '../db/types.js';
+import { db as prodDb } from '../db/client.js';
 import { config } from '../config.js';
+import { processPaymentReceived } from '../availability/confirmPendingReservation.js';
 
 function isValidToken(receivedToken: unknown): boolean {
   if (typeof receivedToken !== 'string') return false;
@@ -17,7 +21,16 @@ interface AsaasWebhookBody {
   payment?: { id?: string; status?: string };
 }
 
-const webhooksPlugin: FastifyPluginAsync = async (fastify) => {
+const PAYMENT_RECEIVED_EVENTS = new Set(['PAYMENT_RECEIVED', 'PAYMENT_CONFIRMED']);
+
+export interface WebhooksPluginOptions {
+  /** Overridable for tests — production uses the shared db client by default. */
+  db?: Kysely<DB>;
+}
+
+const webhooksPlugin: FastifyPluginAsync<WebhooksPluginOptions> = async (fastify, opts) => {
+  const db = opts.db ?? prodDb;
+
   fastify.post<{ Body: AsaasWebhookBody }>('/webhooks/asaas', async (request, reply) => {
     const token = request.headers['asaas-access-token'];
 
@@ -27,9 +40,22 @@ const webhooksPlugin: FastifyPluginAsync = async (fastify) => {
 
     const { event, payment } = request.body ?? {};
 
-    // TODO: persist payment status transitions once module 3 (reservation
-    // flow) defines where reservation state lives.
     fastify.log.info({ event, paymentId: payment?.id, status: payment?.status }, 'asaas webhook');
+
+    if (!event || !PAYMENT_RECEIVED_EVENTS.has(event) || !payment?.id) {
+      return reply.status(200).send({ received: true });
+    }
+
+    const outcome = await processPaymentReceived(db, { asaasPaymentId: payment.id, rawEvent: request.body });
+
+    if (outcome.kind === 'unknown_payment') {
+      fastify.log.warn({ paymentId: payment.id }, 'asaas webhook for unknown local payment');
+    } else if (outcome.kind === 'payment_conflict') {
+      fastify.log.error(
+        { paymentId: payment.id, reservationId: outcome.reservationId },
+        'payment received after the room became unavailable — reservation moved to payment_conflict, refund is manual',
+      );
+    }
 
     return reply.status(200).send({ received: true });
   });

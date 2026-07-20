@@ -203,6 +203,77 @@ describe('GET /api/reservations/:code', () => {
   });
 });
 
+describe('POST /api/reservations/:code/payment', () => {
+  it('404 when the reservation does not exist', async () => {
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/reservations/NOPE0000/payment',
+      payload: { method: 'pix', cpf_cnpj: '12345678900' },
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it('409 when the reservation is already confirmed', async () => {
+    const roomId = await insertTestRoom();
+    const inserted = await testDb
+      .insertInto('reservations')
+      .values({
+        room_id: roomId,
+        check_in: '2026-09-01',
+        check_out: '2026-09-03',
+        guests: 2,
+        status: 'confirmed',
+        total_cents: 20000,
+        deposit_cents: 10000,
+        code: 'CONFIRM1',
+      })
+      .returning('code')
+      .executeTakeFirstOrThrow();
+
+    const app = buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/reservations/${inserted.code}/payment`,
+      payload: { method: 'pix', cpf_cnpj: '12345678900' },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toContain('RESERVATION_NOT_PAYABLE');
+  });
+
+  it('409 when the reservation already expired', async () => {
+    const roomId = await insertTestRoom();
+    const inserted = await testDb
+      .insertInto('reservations')
+      .values({
+        room_id: roomId,
+        check_in: '2026-09-01',
+        check_out: '2026-09-03',
+        guests: 2,
+        status: 'pending_payment',
+        expires_at: new Date(Date.now() - 60_000),
+        total_cents: 20000,
+        deposit_cents: 10000,
+        code: 'EXPIRED2',
+      })
+      .returning('code')
+      .executeTakeFirstOrThrow();
+
+    const app = buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/reservations/${inserted.code}/payment`,
+      payload: { method: 'pix', cpf_cnpj: '12345678900' },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toContain('RESERVATION_NOT_PAYABLE');
+  });
+});
+
 describe('POST /api/reservations — concurrency', () => {
   it('with 1 unit left, exactly one of two simultaneous requests wins, over two distinct pool connections', async () => {
     const roomId = await insertTestRoom({ totalUnits: 1 });
