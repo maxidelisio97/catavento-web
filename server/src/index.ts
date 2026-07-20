@@ -6,6 +6,7 @@ import paymentsPlugin from './plugins/payments.js';
 import webhooksPlugin from './plugins/webhooks.js';
 import roomsPlugin from './plugins/rooms.js';
 import availabilityPlugin from './plugins/availability.js';
+import reservationsPlugin from './plugins/reservations.js';
 
 const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
 
@@ -18,6 +19,7 @@ app.register(paymentsPlugin, { prefix: '/api' });
 app.register(webhooksPlugin, { prefix: '/api' });
 app.register(roomsPlugin, { prefix: '/api' });
 app.register(availabilityPlugin, { prefix: '/api' });
+app.register(reservationsPlugin, { prefix: '/api' });
 
 registerErrorHandler(app);
 
