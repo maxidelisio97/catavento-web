@@ -16,6 +16,10 @@ algo parece mejorable, proponerlo antes de cambiar.
 - Proceso gestionado con PM2 (`ecosystem.config.cjs`), detrás de Nginx
   (ver `nginx.conf.example`). Deploy vía GitHub Actions (pipeline del
   front ya existe; extender para el back).
+- La base `catavento_db` y el usuario `catavento_app` YA EXISTEN en el
+  VPS (verificado 2026-07-17, conexión funcional). Las migraciones
+  crean/modifican TABLAS, nunca la base ni el usuario. No incluir
+  pasos de creación de base/usuario en scripts ni docs de setup.
 
 ## Estado actual del código
 Lo que hay en `src/` y `scripts/` es el proof of concept del pago con
@@ -64,6 +68,10 @@ es punto de partida.
   del backend: tests unitarios para lógica pura (cálculo de precios,
   reglas de estadía) y tests de integración contra el sandbox de Asaas
   para el flujo de pago.
+- **`catavento_db_test`** es la única base permitida para tests
+  automatizados (mismo Postgres del VPS, mismo usuario `catavento_app`).
+  Migraciones y seed de datos reales van SIEMPRE contra `catavento_db`.
+  Ningún test debe conectarse a `catavento_db`.
 
 ## Plan de módulos (orden; se puede parar en cualquier punto)
 1. Cuartos y tarifas (spec: SPEC-modulo-1-cuartos-y-tarifas.md)
