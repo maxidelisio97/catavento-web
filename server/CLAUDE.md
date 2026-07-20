@@ -58,6 +58,14 @@ es punto de partida.
 - Fin de semana = noches de viernes y sábado.
 - El precio de una reserva se congela al crearla.
 
+## Flujo de ramas
+- `main` es la única rama permanente y la única que se deploya al VPS.
+- Todo trabajo nuevo se corta en una feature branch por módulo/tema
+  desde `main` (ej. `modulo-2-disponibilidad`).
+- Al cerrar el módulo/tema: merge a `main`, push, y borrado inmediato
+  de la rama (local y remota). No quedan ramas de feature vivas
+  después de mergear.
+
 ## Entornos
 - Desarrollo: Windows (PowerShell). Producción: Ubuntu en VPS.
   Los scripts del repo deben ser cross-platform (usar scripts npm y
