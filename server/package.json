@@ -1,0 +1,27 @@
+{
+  "name": "catavento-payments-server",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "register-webhook": "tsx scripts/register-webhook.ts",
+    "confirm-sandbox-payment": "tsx scripts/confirm-sandbox-payment.ts"
+  },
+  "dependencies": {
+    "@fastify/type-provider-zod": "^1.0.0",
+    "dotenv": "^16.4.5",
+    "fastify": "^5.10.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}
