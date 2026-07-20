@@ -47,6 +47,11 @@ export interface AsaasCustomerResponse {
   [key: string]: unknown;
 }
 
+export interface AsaasPaymentCallback {
+  successUrl: string;
+  autoRedirect: boolean;
+}
+
 export interface AsaasPaymentRequest {
   customer: string;
   billingType: 'PIX' | 'BOLETO' | 'CREDIT_CARD' | 'UNDEFINED';
@@ -54,12 +59,22 @@ export interface AsaasPaymentRequest {
   dueDate: string;
   description?: string;
   externalReference?: string;
+  /** Redirects the guest back to our site after paying a hosted invoice (card) or PIX. */
+  callback?: AsaasPaymentCallback;
 }
 
 export interface AsaasPaymentResponse {
   id: string;
+  /** e.g. PENDING, RECEIVED, CONFIRMED, OVERDUE, REFUNDED — see Asaas docs. */
   status: string;
   invoiceUrl: string;
+  [key: string]: unknown;
+}
+
+export interface AsaasPixQrCodeResponse {
+  encodedImage: string;
+  payload: string;
+  expirationDate: string;
   [key: string]: unknown;
 }
 
@@ -73,4 +88,8 @@ export function createPayment(payment: AsaasPaymentRequest): Promise<AsaasPaymen
 
 export function getPayment(paymentId: string): Promise<AsaasPaymentResponse> {
   return asaasRequest(`/v3/payments/${paymentId}`);
+}
+
+export function getPixQrCode(paymentId: string): Promise<AsaasPixQrCodeResponse> {
+  return asaasRequest(`/v3/payments/${paymentId}/pixQrCode`);
 }

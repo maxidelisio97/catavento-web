@@ -13,6 +13,7 @@ import type { DB } from '../db/types.js';
 import { calculateAvailability } from './calculateAvailability.js';
 import { fetchRoomStayData } from './repository.js';
 import { calculatePrice } from '../pricing/calculatePrice.js';
+import { calculateDeposit } from '../pricing/calculateDeposit.js';
 
 export class NoAvailabilityError extends Error {
   readonly code = 'NO_AVAILABILITY' as const;
@@ -43,12 +44,19 @@ export interface CreateReservationInput {
   expiresAt?: Date;
   /** Public reference code (módulo 3). Undefined for callers that don't use one. */
   code?: string;
+  /**
+   * Whole percentage (módulo 4) used to freeze `deposit_cents` at creation
+   * time. Undefined for callers that don't track deposits (e.g. módulo 2
+   * tests) — deposit_cents stays null in that case.
+   */
+  depositPercent?: number;
 }
 
 export interface CreateReservationResult {
   id: number;
   totalCents: number;
   code: string | null;
+  depositCents: number | null;
 }
 
 export async function createReservation(
@@ -107,6 +115,9 @@ export async function createReservation(
       throw new MinStayNotMetError(price.requiredMinStay, price.requestedNights);
     }
 
+    const depositCents =
+      input.depositPercent !== undefined ? calculateDeposit(price.totalCents, input.depositPercent) : null;
+
     const reservation = await trx
       .insertInto('reservations')
       .values({
@@ -117,6 +128,7 @@ export async function createReservation(
         status: 'pending_payment',
         expires_at: input.expiresAt ?? null,
         total_cents: price.totalCents,
+        deposit_cents: depositCents,
         guest_name: input.guestName ?? null,
         guest_email: input.guestEmail ?? null,
         guest_phone: input.guestPhone ?? null,
@@ -126,6 +138,6 @@ export async function createReservation(
       .returning(['id', 'code'])
       .executeTakeFirstOrThrow();
 
-    return { id: reservation.id, totalCents: price.totalCents, code: reservation.code };
+    return { id: reservation.id, totalCents: price.totalCents, code: reservation.code, depositCents };
   });
 }

@@ -30,6 +30,8 @@ export async function fetchRoomStayData(
   roomId: number,
   checkIn: string,
   checkOut: string,
+  /** Excludes this reservation's own occupancy — used to re-check availability for itself. */
+  excludeReservationId?: number,
 ): Promise<RoomStayData | undefined> {
   const room = await executor
     .selectFrom('rooms')
@@ -60,7 +62,7 @@ export async function fetchRoomStayData(
     .where('date', '<', parseDateUTC(checkOut))
     .execute();
 
-  const reservationRows = await executor
+  let reservationQuery = executor
     .selectFrom('reservations')
     .select([
       sql<string>`check_in::text`.as('check_in'),
@@ -71,8 +73,13 @@ export async function fetchRoomStayData(
     .where('room_id', '=', roomId)
     .where('check_in', '<', parseDateUTC(checkOut))
     .where('check_out', '>', parseDateUTC(checkIn))
-    .where('status', '!=', 'cancelled')
-    .execute();
+    .where('status', '!=', 'cancelled');
+
+  if (excludeReservationId !== undefined) {
+    reservationQuery = reservationQuery.where('id', '!=', excludeReservationId);
+  }
+
+  const reservationRows = await reservationQuery.execute();
 
   const occupiedByDate: Record<string, number> = {};
   const now = new Date();

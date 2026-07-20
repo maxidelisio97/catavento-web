@@ -9,7 +9,31 @@ export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
   ? ColumnType<S, I | undefined, U>
   : ColumnType<T, T | undefined, T>;
 
+export type Json = JsonValue;
+
+export type JsonArray = JsonValue[];
+
+export type JsonObject = {
+  [x: string]: JsonValue | undefined;
+};
+
+export type JsonPrimitive = boolean | number | string | null;
+
+export type JsonValue = JsonArray | JsonObject | JsonPrimitive;
+
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
+
+export interface Payments {
+  amount_cents: number;
+  asaas_payment_id: string;
+  created_at: Generated<Timestamp>;
+  id: Generated<number>;
+  method: string;
+  raw_last_event: Json | null;
+  reservation_id: number;
+  status: Generated<string>;
+  updated_at: Generated<Timestamp>;
+}
 
 export interface Pgmigrations {
   id: Generated<number>;
@@ -34,6 +58,7 @@ export interface Reservations {
   check_out: Timestamp;
   code: string | null;
   created_at: Generated<Timestamp>;
+  deposit_cents: number | null;
   expires_at: Timestamp | null;
   guest_email: string | null;
   guest_name: string | null;
@@ -70,10 +95,18 @@ export interface Rooms {
   updated_at: Generated<Timestamp>;
 }
 
+export interface Settings {
+  key: string;
+  updated_at: Generated<Timestamp>;
+  value: string;
+}
+
 export interface DB {
+  payments: Payments;
   pgmigrations: Pgmigrations;
   rate_overrides: RateOverrides;
   reservations: Reservations;
   room_rates: RoomRates;
   rooms: Rooms;
+  settings: Settings;
 }
