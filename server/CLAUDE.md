@@ -59,6 +59,21 @@ es punto de partida.
 - Toda escritura sobre disponibilidad pasa por transacción con lock
   (regla anti-overbooking; aplica desde el módulo 2).
 
+## Revisión antes de mergear (módulos de pagos o datos de huéspedes)
+Todo módulo que toque pagos, dinero, o datos personales de huéspedes
+cierra con una pasada de revisión de riesgo (`review-risk` o
+equivalente, con contexto fresco) sobre el diff completo ANTES del
+merge a `main` — no alcanza con que los tests pasen. Motivo: en el
+módulo 4 esa revisión encontró una race condition real que podía
+duplicar el cobro del depósito en Asaas (dos requests concurrentes
+podían pasar el chequeo "sin pago pendiente" y cobrar dos veces antes
+de que el código local lo detectara) y un log que filtraba PII del
+huésped — ninguno de los dos lo hubiera cazado un test unitario ni una
+lectura rápida del propio autor del cambio.
+Los hallazgos de la revisión se corrigen ANTES del merge (no se
+anotan "para después"), o se justifica explícitamente por qué un
+hallazgo puede esperar.
+
 ## Convenciones de datos
 - Dinero: centavos como INTEGER, nunca float.
 - Noches: DATE (la fila 2026-10-15 es la noche del 15 al 16).
