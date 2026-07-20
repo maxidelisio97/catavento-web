@@ -25,6 +25,24 @@ export interface RateOverrides {
   min_stay: number | null;
   price_cents: number | null;
   room_id: number;
+  units_available: number | null;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface Reservations {
+  check_in: Timestamp;
+  check_out: Timestamp;
+  created_at: Generated<Timestamp>;
+  expires_at: Timestamp | null;
+  guest_email: string | null;
+  guest_name: string | null;
+  guest_phone: string | null;
+  guests: number;
+  id: Generated<number>;
+  notes: string | null;
+  room_id: number;
+  status: Generated<string>;
+  total_cents: number;
   updated_at: Generated<Timestamp>;
 }
 
@@ -47,12 +65,14 @@ export interface Rooms {
   id: Generated<number>;
   name: string;
   pets_allowed: Generated<boolean>;
+  total_units: Generated<number>;
   updated_at: Generated<Timestamp>;
 }
 
 export interface DB {
   pgmigrations: Pgmigrations;
   rate_overrides: RateOverrides;
+  reservations: Reservations;
   room_rates: RoomRates;
   rooms: Rooms;
 }

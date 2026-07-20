@@ -1,9 +1,11 @@
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from '@fastify/type-provider-zod';
 import { config } from './config.js';
+import { registerErrorHandler } from './errorHandler.js';
 import paymentsPlugin from './plugins/payments.js';
 import webhooksPlugin from './plugins/webhooks.js';
 import roomsPlugin from './plugins/rooms.js';
+import availabilityPlugin from './plugins/availability.js';
 
 const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
 
@@ -15,11 +17,9 @@ app.get('/api/health', async () => ({ ok: true }));
 app.register(paymentsPlugin, { prefix: '/api' });
 app.register(webhooksPlugin, { prefix: '/api' });
 app.register(roomsPlugin, { prefix: '/api' });
+app.register(availabilityPlugin, { prefix: '/api' });
 
-app.setErrorHandler((err, _request, reply) => {
-  app.log.error(err);
-  reply.status(500).send({ error: 'internal_error' });
-});
+registerErrorHandler(app);
 
 app.listen({ port: config.port, host: '0.0.0.0' }, (err) => {
   if (err) {
