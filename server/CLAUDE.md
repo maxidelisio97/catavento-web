@@ -21,6 +21,13 @@ algo parece mejorable, proponerlo antes de cambiar.
   crean/modifican TABLAS, nunca la base ni el usuario. No incluir
   pasos de creación de base/usuario en scripts ni docs de setup.
 
+## Principio: parámetros de negocio como datos, nunca hardcodeados
+Todo valor que Maxi pueda querer cambiar (precios, cupos, estadía
+mínima, % de depósito, textos de política, tiempos de retención) vive
+en la base y será editable desde el panel (M5). Si al implementar
+aparece un número de negocio hardcodeado, es un smell: proponer
+moverlo a datos. El código define REGLAS; los datos definen VALORES.
+
 ## Estado actual del código
 Lo que hay en `src/` y `scripts/` es el proof of concept del pago con
 Asaas (JavaScript plano, funcional, pago de prueba exitoso en sandbox).
