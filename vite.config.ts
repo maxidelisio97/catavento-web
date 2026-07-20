@@ -10,4 +10,12 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  server: {
+    // Solo dev: en produccion Nginx proxea /api al backend directamente
+    // (mismo origen). Esto le da al Vite dev server el mismo comportamiento
+    // sin duplicar esa config.
+    proxy: {
+      '/api': 'http://localhost:3001',
+    },
+  },
 })
