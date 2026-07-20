@@ -330,6 +330,11 @@ const reservationsPlugin: FastifyPluginAsync<ReservationsPluginOptions> = async 
           throw httpError(409, 'PAYMENT_ALREADY_RECEIVED');
         }
         if (err instanceof AsaasApiError) {
+          // Keep the real Asaas error out of the client response (it can
+          // echo back request data) but not out of our own logs — losing it
+          // here means nobody can tell why a charge failed without going to
+          // the Asaas dashboard.
+          request.log.warn({ status: err.status, body: err.body }, 'asaas_request_failed');
           throw httpError(502, 'asaas_request_failed');
         }
         throw err;
