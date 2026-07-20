@@ -187,3 +187,12 @@ de copy se valida contra ese documento.
   vigentes. Cuando el motor propio llegue al flujo de reserva, se
   reabrira la decision del selector de quarto (la limitacion de
   deep-link era de HQBeds, no de negocio).
+
+## Estrategia de switch (regla de negocio, no negociable)
+- El sitio publico sigue mandando TODAS las reservas a HQBeds hasta
+  que el motor propio este COMPLETO y probado (modulos 3+4+5 como
+  minimo) y Maxi apruebe explicitamente el switch.
+- Los modulos 3-5 se desarrollan sin tocar el flujo publico: el
+  checkout propio vive en rutas nuevas no enlazadas desde el sitio.
+- Ningun cambio en el form de reserva del frontend (destino HQBeds,
+  parametros arrival/departure/adults) sin esa aprobacion.
