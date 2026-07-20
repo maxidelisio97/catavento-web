@@ -1,6 +1,6 @@
 import 'dotenv/config';
 
-const required = ['ASAAS_API_KEY', 'ASAAS_WEBHOOK_TOKEN'] as const;
+const required = ['ASAAS_API_KEY', 'ASAAS_WEBHOOK_TOKEN', 'DATABASE_URL'] as const;
 
 for (const key of required) {
   if (!process.env[key]) {
@@ -14,6 +14,7 @@ const env: AsaasEnv = process.env.ASAAS_ENV === 'production' ? 'production' : 's
 
 export const config = {
   port: Number(process.env.PORT) || 3001,
+  databaseUrl: process.env.DATABASE_URL as string,
   asaas: {
     env,
     apiKey: process.env.ASAAS_API_KEY as string,
