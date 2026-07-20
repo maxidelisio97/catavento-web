@@ -20,8 +20,12 @@ if (!testDatabaseName.endsWith('_test')) {
   );
 }
 
-const dialect = new PostgresDialect({
-  pool: new Pool({ connectionString: testDatabaseUrl }),
-});
+// Exported so concurrency tests can assert that a lock test actually used
+// more than one physical connection — otherwise "two requests in parallel"
+// could just be pool-queue serialization, which wouldn't exercise the
+// `FOR UPDATE` row lock at all.
+export const testPool = new Pool({ connectionString: testDatabaseUrl });
+
+const dialect = new PostgresDialect({ pool: testPool });
 
 export const testDb = new Kysely<DB>({ dialect });
