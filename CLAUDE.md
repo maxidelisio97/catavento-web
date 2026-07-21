@@ -2,10 +2,30 @@
 
 ## Alcance de este archivo (monorepo)
 Este repo contiene el frontend (raíz) y el backend (`server/`).
-TODO lo que sigue en este archivo aplica SOLO al frontend. El backend
-tiene su propio `server/CLAUDE.md` con sus reglas — al trabajar dentro
-de `server/`, ese archivo manda y las reglas de screenshots/layout/
-motion de acá no aplican.
+TODO lo que sigue en este archivo aplica SOLO al frontend, EXCEPTO la
+sección "Flujo de ramas" de acá abajo, que es regla de todo el repo.
+El backend tiene su propio `server/CLAUDE.md` con sus reglas — al
+trabajar dentro de `server/`, ese archivo manda y las reglas de
+screenshots/layout/motion de acá no aplican.
+
+## Flujo de ramas (todo el repo — frontend y backend)
+- `main` es la única rama permanente y la única que se deploya
+  (pipeline de CI/CD para el frontend, pasos manuales en el VPS para
+  `server/`).
+- Todo trabajo nuevo se corta en una feature branch por módulo/tema
+  desde `main` (ej. `modulo-2-disponibilidad`,
+  `modulo-3-children-babies`).
+- **Verificación de rama al empezar (no al cerrar).** Antes de escribir
+  la primera línea de código de cualquier módulo/tema nuevo, correr
+  `git branch --show-current` y confirmar que NO es `main`. Si lo es,
+  cortar la feature branch ahí mismo, antes de tocar archivos — no al
+  momento de commitear. Motivo: dos veces se detectó recién al cerrar
+  que el trabajo se había hecho directo sobre `main` (ambas con
+  archivos del frontend), obligando a reconstruir la separación de
+  commits después del hecho.
+- Al cerrar el módulo/tema: merge a `main`, push, y borrado inmediato
+  de la rama (local y remota). No quedan ramas de feature vivas
+  después de mergear.
 
 ## Contexto obligatorio
 Antes de cualquier tarea de diseño, contenido o UX, lee `PRODUCT.md`.

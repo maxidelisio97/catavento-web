@@ -87,12 +87,7 @@ hallazgo puede esperar.
 - El precio de una reserva se congela al crearla.
 
 ## Flujo de ramas
-- `main` es la única rama permanente y la única que se deploya al VPS.
-- Todo trabajo nuevo se corta en una feature branch por módulo/tema
-  desde `main` (ej. `modulo-2-disponibilidad`).
-- Al cerrar el módulo/tema: merge a `main`, push, y borrado inmediato
-  de la rama (local y remota). No quedan ramas de feature vivas
-  después de mergear.
+Ver CLAUDE.md raíz — regla de todo el repo, no solo del backend.
 
 ## Entornos
 - Desarrollo: Windows (PowerShell). Producción: Ubuntu en VPS.
