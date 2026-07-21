@@ -9,7 +9,7 @@
  * ReservarPage.tsx.
  */
 import { useEffect, useState } from "react";
-import { LuCircleCheck, LuClock, LuLoaderCircle } from "react-icons/lu";
+import { LuCheck, LuCircleCheck, LuClock, LuCopy, LuLoaderCircle } from "react-icons/lu";
 import { ApiError, fetchReservationByCode, requestPayment, type ReservationResponse } from "../../lib/api";
 import type { DatesStepInitial } from "./DatesStep";
 import { formatCents, formatIsoDateLabel } from "./formatters";
@@ -46,8 +46,20 @@ export default function ConfirmationStep({ reservation: initialReservation, onRe
   const [submitting, setSubmitting] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
 
+  const [codeCopied, setCodeCopied] = useState(false);
+
   const remainingMs = useCountdown(reservation.expires_at);
   const paymentInFlight = pix !== null || awaitingCard;
+
+  async function handleCopyCode() {
+    try {
+      await navigator.clipboard.writeText(reservation.code);
+      setCodeCopied(true);
+      window.setTimeout(() => setCodeCopied(false), 2000);
+    } catch {
+      // clipboard indisponivel — o codigo ja esta visivel na tela.
+    }
+  }
 
   // Poll enquanto houver um pagamento em andamento, ate a reserva sair de
   // pending_payment (confirmed / expired / payment_conflict).
@@ -113,13 +125,25 @@ export default function ConfirmationStep({ reservation: initialReservation, onRe
       </div>
 
       <div>
-        <h2 className="font-heading text-2xl text-warm-900">Reserva criada!</h2>
+        <h2 className="font-heading text-2xl text-warm-900">
+          {reservation.status === "confirmed" ? "Reserva confirmada!" : "Reserva criada!"}
+        </h2>
         <p className="mt-1 font-body text-sm text-warm-800/60">
           Guarde este código: você pode usá-lo para falar com a pousada por WhatsApp.
         </p>
       </div>
 
-      <p className="font-heading text-3xl tracking-[0.15em] text-coral-600">{reservation.code}</p>
+      <div className="flex items-center justify-center gap-2">
+        <p className="font-heading text-3xl tracking-[0.05em] text-coral-600">{reservation.code}</p>
+        <button
+          type="button"
+          onClick={handleCopyCode}
+          aria-label="Copiar código da reserva"
+          className="flex h-9 w-9 items-center justify-center rounded-full text-warm-800/50 hover:text-coral-600 hover:bg-coral-50 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral-400"
+        >
+          {codeCopied ? <LuCheck size={18} aria-hidden /> : <LuCopy size={18} aria-hidden />}
+        </button>
+      </div>
 
       <div className="rounded-2xl border border-stone-300 bg-white p-5 text-left space-y-1.5">
         <p className="font-body text-sm text-warm-900">
