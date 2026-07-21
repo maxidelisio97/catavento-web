@@ -5,7 +5,7 @@ import type { Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
 import { db as prodDb } from '../db/client.js';
 import { fetchRoomStayData } from '../availability/repository.js';
-import { calculateAvailability } from '../availability/calculateAvailability.js';
+import { calculateCombinedAvailability } from '../availability/combinedAvailability.js';
 import { calculatePrice } from '../pricing/calculatePrice.js';
 
 const MAX_NIGHTS = 60;
@@ -88,12 +88,14 @@ const availabilityPlugin: FastifyPluginAsync<AvailabilityPluginOptions> = async 
         const stayData = await fetchRoomStayData(db, id, check_in, check_out);
         if (!stayData) continue;
 
-        const availability = calculateAvailability({
+        const availability = calculateCombinedAvailability({
           checkIn: check_in,
           checkOut: check_out,
           totalUnits: stayData.totalUnits,
           overrides: stayData.overrides,
           occupiedByDate: stayData.occupiedByDate,
+          units: stayData.roomUnits,
+          unitReservations: stayData.unitReservations,
         });
 
         const price = calculatePrice({

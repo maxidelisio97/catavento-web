@@ -14,6 +14,7 @@ interface RoomFixtureOptions {
 }
 
 async function insertTestRoom(options: RoomFixtureOptions = {}): Promise<number> {
+  const totalUnits = options.totalUnits ?? 1;
   const room = await testDb
     .insertInto('rooms')
     .values({
@@ -21,10 +22,25 @@ async function insertTestRoom(options: RoomFixtureOptions = {}): Promise<number>
       capacity: 2,
       pets_allowed: false,
       default_min_stay: 1,
-      total_units: options.totalUnits ?? 1,
+      total_units: totalUnits,
     })
     .returning('id')
     .executeTakeFirstOrThrow();
+
+  // Módulo 5: totalUnits is now derived from active room_units, not the
+  // rooms.total_units column — create matching physical units so this
+  // module's aggregate-only re-check keeps its exact original behavior.
+  if (totalUnits > 0) {
+    await testDb
+      .insertInto('room_units')
+      .values(
+        Array.from({ length: totalUnits }, (_, i) => ({
+          room_id: room.id,
+          label: `${room.id}-${i + 1}`,
+        })),
+      )
+      .execute();
+  }
 
   return room.id;
 }

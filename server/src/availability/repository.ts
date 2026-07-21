@@ -1,11 +1,16 @@
 import { sql, type Kysely, type Transaction } from 'kysely';
 import type { DB } from '../db/types.js';
-import { eachNightUTC, parseDateUTC } from '../shared/dateUtils.js';
+import { eachNightUTC } from '../shared/dateUtils.js';
 
 export interface RoomStayData {
   roomId: number;
   name: string;
   capacity: number;
+  /**
+   * Derived from the count of active `room_units` for this room — módulo 5
+   * (SPEC-modulo-5-unidades-fisicas.md). `rooms.total_units` is no longer
+   * read here; it stays in the table for backward compatibility only.
+   */
   totalUnits: number;
   defaultMinStay: number;
   roomRates: { occupancy: number; weekdayCents: number; weekendCents: number }[];
@@ -18,6 +23,16 @@ export interface RoomStayData {
   }[];
   /** Count of active reservations per night ('YYYY-MM-DD' -> count). */
   occupiedByDate: Record<string, number>;
+  /** Active physical units for this room type — módulo 5. */
+  roomUnits: { id: number; label: string }[];
+  /**
+   * Active reservations (same "active" definition as `occupiedByDate`)
+   * that have an assigned unit and overlap [checkIn, checkOut) — módulo 5.
+   * Unlike `occupiedByDate`, ranges here are NOT clipped to the query
+   * window: `findFreeUnits` needs the reservation's real bounds to decide
+   * overlap for the whole requested stay.
+   */
+  unitReservations: { roomUnitId: number; checkIn: string; checkOut: string }[];
 }
 
 /**
@@ -35,12 +50,19 @@ export async function fetchRoomStayData(
 ): Promise<RoomStayData | undefined> {
   const room = await executor
     .selectFrom('rooms')
-    .select(['id', 'name', 'capacity', 'total_units', 'default_min_stay'])
+    .select(['id', 'name', 'capacity', 'default_min_stay'])
     .where('id', '=', roomId)
     .where('active', '=', true)
     .executeTakeFirst();
 
   if (!room) return undefined;
+
+  const roomUnitRows = await executor
+    .selectFrom('room_units')
+    .select(['id', 'label'])
+    .where('room_id', '=', roomId)
+    .where('active', '=', true)
+    .execute();
 
   const roomRateRows = await executor
     .selectFrom('room_rates')
@@ -58,8 +80,20 @@ export async function fetchRoomStayData(
       'min_stay',
     ])
     .where('room_id', '=', roomId)
-    .where('date', '>=', parseDateUTC(checkIn))
-    .where('date', '<', parseDateUTC(checkOut))
+    // Plain 'YYYY-MM-DD' strings cast in SQL, never a JS Date object: pg
+    // serializes a Date param for a DATE column using the CALLING PROCESS's
+    // local timezone (not UTC), which silently shifts the boundary by a day
+    // whenever that process isn't running in UTC — a real bug this repo's
+    // own dev/test environment (America/Buenos_Aires) surfaced. The `::date`
+    // cast happens on the Postgres side of a parameterized string, so there's
+    // no JS Date and no timezone to get wrong at runtime.
+    // The `sql<Date>` type param below is a lie to satisfy Kysely's column-type
+    // checker (these columns are typed `Date` in db/types.ts, so `.where()`
+    // requires an expression typed as such) — it does NOT mean a JS Date is
+    // sent over the wire. Don't "fix" this by passing an actual `Date` value,
+    // that's the exact bug this comment is about.
+    .where('date', '>=', sql<Date>`${checkIn}::date`)
+    .where('date', '<', sql<Date>`${checkOut}::date`)
     .execute();
 
   let reservationQuery = executor
@@ -69,10 +103,11 @@ export async function fetchRoomStayData(
       sql<string>`check_out::text`.as('check_out'),
       'status',
       'expires_at',
+      'room_unit_id',
     ])
     .where('room_id', '=', roomId)
-    .where('check_in', '<', parseDateUTC(checkOut))
-    .where('check_out', '>', parseDateUTC(checkIn))
+    .where('check_in', '<', sql<Date>`${checkOut}::date`)
+    .where('check_out', '>', sql<Date>`${checkIn}::date`)
     .where('status', '!=', 'cancelled');
 
   if (excludeReservationId !== undefined) {
@@ -82,6 +117,7 @@ export async function fetchRoomStayData(
   const reservationRows = await reservationQuery.execute();
 
   const occupiedByDate: Record<string, number> = {};
+  const unitReservations: { roomUnitId: number; checkIn: string; checkOut: string }[] = [];
   const now = new Date();
 
   for (const reservation of reservationRows) {
@@ -97,13 +133,21 @@ export async function fetchRoomStayData(
     for (const night of eachNightUTC(overlapStart, overlapEnd)) {
       occupiedByDate[night] = (occupiedByDate[night] ?? 0) + 1;
     }
+
+    if (reservation.room_unit_id != null) {
+      unitReservations.push({
+        roomUnitId: reservation.room_unit_id,
+        checkIn: reservation.check_in,
+        checkOut: reservation.check_out,
+      });
+    }
   }
 
   return {
     roomId: room.id,
     name: room.name,
     capacity: room.capacity,
-    totalUnits: room.total_units,
+    totalUnits: roomUnitRows.length,
     defaultMinStay: room.default_min_stay,
     roomRates: roomRateRows.map((r) => ({
       occupancy: r.occupancy,
@@ -118,5 +162,7 @@ export async function fetchRoomStayData(
       minStay: o.min_stay,
     })),
     occupiedByDate,
+    roomUnits: roomUnitRows.map((u) => ({ id: u.id, label: u.label })),
+    unitReservations,
   };
 }

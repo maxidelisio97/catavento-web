@@ -30,6 +30,7 @@ interface RoomFixtureOptions {
 
 async function insertTestRoom(options: RoomFixtureOptions = {}): Promise<number> {
   const capacity = options.capacity ?? 2;
+  const totalUnits = options.totalUnits ?? 3;
   const room = await testDb
     .insertInto('rooms')
     .values({
@@ -38,7 +39,7 @@ async function insertTestRoom(options: RoomFixtureOptions = {}): Promise<number>
       pets_allowed: false,
       adults_only: options.adultsOnly ?? false,
       default_min_stay: 1,
-      total_units: options.totalUnits ?? 3,
+      total_units: totalUnits,
     })
     .returning('id')
     .executeTakeFirstOrThrow();
@@ -47,6 +48,21 @@ async function insertTestRoom(options: RoomFixtureOptions = {}): Promise<number>
     .insertInto('room_rates')
     .values({ room_id: room.id, occupancy: capacity, weekday_cents: 10000, weekend_cents: 15000 })
     .execute();
+
+  // Módulo 5: totalUnits is now derived from active room_units, not the
+  // rooms.total_units column — create matching physical units so this
+  // endpoint's existing tests keep their exact original behavior.
+  if (totalUnits > 0) {
+    await testDb
+      .insertInto('room_units')
+      .values(
+        Array.from({ length: totalUnits }, (_, i) => ({
+          room_id: room.id,
+          label: `${room.id}-${i + 1}`,
+        })),
+      )
+      .execute();
+  }
 
   return room.id;
 }

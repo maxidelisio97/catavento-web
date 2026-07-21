@@ -70,6 +70,7 @@ export interface Reservations {
   id: Generated<number>;
   notes: string | null;
   room_id: number;
+  room_unit_id: number | null;
   status: Generated<string>;
   total_cents: number;
   updated_at: Generated<Timestamp>;
@@ -83,6 +84,16 @@ export interface RoomRates {
   updated_at: Generated<Timestamp>;
   weekday_cents: number;
   weekend_cents: number;
+}
+
+export interface RoomUnits {
+  active: Generated<boolean>;
+  created_at: Generated<Timestamp>;
+  id: Generated<number>;
+  label: string;
+  notes: string | null;
+  room_id: number;
+  updated_at: Generated<Timestamp>;
 }
 
 export interface Rooms {
@@ -111,6 +122,7 @@ export interface DB {
   rate_overrides: RateOverrides;
   reservations: Reservations;
   room_rates: RoomRates;
+  room_units: RoomUnits;
   rooms: Rooms;
   settings: Settings;
 }

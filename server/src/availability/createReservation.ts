@@ -10,7 +10,7 @@
 
 import type { Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
-import { calculateAvailability } from './calculateAvailability.js';
+import { calculateCombinedAvailability } from './combinedAvailability.js';
 import { fetchRoomStayData } from './repository.js';
 import { calculatePrice } from '../pricing/calculatePrice.js';
 import { calculateDeposit } from '../pricing/calculateDeposit.js';
@@ -88,17 +88,27 @@ export async function createReservation(
       throw new NoAvailabilityError(input.checkIn);
     }
 
-    const availability = calculateAvailability({
+    const availability = calculateCombinedAvailability({
       checkIn: input.checkIn,
       checkOut: input.checkOut,
       totalUnits: stayData.totalUnits,
       overrides: stayData.overrides,
       occupiedByDate: stayData.occupiedByDate,
+      units: stayData.roomUnits,
+      unitReservations: stayData.unitReservations,
     });
 
     if (!availability.available) {
       const firstFullNight = availability.nights.find((n) => n.disponibles < 1);
       throw new NoAvailabilityError(firstFullNight ? firstFullNight.date : input.checkIn);
+    }
+
+    // availability.available guarantees freeUnits.length >= 1 (see
+    // combinedAvailability.ts), but TS can't infer that from the type — the
+    // guard below is defensive, not a real "no room" path.
+    const chosenUnit = availability.freeUnits[0];
+    if (!chosenUnit) {
+      throw new NoAvailabilityError(input.checkIn);
     }
 
     const price = calculatePrice({
@@ -129,6 +139,7 @@ export async function createReservation(
       .insertInto('reservations')
       .values({
         room_id: input.roomId,
+        room_unit_id: chosenUnit.id,
         check_in: input.checkIn,
         check_out: input.checkOut,
         guests: input.guests,
