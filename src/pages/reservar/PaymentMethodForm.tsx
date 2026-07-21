@@ -5,6 +5,7 @@
  */
 import { useState } from "react";
 import { LuCircleAlert } from "react-icons/lu";
+import { isValidCpfCnpjLength, maskCpfCnpj } from "./formatters";
 
 interface PaymentMethodFormProps {
   depositLabel: string;
@@ -23,15 +24,19 @@ export default function PaymentMethodForm({
   const [cpf, setCpf] = useState("");
   const [cpfError, setCpfError] = useState<string | null>(null);
 
+  function handleCpfChange(value: string) {
+    setCpf(maskCpfCnpj(value));
+    if (cpfError) setCpfError(null);
+  }
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const digits = cpf.replace(/\D/g, "");
-    if (digits.length < 11) {
+    if (!isValidCpfCnpjLength(cpf)) {
       setCpfError("Digite um CPF ou CNPJ válido.");
       return;
     }
     setCpfError(null);
-    onSubmit(method, digits);
+    onSubmit(method, cpf.replace(/\D/g, ""));
   }
 
   function optionClass(active: boolean) {
@@ -84,8 +89,7 @@ export default function PaymentMethodForm({
           inputMode="numeric"
           autoComplete="off"
           value={cpf}
-          onChange={(e) => setCpf(e.target.value)}
-          placeholder="000.000.000-00"
+          onChange={(e) => handleCpfChange(e.target.value)}
           aria-invalid={Boolean(cpfError)}
           className="w-full rounded-xl border border-stone-300 bg-white px-4 py-3 font-body text-sm text-warm-900 placeholder:text-warm-800/35 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral-400"
         />

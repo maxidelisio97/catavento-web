@@ -27,6 +27,19 @@ interface PixData {
   payload: string;
 }
 
+// O backend nunca deve chegar ao huesped como um codigo cru ("internal_error",
+// "asaas_request_failed") — cada erro conhecido vira uma frase acionavel;
+// qualquer coisa fora do mapa cai no mesmo fallback humano, nunca no err.message.
+function paymentErrorMessage(err: unknown, code: string): string {
+  if (!(err instanceof ApiError)) {
+    return "Não conseguimos iniciar o pagamento. Verifique sua conexão e tente novamente.";
+  }
+  if (err.message === "RESERVATION_NOT_PAYABLE" || err.message === "DEPOSIT_NOT_CONFIGURED") {
+    return "Essa reserva não está mais disponível para pagamento. Atualize a página para ver o status atual.";
+  }
+  return `Não conseguimos gerar seu pagamento agora. Confira o CPF/CNPJ e tente de novo — se continuar, fale com a pousada pelo WhatsApp e informe o código ${code}.`;
+}
+
 export default function ConfirmationStep({ reservation: initialReservation, onRestart }: ConfirmationStepProps) {
   const [reservation, setReservation] = useState(initialReservation);
   const [pix, setPix] = useState<PixData | null>(
@@ -100,7 +113,7 @@ export default function ConfirmationStep({ reservation: initialReservation, onRe
           setPaymentError("Não conseguimos confirmar o status da reserva. Tente novamente.");
         }
       } else {
-        setPaymentError(err instanceof ApiError ? err.message : "Não conseguimos iniciar o pagamento. Tente novamente.");
+        setPaymentError(paymentErrorMessage(err, reservation.code));
       }
     } finally {
       setSubmitting(false);

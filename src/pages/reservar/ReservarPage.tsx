@@ -48,9 +48,21 @@ function readCodeFromUrl(): string | null {
 export default function ReservarPage() {
   const initialFromUrl = useMemo(() => readInitialFromUrl(), []);
   const codeFromUrl = useMemo(() => readCodeFromUrl(), []);
-  const [step, setStep] = useState<Step>(() =>
-    codeFromUrl ? { name: "loading" } : { name: "dates", initial: initialFromUrl },
-  );
+  const [step, setStep] = useState<Step>(() => {
+    if (codeFromUrl) return { name: "loading" };
+    // Datas ja vieram prontas do seletor da home (ver comentario do topo do
+    // arquivo) — pular a tela de datas em vez de repetir um seletor que o
+    // hospede acabou de usar.
+    if (initialFromUrl?.checkIn && initialFromUrl?.checkOut) {
+      return {
+        name: "results",
+        checkIn: initialFromUrl.checkIn,
+        checkOut: initialFromUrl.checkOut,
+        guests: initialFromUrl.guests ?? 2,
+      };
+    }
+    return { name: "dates", initial: initialFromUrl };
+  });
 
   useEffect(() => {
     if (!codeFromUrl) return;
