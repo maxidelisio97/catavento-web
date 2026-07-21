@@ -43,6 +43,7 @@ CREATE TABLE rooms (
   name             TEXT NOT NULL UNIQUE,          -- 'Casal', 'Triplo', 'Quádruplo'
   capacity         INTEGER NOT NULL CHECK (capacity >= 1),
   pets_allowed     BOOLEAN NOT NULL DEFAULT false,
+  adults_only      BOOLEAN NOT NULL DEFAULT false, -- true solo para Casal (agregado 2026-07-21)
   default_min_stay INTEGER NOT NULL DEFAULT 1 CHECK (default_min_stay >= 1),
   active           BOOLEAN NOT NULL DEFAULT true,
   description      TEXT,
@@ -109,11 +110,22 @@ reserva.
 
 ## Seed (datos reales confirmados 2026-07-17)
 
-| Cuarto | capacity | pets | occupancy seed | semana | finde |
-|---|---|---|---|---|---|
-| Casal | 2 | false | 2 | 18000 | 22000 |
-| Triplo | 3 | true | 3 | 20000 | 25000 |
-| Quádruplo | 4 | true | 4 | 23000 | 30000 |
+| Cuarto | capacity | pets | adults_only | occupancy seed | semana | finde |
+|---|---|---|---|---|---|---|
+| Casal | 2 | false | true | 2 | 18000 | 22000 |
+| Triplo | 3 | true | false | 3 | 20000 | 25000 |
+| Quádruplo | 4 | true | false | 4 | 23000 | 30000 |
+
+### Niños y bebés (agregado 2026-07-21)
+
+- Casal (`adults_only = true`) nunca acepta niños ni bebés en una
+  reserva. Triplo y Quádruplo sí.
+- Bebés (0-2 años) nunca cuentan para el cupo (duermen con los padres).
+  Niños (3-17) sí cuentan para el cupo junto con los adultos.
+- Las edades de los niños son dato informativo (para que el staff
+  prepare una cuna, por ejemplo) — nunca afectan precio ni cupo más
+  allá de la cantidad. Ver SPEC-modulo-3 para el contrato de la API
+  de reservas (`adults`, `children`, `babies`, `children_ages`).
 
 `default_min_stay = 1` en los tres. Sin overrides iniciales.
 

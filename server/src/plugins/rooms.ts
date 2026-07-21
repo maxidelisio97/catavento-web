@@ -14,6 +14,7 @@ const roomSchema = z.object({
   name: z.string(),
   capacity: z.number().int(),
   petsAllowed: z.boolean(),
+  adultsOnly: z.boolean(),
   defaultMinStay: z.number().int(),
   rates: z.array(roomRateSchema),
 });
@@ -25,7 +26,7 @@ const roomsPlugin: FastifyPluginAsync = async (fastify) => {
     async () => {
       const rooms = await db
         .selectFrom('rooms')
-        .select(['id', 'name', 'capacity', 'pets_allowed', 'default_min_stay'])
+        .select(['id', 'name', 'capacity', 'pets_allowed', 'adults_only', 'default_min_stay'])
         .where('active', '=', true)
         .orderBy('id')
         .execute();
@@ -40,6 +41,7 @@ const roomsPlugin: FastifyPluginAsync = async (fastify) => {
         name: room.name,
         capacity: room.capacity,
         petsAllowed: room.pets_allowed,
+        adultsOnly: room.adults_only,
         defaultMinStay: room.default_min_stay,
         rates: rates
           .filter((rate) => rate.room_id === room.id)

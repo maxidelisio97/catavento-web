@@ -24,15 +24,18 @@ async function resetDb(): Promise<void> {
 interface RoomFixtureOptions {
   totalUnits?: number;
   capacity?: number;
+  adultsOnly?: boolean;
 }
 
 async function insertTestRoom(options: RoomFixtureOptions = {}): Promise<number> {
+  const capacity = options.capacity ?? 2;
   const room = await testDb
     .insertInto('rooms')
     .values({
       name: 'TestRoom',
-      capacity: options.capacity ?? 2,
+      capacity,
       pets_allowed: false,
+      adults_only: options.adultsOnly ?? false,
       default_min_stay: 1,
       total_units: options.totalUnits ?? 3,
     })
@@ -41,7 +44,7 @@ async function insertTestRoom(options: RoomFixtureOptions = {}): Promise<number>
 
   await testDb
     .insertInto('room_rates')
-    .values({ room_id: room.id, occupancy: 2, weekday_cents: 10000, weekend_cents: 15000 })
+    .values({ room_id: room.id, occupancy: capacity, weekday_cents: 10000, weekend_cents: 15000 })
     .execute();
 
   return room.id;
@@ -66,7 +69,7 @@ describe('POST /api/reservations', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/reservations',
-      payload: { room_id: roomId, check_in: '2026-09-01', check_out: '2026-09-03', guests: 2, ...validGuest },
+      payload: { room_id: roomId, check_in: '2026-09-01', check_out: '2026-09-03', adults: 2, ...validGuest },
     });
 
     expect(response.statusCode).toBe(201);
@@ -87,10 +90,125 @@ describe('POST /api/reservations', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/reservations',
-      payload: { room_id: roomId, check_in: '2026-09-01', check_out: '2026-09-03', guests: 3, ...validGuest },
+      payload: { room_id: roomId, check_in: '2026-09-01', check_out: '2026-09-03', adults: 3, ...validGuest },
     });
 
     expect(response.statusCode).toBe(400);
+  });
+
+  it('rejects children on an adults-only room with 400', async () => {
+    const roomId = await insertTestRoom({ capacity: 2, adultsOnly: true });
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/reservations',
+      payload: {
+        room_id: roomId,
+        check_in: '2026-09-01',
+        check_out: '2026-09-03',
+        adults: 1,
+        children: 1,
+        children_ages: [5],
+        ...validGuest,
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toContain('ADULTS_ONLY_ROOM');
+  });
+
+  it('rejects babies on an adults-only room with 400', async () => {
+    const roomId = await insertTestRoom({ capacity: 2, adultsOnly: true });
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/reservations',
+      payload: {
+        room_id: roomId,
+        check_in: '2026-09-01',
+        check_out: '2026-09-03',
+        adults: 2,
+        babies: 1,
+        ...validGuest,
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toContain('ADULTS_ONLY_ROOM');
+  });
+
+  it('rejects children_ages length mismatched with children count', async () => {
+    const roomId = await insertTestRoom({ capacity: 4 });
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/reservations',
+      payload: {
+        room_id: roomId,
+        check_in: '2026-09-01',
+        check_out: '2026-09-03',
+        adults: 2,
+        children: 2,
+        children_ages: [5],
+        ...validGuest,
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it.each([
+    ['too young (2, a baby not a child)', 2],
+    ['too old (18)', 18],
+  ])('rejects a child age of %s with 400', async (_label, age) => {
+    const roomId = await insertTestRoom({ capacity: 3 });
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/reservations',
+      payload: {
+        room_id: roomId,
+        check_in: '2026-09-01',
+        check_out: '2026-09-03',
+        adults: 1,
+        children: 1,
+        children_ages: [age],
+        ...validGuest,
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('happy path with children and babies on a non-adults-only room, guests derived server-side', async () => {
+    const roomId = await insertTestRoom({ capacity: 4, adultsOnly: false });
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/reservations',
+      payload: {
+        room_id: roomId,
+        check_in: '2026-09-01',
+        check_out: '2026-09-03',
+        adults: 2,
+        children: 2,
+        babies: 1,
+        children_ages: [5, 10],
+        ...validGuest,
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    const body = response.json();
+    expect(body.guests).toBe(4); // 2 adults + 2 children — babies never count
+    expect(body.children).toBe(2);
+    expect(body.babies).toBe(1);
+    expect(body.children_ages.slice().sort((a: number, b: number) => a - b)).toEqual([5, 10]);
   });
 
   it('rejects with 409 NO_AVAILABILITY when the range is full, and leaves no new row behind', async () => {
@@ -112,7 +230,7 @@ describe('POST /api/reservations', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/reservations',
-      payload: { room_id: roomId, check_in: '2026-09-01', check_out: '2026-09-03', guests: 2, ...validGuest },
+      payload: { room_id: roomId, check_in: '2026-09-01', check_out: '2026-09-03', adults: 2, ...validGuest },
     });
 
     expect(response.statusCode).toBe(409);
@@ -142,7 +260,7 @@ describe('POST /api/reservations', () => {
         room_id: roomId,
         check_in: '2026-09-01',
         check_out: '2026-09-03',
-        guests: 2,
+        adults: 2,
         ...validGuest,
         ...override,
       },
@@ -161,7 +279,7 @@ describe('GET /api/reservations/:code', () => {
     const created = await app.inject({
       method: 'POST',
       url: '/api/reservations',
-      payload: { room_id: roomId, check_in: '2026-09-01', check_out: '2026-09-03', guests: 2, ...validGuest },
+      payload: { room_id: roomId, check_in: '2026-09-01', check_out: '2026-09-03', adults: 2, ...validGuest },
     });
     const { code } = created.json();
 
@@ -172,6 +290,11 @@ describe('GET /api/reservations/:code', () => {
     expect(body).not.toHaveProperty('guest_email');
     expect(body).not.toHaveProperty('guest_phone');
     expect(body).not.toHaveProperty('id');
+    // Public, unauthenticated lookup by code — never a place to learn
+    // whether a reservation has children/babies or their ages.
+    expect(body).not.toHaveProperty('children');
+    expect(body).not.toHaveProperty('babies');
+    expect(body).not.toHaveProperty('children_ages');
 
     const missing = await app.inject({ method: 'GET', url: '/api/reservations/NOPE0000' });
     expect(missing.statusCode).toBe(404);
@@ -283,7 +406,7 @@ describe('POST /api/reservations — concurrency', () => {
       room_id: roomId,
       check_in: '2026-10-01',
       check_out: '2026-10-03',
-      guests: 2,
+      adults: 2,
       ...validGuest,
     };
 

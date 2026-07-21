@@ -29,6 +29,7 @@ export interface AvailabilityRoom {
   room_id: number;
   name: string;
   capacity: number;
+  adultsOnly: boolean;
   available: boolean;
   units_left: number;
   total_units: number;
@@ -43,12 +44,20 @@ export interface AvailabilityResponse {
   rooms: AvailabilityRoom[];
 }
 
-export function fetchAvailability(params: { checkIn: string; checkOut: string; guests: number }) {
+export function fetchAvailability(params: {
+  checkIn: string;
+  checkOut: string;
+  adults: number;
+  children?: number;
+  babies?: number;
+}) {
   const search = new URLSearchParams({
     check_in: params.checkIn,
     check_out: params.checkOut,
-    guests: String(params.guests),
+    adults: String(params.adults),
   });
+  if (params.children) search.set("children", String(params.children));
+  if (params.babies) search.set("babies", String(params.babies));
   return apiFetch<AvailabilityResponse>(`/api/availability?${search.toString()}`);
 }
 
@@ -79,6 +88,12 @@ export interface ReservationResponse {
   check_in: string;
   check_out: string;
   guests: number;
+  // Só vêm no 201 de criação (o hóspede vê uma vez); o GET público por
+  // código nunca os expõe — não são um segredo forte (viaja por WhatsApp,
+  // vira print) e ninguém precisa saber quantas crianças/idades ali.
+  children?: number;
+  babies?: number;
+  children_ages?: number[];
   room: { id: number; name: string };
   total_cents: number;
   deposit_cents: number | null;
@@ -91,7 +106,10 @@ export interface CreateReservationInput {
   room_id: number;
   check_in: string;
   check_out: string;
-  guests: number;
+  adults: number;
+  children?: number;
+  babies?: number;
+  childrenAges?: number[];
   guest_name: string;
   guest_email: string;
   guest_phone: string;
@@ -99,9 +117,10 @@ export interface CreateReservationInput {
 }
 
 export function createReservation(input: CreateReservationInput) {
+  const { childrenAges, ...rest } = input;
   return apiFetch<ReservationResponse>("/api/reservations", {
     method: "POST",
-    body: JSON.stringify(input),
+    body: JSON.stringify({ ...rest, children_ages: childrenAges ?? [] }),
   });
 }
 

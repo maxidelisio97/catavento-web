@@ -121,10 +121,22 @@ export default function ConfirmationStep({ reservation: initialReservation, onRe
   }
 
   function handleRestart() {
+    // children/babies/children_ages só vêm quando a reservation veio do 201
+    // de criação — o GET público por código nunca os expõe (dado de menor,
+    // não precisa estar num endpoint compartilhável). Reabrindo a partir de
+    // um código (?code=XXXX), o form reinicia com 0 crianças/bebês: o
+    // hóspede pode preenchê-los de novo, não é dado perdido nem sensível o
+    // suficiente para valer a pena guardar em outro lugar só para isso.
+    const children = reservation.children ?? 0;
     onRestart({
       checkIn: reservation.check_in,
       checkOut: reservation.check_out,
-      guests: reservation.guests,
+      // reservation.guests e adults+children combinado (server-derived) —
+      // subtrai children para reconstituir o contador de Adultos do form.
+      guests: reservation.guests - children,
+      children,
+      babies: reservation.babies ?? 0,
+      childrenAges: reservation.children_ages ?? [],
       errorMessage: "Essa reserva expirou. Escolha as datas novamente para tentar de novo.",
     });
   }

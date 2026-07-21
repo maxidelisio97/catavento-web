@@ -54,8 +54,11 @@ export interface RateOverrides {
 }
 
 export interface Reservations {
+  babies: Generated<number>;
   check_in: Timestamp;
   check_out: Timestamp;
+  children: Generated<number>;
+  children_ages: Generated<number[]>;
   code: string | null;
   created_at: Generated<Timestamp>;
   deposit_cents: number | null;
@@ -84,6 +87,7 @@ export interface RoomRates {
 
 export interface Rooms {
   active: Generated<boolean>;
+  adults_only: Generated<boolean>;
   capacity: number;
   created_at: Generated<Timestamp>;
   default_min_stay: Generated<number>;

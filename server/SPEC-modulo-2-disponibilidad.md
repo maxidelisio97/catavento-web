@@ -119,18 +119,38 @@ de transacción con lock. Cancelar sí puede ser una escritura simple.
 
 ## Endpoint (solo lectura)
 
-`GET /api/availability?check_in=YYYY-MM-DD&check_out=YYYY-MM-DD&guests=N`
+> Actualizado 2026-07-21 (soporte niños/bebés, ver SPEC-modulo-1
+> § "Niños y bebés"): el querystring ya no acepta un `guests` crudo del
+> cliente, y la respuesta ya no filtra cuartos por capacidad.
 
-Respuesta: por cada tipo de cuarto activo con `capacity >= guests`:
+`GET /api/availability?check_in=YYYY-MM-DD&check_out=YYYY-MM-DD&adults=N&children=N&babies=N`
+
+- `adults` (requerido, entero >= 1), `children` (opcional, entero >=
+  0, default 0), `babies` (opcional, entero >= 0, default 0) — mismo
+  shape que acepta `POST /api/reservations`.
+- El servidor deriva `guests = adults + children` — nunca confía en un
+  `guests` provisto por el cliente. Los `babies` nunca cuentan para
+  capacidad (informativo, igual que en `POST /api/reservations`).
+
+Respuesta: TODOS los tipos de cuarto activos, sin filtrar por
+capacidad — un cuarto que no entra en la party sigue apareciendo, con
+su `capacity` real, para que el frontend lo muestre deshabilitado con
+motivo en vez de ocultarlo (regla de UX: "tipos sem disponibilidade
+aparecem desabilitados, nunca ocultos"). `adultsOnly` se expone por
+cuarto para que el frontend pueda detectar antes de reservar que un
+cuarto `adults_only` no acepta children/babies. Ni el fit de capacidad
+ni `adultsOnly` se pliegan en `available` — son señales separadas que
+lee el frontend usando `capacity`/`adultsOnly`.
 
 ```json
 {
-  "check_in": "...", "check_out": "...", "guests": 2,
+  "check_in": "...", "check_out": "...", "guests": 3,
   "rooms": [
     {
-      "room_id": 1, "name": "Casal", "capacity": 2,
+      "room_id": 1, "name": "Casal", "capacity": 2, "adultsOnly": true,
       "available": true,          // reservable el rango completo
       "units_left": 3,            // mínimo de disponibles(N) del rango
+      "total_units": 6,
       "total_cents": 58000,       // precio del rango (módulo 1)
       "min_stay_ok": true
     }
@@ -138,7 +158,7 @@ Respuesta: por cada tipo de cuarto activo con `capacity >= guests`:
 }
 ```
 
-Validación con Zod: fechas válidas, `check_out > check_in`, `guests
+Validación con Zod: fechas válidas, `check_out > check_in`, `adults
 >= 1`, rango máximo razonable (60 noches). Sin autenticación por ahora
 (es lectura pública, la va a consumir el sitio).
 

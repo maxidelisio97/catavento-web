@@ -12,6 +12,9 @@ interface GuestDataStepProps {
   checkIn: string;
   checkOut: string;
   guests: number;
+  children: number;
+  babies: number;
+  childrenAges: number[];
   onBack: () => void;
   onSuccess: (reservation: ReservationResponse) => void;
   onNoAvailability: () => void;
@@ -24,6 +27,9 @@ export default function GuestDataStep({
   checkIn,
   checkOut,
   guests,
+  children,
+  babies,
+  childrenAges,
   onBack,
   onSuccess,
   onNoAvailability,
@@ -57,7 +63,10 @@ export default function GuestDataStep({
         room_id: room.room_id,
         check_in: checkIn,
         check_out: checkOut,
-        guests,
+        adults: guests,
+        children,
+        babies,
+        childrenAges,
         guest_name: name.trim(),
         guest_email: email.trim(),
         guest_phone: phone.trim(),

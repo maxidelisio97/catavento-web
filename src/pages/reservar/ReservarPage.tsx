@@ -15,11 +15,18 @@ import GuestDataStep from "./GuestDataStep";
 import ConfirmationStep from "./ConfirmationStep";
 import { fetchReservationByCode, type AvailabilityRoom, type ReservationResponse } from "../../lib/api";
 
+interface PartyFields {
+  guests: number;
+  children: number;
+  babies: number;
+  childrenAges: number[];
+}
+
 type Step =
   | { name: "loading" }
   | { name: "dates"; initial?: DatesStepInitial }
-  | { name: "results"; checkIn: string; checkOut: string; guests: number }
-  | { name: "guest"; checkIn: string; checkOut: string; guests: number; room: AvailabilityRoom }
+  | ({ name: "results"; checkIn: string; checkOut: string } & PartyFields)
+  | ({ name: "guest"; checkIn: string; checkOut: string; room: AvailabilityRoom } & PartyFields)
   | { name: "confirmation"; reservation: ReservationResponse };
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -59,6 +66,9 @@ export default function ReservarPage() {
         checkIn: initialFromUrl.checkIn,
         checkOut: initialFromUrl.checkOut,
         guests: initialFromUrl.guests ?? 2,
+        children: 0,
+        babies: 0,
+        childrenAges: [],
       };
     }
     return { name: "dates", initial: initialFromUrl };
@@ -110,7 +120,9 @@ export default function ReservarPage() {
         {step.name === "dates" && (
           <DatesStep
             initial={step.initial}
-            onSubmit={({ checkIn, checkOut, guests }) => setStep({ name: "results", checkIn, checkOut, guests })}
+            onSubmit={({ checkIn, checkOut, guests, children, babies, childrenAges }) =>
+              setStep({ name: "results", checkIn, checkOut, guests, children, babies, childrenAges })
+            }
           />
         )}
 
@@ -119,9 +131,20 @@ export default function ReservarPage() {
             checkIn={step.checkIn}
             checkOut={step.checkOut}
             guests={step.guests}
+            children={step.children}
+            babies={step.babies}
             onBack={() => setStep({ name: "dates", initial: step })}
             onSelectRoom={(room) =>
-              setStep({ name: "guest", checkIn: step.checkIn, checkOut: step.checkOut, guests: step.guests, room })
+              setStep({
+                name: "guest",
+                checkIn: step.checkIn,
+                checkOut: step.checkOut,
+                guests: step.guests,
+                children: step.children,
+                babies: step.babies,
+                childrenAges: step.childrenAges,
+                room,
+              })
             }
           />
         )}
@@ -132,7 +155,20 @@ export default function ReservarPage() {
             checkIn={step.checkIn}
             checkOut={step.checkOut}
             guests={step.guests}
-            onBack={() => setStep({ name: "results", checkIn: step.checkIn, checkOut: step.checkOut, guests: step.guests })}
+            children={step.children}
+            babies={step.babies}
+            childrenAges={step.childrenAges}
+            onBack={() =>
+              setStep({
+                name: "results",
+                checkIn: step.checkIn,
+                checkOut: step.checkOut,
+                guests: step.guests,
+                children: step.children,
+                babies: step.babies,
+                childrenAges: step.childrenAges,
+              })
+            }
             onSuccess={(reservation) => setStep({ name: "confirmation", reservation })}
             onNoAvailability={() =>
               setStep({
@@ -141,6 +177,9 @@ export default function ReservarPage() {
                   checkIn: step.checkIn,
                   checkOut: step.checkOut,
                   guests: step.guests,
+                  children: step.children,
+                  babies: step.babies,
+                  childrenAges: step.childrenAges,
                   errorMessage: "Essas datas acabaram de ficar ocupadas. Escolha outro período.",
                 },
               })

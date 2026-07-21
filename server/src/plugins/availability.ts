@@ -1,7 +1,9 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from '@fastify/type-provider-zod';
 import { z } from 'zod';
-import { db } from '../db/client.js';
+import type { Kysely } from 'kysely';
+import type { DB } from '../db/types.js';
+import { db as prodDb } from '../db/client.js';
 import { fetchRoomStayData } from '../availability/repository.js';
 import { calculateAvailability } from '../availability/calculateAvailability.js';
 import { calculatePrice } from '../pricing/calculatePrice.js';
@@ -14,7 +16,9 @@ const querySchema = z
   .object({
     check_in: dateSchema,
     check_out: dateSchema,
-    guests: z.coerce.number().int().min(1),
+    adults: z.coerce.number().int().min(1),
+    children: z.coerce.number().int().min(0).default(0),
+    babies: z.coerce.number().int().min(0).default(0),
   })
   .refine((q) => q.check_out > q.check_in, {
     message: 'check_out must be after check_in',
@@ -37,6 +41,7 @@ const responseSchema = z.object({
       room_id: z.number(),
       name: z.string(),
       capacity: z.number(),
+      adultsOnly: z.boolean(),
       available: z.boolean(),
       units_left: z.number(),
       total_units: z.number(),
@@ -46,23 +51,40 @@ const responseSchema = z.object({
   ),
 });
 
-const availabilityPlugin: FastifyPluginAsync = async (fastify) => {
+export interface AvailabilityPluginOptions {
+  /** Overridable for tests — production uses the shared db client by default. */
+  db?: Kysely<DB>;
+}
+
+const availabilityPlugin: FastifyPluginAsync<AvailabilityPluginOptions> = async (fastify, opts) => {
+  const db = opts.db ?? prodDb;
+
   fastify.withTypeProvider<ZodTypeProvider>().get(
     '/availability',
     { schema: { querystring: querySchema, response: { 200: responseSchema } } },
     async (request) => {
-      const { check_in, check_out, guests } = request.query;
+      const { check_in, check_out, adults, children } = request.query;
+      // `babies` is accepted for parity with POST /api/reservations and to
+      // keep the querystring shape stable if a future rule needs it here,
+      // but babies never affect capacity/guests — nothing else to derive
+      // from it at this endpoint today.
+      // Server derives `guests` itself — never trusts a client-supplied
+      // total. Babies never count toward capacity, mirroring
+      // POST /api/reservations.
+      const guests = adults + children;
 
+      // No capacity filter here on purpose: rooms that don't fit the party
+      // must still come back (disabled downstream by the frontend using
+      // `capacity`/`adultsOnly`), never silently disappear from the list.
       const activeRooms = await db
         .selectFrom('rooms')
-        .select('id')
+        .select(['id', 'adults_only'])
         .where('active', '=', true)
-        .where('capacity', '>=', guests)
         .orderBy('id')
         .execute();
 
       const rooms = [];
-      for (const { id } of activeRooms) {
+      for (const { id, adults_only } of activeRooms) {
         const stayData = await fetchRoomStayData(db, id, check_in, check_out);
         if (!stayData) continue;
 
@@ -95,6 +117,7 @@ const availabilityPlugin: FastifyPluginAsync = async (fastify) => {
           room_id: stayData.roomId,
           name: stayData.name,
           capacity: stayData.capacity,
+          adultsOnly: adults_only,
           available: availability.available && price.status === 'available',
           units_left: availability.unitsLeft,
           total_units: stayData.totalUnits,

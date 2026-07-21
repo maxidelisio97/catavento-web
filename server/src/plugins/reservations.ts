@@ -19,16 +19,39 @@ const MAX_NIGHTS = 60;
 
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD');
 
-const createReservationBodySchema = z.object({
-  room_id: z.number().int().positive(),
-  check_in: dateSchema,
-  check_out: dateSchema,
-  guests: z.number().int().min(1),
-  guest_name: z.string().min(3),
-  guest_email: z.string().email(),
-  guest_phone: z.string().min(8),
-  notes: z.string().max(500).optional(),
-});
+// Babies (0-2) never count toward capacity and are informational only.
+// Children (3-17) count toward capacity and their ages are stored
+// as informative data (e.g. so staff can prepare a crib) — never
+// affecting price/capacity beyond the headcount. 0-2 is excluded here
+// on purpose: that range is a baby by definition, not a child, so the
+// same age can never mean two different things.
+const childAgeSchema = z.number().int().min(3).max(17);
+
+// Defense-in-depth caps, not business rules — no real room sleeps anywhere
+// near this many people. Without a ceiling, Zod fully validates (and the
+// server fully allocates) a client-supplied array before the capacity check
+// ever runs, which is an easy soft-DoS lever for attacker-controlled input.
+const MAX_CHILDREN = 8;
+const MAX_BABIES = 4;
+
+const createReservationBodySchema = z
+  .object({
+    room_id: z.number().int().positive(),
+    check_in: dateSchema,
+    check_out: dateSchema,
+    adults: z.number().int().min(1),
+    children: z.number().int().min(0).max(MAX_CHILDREN).default(0),
+    babies: z.number().int().min(0).max(MAX_BABIES).default(0),
+    children_ages: z.array(childAgeSchema).max(MAX_CHILDREN).default([]),
+    guest_name: z.string().min(3),
+    guest_email: z.string().email(),
+    guest_phone: z.string().min(8),
+    notes: z.string().max(500).optional(),
+  })
+  .refine((data) => data.children_ages.length === data.children, {
+    message: 'children_ages must have exactly one age per child',
+    path: ['children_ages'],
+  });
 
 const reservationStatusSchema = z.enum([
   'pending_payment',
@@ -38,7 +61,14 @@ const reservationStatusSchema = z.enum([
   'payment_conflict',
 ]);
 
-const reservationResponseSchema = z.object({
+// Shared by both responses below. Deliberately excludes children/babies/
+// children_ages: the code-lookup GET is unauthenticated and shareable by
+// design (it already excludes email/phone) — a reservation code isn't a
+// strong secret (travels over WhatsApp, ends up in screenshots), so minors'
+// ages/count don't belong in a response anyone holding the code can fetch.
+// Only the 201 create response (returned once, to the guest who just
+// submitted that exact data) includes them.
+const reservationPublicFieldsSchema = z.object({
   code: z.string(),
   status: reservationStatusSchema,
   check_in: z.string(),
@@ -50,13 +80,19 @@ const reservationResponseSchema = z.object({
   expires_at: z.string().nullable(),
 });
 
+const reservationResponseSchema = reservationPublicFieldsSchema.extend({
+  children: z.number(),
+  babies: z.number(),
+  children_ages: z.array(z.number()),
+});
+
 const pixDetailsSchema = z.object({
   encoded_image: z.string(),
   payload: z.string(),
   expiration_date: z.string(),
 });
 
-const reservationDetailResponseSchema = reservationResponseSchema.extend({
+const reservationDetailResponseSchema = reservationPublicFieldsSchema.extend({
   payment_status: z.enum(['pending', 'received', 'failed', 'refunded']).nullable(),
   payment: z
     .object({
@@ -124,7 +160,19 @@ const reservationsPlugin: FastifyPluginAsync<ReservationsPluginOptions> = async 
     '/reservations',
     { schema: { body: createReservationBodySchema, response: { 201: reservationResponseSchema } } },
     async (request, reply) => {
-      const { room_id, check_in, check_out, guests, guest_name, guest_email, guest_phone, notes } = request.body;
+      const {
+        room_id,
+        check_in,
+        check_out,
+        adults,
+        children,
+        babies,
+        children_ages,
+        guest_name,
+        guest_email,
+        guest_phone,
+        notes,
+      } = request.body;
 
       if (check_out <= check_in) {
         throw httpError(400, 'check_out must be after check_in');
@@ -139,7 +187,7 @@ const reservationsPlugin: FastifyPluginAsync<ReservationsPluginOptions> = async 
 
       const room = await db
         .selectFrom('rooms')
-        .select(['id', 'name', 'capacity'])
+        .select(['id', 'name', 'capacity', 'adults_only'])
         .where('id', '=', room_id)
         .where('active', '=', true)
         .executeTakeFirst();
@@ -147,6 +195,16 @@ const reservationsPlugin: FastifyPluginAsync<ReservationsPluginOptions> = async 
       if (!room) {
         throw httpError(400, 'Room not found or inactive');
       }
+
+      // Distinct rejection reason from capacity — this room type never
+      // accepts children or babies, regardless of how much room is left.
+      if (room.adults_only && (children > 0 || babies > 0)) {
+        throw httpError(400, 'ADULTS_ONLY_ROOM: this room does not allow children or babies');
+      }
+
+      // Server derives `guests` itself — never trusts a client-supplied
+      // value for the number that drives capacity and pricing.
+      const guests = adults + children;
       if (guests > room.capacity) {
         throw httpError(400, `guests exceeds room capacity (${room.capacity})`);
       }
@@ -159,6 +217,9 @@ const reservationsPlugin: FastifyPluginAsync<ReservationsPluginOptions> = async 
           checkIn: check_in,
           checkOut: check_out,
           guests,
+          children,
+          babies,
+          childrenAges: children_ages,
           guestName: guest_name,
           guestEmail: guest_email,
           guestPhone: guest_phone,
@@ -174,6 +235,9 @@ const reservationsPlugin: FastifyPluginAsync<ReservationsPluginOptions> = async 
           check_in,
           check_out,
           guests,
+          children,
+          babies,
+          children_ages,
           room: { id: room.id, name: room.name },
           total_cents: result.totalCents,
           deposit_cents: result.depositCents,

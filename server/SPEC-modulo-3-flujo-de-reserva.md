@@ -52,23 +52,41 @@ WhatsApp con la pousada.
 ### Endpoints nuevos
 
 **POST /api/reservations** — crea la reserva.
-- Body (Zod): `room_id`, `check_in`, `check_out`, `guests`,
-  `guest_name` (min 3), `guest_email` (email válido), `guest_phone`
-  (min 8), `notes?` (max 500).
-- Validaciones de negocio además del shape: `guests <= capacity` del
-  cuarto; cuarto activo; mismas reglas de rango que /api/availability
-  (check_out > check_in, máx 60 noches, fechas no pasadas).
+- Body (Zod): `room_id`, `check_in`, `check_out`, `adults`,
+  `children?` (default 0), `babies?` (default 0), `children_ages?`
+  (default `[]`, un entero por niño, rango 3-17 inclusive — 0-2 es
+  bebé por definición, no niño), `guest_name` (min 3), `guest_email`
+  (email válido), `guest_phone` (min 8), `notes?` (max 500).
+  **`guests` NO se acepta en el body** — lo calcula el server
+  (`guests = adults + children`; los bebés nunca cuentan para el
+  cupo) y nunca confía en un valor de guests mandado por el cliente
+  (agregado 2026-07-21, ver SPEC-modulo-1 § Niños y bebés).
+- Validaciones de negocio además del shape:
+  - `children_ages.length === children`, cada valor entero en [3, 17].
+  - Si el cuarto tiene `adults_only = true` y (`children > 0` o
+    `babies > 0`) → 400 con mensaje `ADULTS_ONLY_ROOM: ...` (razón de
+    rechazo distinta de la de cupo, para que el consumidor de la API
+    las distinga).
+  - `guests (adults + children) <= capacity` del cuarto; cuarto
+    activo; mismas reglas de rango que /api/availability (check_out >
+    check_in, máx 60 noches, fechas no pasadas).
 - Internamente llama a `createReservation` del módulo 2 (transacción +
   lock — NO reimplementar), seteando `expires_at = now() + 30 min` y
   generando `code`.
 - Respuestas: 201 con `{ code, status, check_in, check_out, guests,
-  room: {id, name}, total_cents, expires_at }`. 409 con
-  `NO_AVAILABILITY` si el lock rechaza. 400 validación. NUNCA devolver
-  el `id` serial ni datos que el cliente no mandó.
+  children, babies, children_ages, room: {id, name}, total_cents,
+  expires_at }`. 409 con `NO_AVAILABILITY` si el lock rechaza. 400
+  validación. NUNCA devolver el `id` serial ni datos que el cliente no
+  mandó.
 
 **GET /api/reservations/:code** — consulta pública por código.
-- Devuelve el mismo shape del 201 (subset seguro; sin email/teléfono
-  completos — es una URL que puede compartirse). 404 si no existe.
+- Devuelve un subset seguro: `{ code, status, check_in, check_out, guests,
+  room: {id, name}, total_cents, deposit_cents, expires_at }` + los campos
+  de pago (`payment_status`, `payment`). Sin email/teléfono completos, y
+  (decisión 2026-07-21) sin `children`/`babies`/`children_ages` — el código
+  no es un secreto fuerte (viaja por WhatsApp, queda en capturas), y esos
+  campos son dato de menores que nadie necesita leer desde un endpoint
+  compartible; solo el 201 de creación los incluye. 404 si no existe.
 - Si está `pending_payment` y ya expiró, devolver `status: "expired"`
   (estado calculado, no hace falta escribir en la base).
 

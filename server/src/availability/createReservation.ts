@@ -36,6 +36,7 @@ export interface CreateReservationInput {
   roomId: number;
   checkIn: string;
   checkOut: string;
+  /** Total headcount that counts toward capacity (adults + children). */
   guests: number;
   guestName?: string;
   guestEmail?: string;
@@ -50,6 +51,12 @@ export interface CreateReservationInput {
    * tests) — deposit_cents stays null in that case.
    */
   depositPercent?: number;
+  /** Counts toward capacity together with adults. Defaults to 0. */
+  children?: number;
+  /** Never counts toward capacity — informational only. Defaults to 0. */
+  babies?: number;
+  /** One integer per child, range [3, 17]. Defaults to []. */
+  childrenAges?: number[];
 }
 
 export interface CreateReservationResult {
@@ -134,6 +141,9 @@ export async function createReservation(
         guest_phone: input.guestPhone ?? null,
         notes: input.notes ?? null,
         code: input.code ?? null,
+        children: input.children ?? 0,
+        babies: input.babies ?? 0,
+        children_ages: input.childrenAges ?? [],
       })
       .returning(['id', 'code'])
       .executeTakeFirstOrThrow();
