@@ -1,18 +1,22 @@
 /*
- * Pagina /reservar: fluxo de reserva propio (SPEC-modulo-3). NAO enlazada
- * do site — acesso somente por URL direta (regra de switch, CLAUDE.md
- * raiz). Aceita ?arrival&departure&adults na URL para deixar pronto o
- * enganche futuro do form do hero, sem ativa-lo.
+ * Pagina /reservar: fluxo de reserva propio (SPEC-modulo-3) + pagamento do
+ * deposito via Asaas (SPEC-modulo-4). NAO enlazada do site — acesso somente
+ * por URL direta (regra de switch, CLAUDE.md raiz). Aceita ?arrival&
+ * departure&adults na URL para deixar pronto o enganche futuro do form do
+ * hero, sem ativa-lo. Tambem aceita ?code=XXXX: o redirect do Asaas apos um
+ * pagamento com cartao volta para essa URL, e a pagina precisa reabrir
+ * direto na tela de pagamento/confirmacao dessa reserva.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import CataventoIcon from "../../components/CataventoIcon";
 import DatesStep, { type DatesStepInitial } from "./DatesStep";
 import ResultsStep from "./ResultsStep";
 import GuestDataStep from "./GuestDataStep";
 import ConfirmationStep from "./ConfirmationStep";
-import type { AvailabilityRoom, ReservationResponse } from "../../lib/api";
+import { fetchReservationByCode, type AvailabilityRoom, type ReservationResponse } from "../../lib/api";
 
 type Step =
+  | { name: "loading" }
   | { name: "dates"; initial?: DatesStepInitial }
   | { name: "results"; checkIn: string; checkOut: string; guests: number }
   | { name: "guest"; checkIn: string; checkOut: string; guests: number; room: AvailabilityRoom }
@@ -36,9 +40,37 @@ function readInitialFromUrl(): DatesStepInitial | undefined {
   };
 }
 
+function readCodeFromUrl(): string | null {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("code");
+}
+
 export default function ReservarPage() {
   const initialFromUrl = useMemo(() => readInitialFromUrl(), []);
-  const [step, setStep] = useState<Step>({ name: "dates", initial: initialFromUrl });
+  const codeFromUrl = useMemo(() => readCodeFromUrl(), []);
+  const [step, setStep] = useState<Step>(() =>
+    codeFromUrl ? { name: "loading" } : { name: "dates", initial: initialFromUrl },
+  );
+
+  useEffect(() => {
+    if (!codeFromUrl) return;
+    let cancelled = false;
+    fetchReservationByCode(codeFromUrl)
+      .then((reservation) => {
+        if (!cancelled) setStep({ name: "confirmation", reservation });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setStep({
+            name: "dates",
+            initial: { errorMessage: "Não encontramos essa reserva. Faça uma nova busca." },
+          });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [codeFromUrl]);
 
   return (
     <div className="min-h-screen bg-sand-50 flex flex-col">
@@ -57,6 +89,12 @@ export default function ReservarPage() {
       </header>
 
       <main className="flex-1 px-6 pb-16">
+        {step.name === "loading" && (
+          <p className="w-full max-w-md mx-auto text-center font-body text-sm text-warm-800/60 pt-16">
+            Carregando sua reserva…
+          </p>
+        )}
+
         {step.name === "dates" && (
           <DatesStep
             initial={step.initial}
@@ -98,7 +136,12 @@ export default function ReservarPage() {
           />
         )}
 
-        {step.name === "confirmation" && <ConfirmationStep reservation={step.reservation} />}
+        {step.name === "confirmation" && (
+          <ConfirmationStep
+            reservation={step.reservation}
+            onRestart={(initial) => setStep({ name: "dates", initial })}
+          />
+        )}
       </main>
     </div>
   );
