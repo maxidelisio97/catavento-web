@@ -25,6 +25,10 @@ excalidraw.log
 .screenshots/
 .playwright-mcp/
 
+# Claude Code local state (machine-specific, not project config)
+.claude/settings.local.json
+.claude/worktrees/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
