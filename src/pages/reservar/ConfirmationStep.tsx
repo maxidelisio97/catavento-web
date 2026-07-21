@@ -126,7 +126,7 @@ export default function ConfirmationStep({ reservation: initialReservation, onRe
 
       <div>
         <h2 className="font-heading text-2xl text-warm-900">
-          {reservation.status === "confirmed" ? "Reserva confirmada!" : "Reserva criada!"}
+          {reservation.status === "confirmed" ? "Reserva confirmada!" : "Seu quarto está guardado"}
         </h2>
         <p className="mt-1 font-body text-sm text-warm-800/60">
           Guarde este código: você pode usá-lo para falar com a pousada por WhatsApp.
@@ -158,7 +158,7 @@ export default function ConfirmationStep({ reservation: initialReservation, onRe
         <p className="font-heading text-lg text-warm-900 pt-1">{formatCents(reservation.total_cents)}</p>
       </div>
 
-      {reservation.status === "pending_payment" && (
+      {reservation.status === "pending_payment" && !pix && (
         <p className="flex items-center justify-center gap-1.5 font-body text-sm text-warm-800/70">
           <LuClock size={16} aria-hidden />
           Sua reserva fica reservada por mais{" "}
