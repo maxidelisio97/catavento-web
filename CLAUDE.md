@@ -9,9 +9,9 @@ trabajar dentro de `server/`, ese archivo manda y las reglas de
 screenshots/layout/motion de acá no aplican.
 
 ## Flujo de ramas (todo el repo — frontend y backend)
-- `main` es la única rama permanente y la única que se deploya
-  (pipeline de CI/CD para el frontend, pasos manuales en el VPS para
-  `server/`).
+- `main` es la única rama permanente y la única que se deploya. Deploy
+  manual en ambos lados (sin CI/CD — decisión deliberada para tener
+  control total, no reintroducir GitHub Actions sin pedido explícito).
 - Todo trabajo nuevo se corta en una feature branch por módulo/tema
   desde `main` (ej. `modulo-2-disponibilidad`,
   `modulo-3-children-babies`).

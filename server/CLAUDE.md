@@ -14,8 +14,9 @@ algo parece mejorable, proponerlo antes de cambiar.
   Drizzle, Kysely) — proponer con justificación y esperar ok.
 - Pagos: Asaas (sandbox: sandbox.asaas.com). Docs: docs.asaas.com.
 - Proceso gestionado con PM2 (`ecosystem.config.cjs`), detrás de Nginx
-  (ver `nginx.conf.example`). Deploy vía GitHub Actions (pipeline del
-  front ya existe; extender para el back).
+  (ver `nginx.conf.example`). Deploy manual (sin CI/CD, decisión
+  deliberada para tener control total): `git pull` + `npm run build`
+  + `pm2 restart` en el VPS.
 - La base `catavento_db` y el usuario `catavento_app` YA EXISTEN en el
   VPS (verificado 2026-07-17, conexión funcional). Las migraciones
   crean/modifican TABLAS, nunca la base ni el usuario. No incluir
