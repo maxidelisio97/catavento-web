@@ -9,6 +9,7 @@ import { DayPicker, type DateRange } from "react-day-picker";
 import { ptBR } from "react-day-picker/locale";
 import "react-day-picker/style.css";
 import { LuCircleAlert, LuMinus, LuPlus, LuUsers } from "react-icons/lu";
+import { assetPath } from "../../config/site";
 import { toIsoDate } from "../../lib/dates";
 
 const MIN_GUESTS = 1;
@@ -65,6 +66,30 @@ export default function DatesStep({ initial, onSubmit }: DatesStepProps) {
 
   return (
     <form onSubmit={handleSubmit} className="w-full max-w-md mx-auto space-y-6">
+      <picture>
+        <source
+          type="image/avif"
+          srcSet={[480, 960]
+            .map((w) => `${assetPath(`images/responsive/reservar-dates-${w}.avif`)} ${w}w`)
+            .join(", ")}
+          sizes="(min-width: 448px) 448px, 100vw"
+        />
+        <source
+          type="image/webp"
+          srcSet={[480, 960]
+            .map((w) => `${assetPath(`images/responsive/reservar-dates-${w}.webp`)} ${w}w`)
+            .join(", ")}
+          sizes="(min-width: 448px) 448px, 100vw"
+        />
+        <img
+          src={assetPath("images/responsive/reservar-dates-960.webp")}
+          alt="Vista aérea da Pousada Catavento com a piscina, o catavento no telhado e o mar de Taíba ao fundo"
+          className="h-40 w-full rounded-2xl object-cover object-[center_55%]"
+          loading="eager"
+          decoding="async"
+        />
+      </picture>
+
       <div>
         <h2 className="font-heading text-2xl text-warm-900">Quando você vem?</h2>
         <p className="mt-1 font-body text-sm text-warm-800/60">Escolha as datas e quantos hóspedes vão ficar.</p>
