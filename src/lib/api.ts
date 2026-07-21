@@ -51,7 +51,26 @@ export function fetchAvailability(params: { checkIn: string; checkOut: string; g
   return apiFetch<AvailabilityResponse>(`/api/availability?${search.toString()}`);
 }
 
-export type ReservationStatus = "pending_payment" | "confirmed" | "cancelled" | "expired";
+export type ReservationStatus =
+  | "pending_payment"
+  | "confirmed"
+  | "cancelled"
+  | "expired"
+  | "payment_conflict";
+
+export type PaymentStatus = "pending" | "received" | "failed" | "refunded";
+
+export interface ReservationPaymentPix {
+  encoded_image: string;
+  payload: string;
+  expiration_date: string;
+}
+
+export interface ReservationPayment {
+  method: "pix" | "card";
+  pix?: ReservationPaymentPix;
+  invoice_url?: string;
+}
 
 export interface ReservationResponse {
   code: string;
@@ -61,7 +80,10 @@ export interface ReservationResponse {
   guests: number;
   room: { id: number; name: string };
   total_cents: number;
+  deposit_cents: number | null;
   expires_at: string | null;
+  payment_status: PaymentStatus | null;
+  payment: ReservationPayment | null;
 }
 
 export interface CreateReservationInput {
@@ -84,4 +106,20 @@ export function createReservation(input: CreateReservationInput) {
 
 export function fetchReservationByCode(code: string) {
   return apiFetch<ReservationResponse>(`/api/reservations/${encodeURIComponent(code)}`);
+}
+
+export interface RequestPaymentInput {
+  method: "pix" | "card";
+  cpf_cnpj: string;
+}
+
+export type RequestPaymentResponse =
+  | { method: "pix"; payment_id: string; qr_code: ReservationPaymentPix }
+  | { method: "card"; payment_id: string; invoice_url: string };
+
+export function requestPayment(code: string, input: RequestPaymentInput) {
+  return apiFetch<RequestPaymentResponse>(`/api/reservations/${encodeURIComponent(code)}/payment`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
