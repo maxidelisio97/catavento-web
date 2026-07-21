@@ -5,8 +5,47 @@
  */
 import { useEffect, useState } from "react";
 import { LuArrowLeft, LuUsers } from "react-icons/lu";
+import { assetPath } from "../../config/site";
 import { fetchAvailability, type AvailabilityRoom } from "../../lib/api";
 import { formatCents, formatIsoDateLabel } from "./formatters";
+
+// Nome do quarto (vindo do backend) -> slug da miniatura gerada por
+// scripts/generate-responsive-images.mjs. Se aparecer um tipo de quarto
+// novo sem entrada aqui, o card fica sem foto em vez de quebrar.
+const ROOM_THUMBNAILS: Record<string, string> = {
+  Casal: "room-casal",
+  Triplo: "room-triplo",
+  Quádruplo: "room-quadruplo",
+};
+
+const THUMB_WIDTHS = [160, 320, 480];
+
+function RoomThumbnail({ roomName }: { roomName: string }) {
+  const slug = ROOM_THUMBNAILS[roomName];
+  if (!slug) return null;
+
+  return (
+    <picture>
+      <source
+        type="image/avif"
+        srcSet={THUMB_WIDTHS.map((w) => `${assetPath(`images/responsive/${slug}-${w}.avif`)} ${w}w`).join(", ")}
+        sizes="80px"
+      />
+      <source
+        type="image/webp"
+        srcSet={THUMB_WIDTHS.map((w) => `${assetPath(`images/responsive/${slug}-${w}.webp`)} ${w}w`).join(", ")}
+        sizes="80px"
+      />
+      <img
+        src={assetPath(`images/responsive/${slug}-320.webp`)}
+        alt=""
+        className="h-20 w-20 rounded-xl object-cover shrink-0"
+        loading="lazy"
+        decoding="async"
+      />
+    </picture>
+  );
+}
 
 interface ResultsStepProps {
   checkIn: string;
@@ -84,18 +123,21 @@ export default function ResultsStep({ checkIn, checkOut, guests, onSelectRoom, o
             onClick={() => onSelectRoom(room)}
             className="w-full text-left rounded-2xl border border-stone-300 bg-white p-5 flex items-center justify-between gap-4 transition-colors enabled:hover:border-coral-500 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral-400"
           >
-            <div>
-              <p className="font-heading text-lg text-warm-900">{room.name}</p>
-              <p className="mt-0.5 flex items-center gap-1.5 font-body text-xs text-warm-800/50">
-                <LuUsers size={14} aria-hidden />
-                até {room.capacity} hóspedes
-              </p>
-              {!room.available && (
-                <p className="mt-2 font-body text-xs text-coral-600">Sem disponibilidade para essas datas</p>
-              )}
-              {room.available && room.units_left <= 2 && room.units_left < room.total_units && (
-                <p className="mt-2 font-body text-xs text-coral-600">Últimas {room.units_left}!</p>
-              )}
+            <div className="flex items-center gap-4 min-w-0">
+              <RoomThumbnail roomName={room.name} />
+              <div className="min-w-0">
+                <p className="font-heading text-lg text-warm-900">{room.name}</p>
+                <p className="mt-0.5 flex items-center gap-1.5 font-body text-xs text-warm-800/50">
+                  <LuUsers size={14} aria-hidden />
+                  até {room.capacity} hóspedes
+                </p>
+                {!room.available && (
+                  <p className="mt-2 font-body text-xs text-coral-600">Sem disponibilidade para essas datas</p>
+                )}
+                {room.available && room.units_left <= 2 && room.units_left < room.total_units && (
+                  <p className="mt-2 font-body text-xs text-coral-600">Últimas {room.units_left}!</p>
+                )}
+              </div>
             </div>
             {room.available && room.total_cents != null && (
               <div className="text-right shrink-0">
