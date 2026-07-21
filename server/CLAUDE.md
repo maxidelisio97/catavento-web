@@ -59,6 +59,12 @@ es punto de partida.
 - Toda escritura sobre disponibilidad pasa por transacción con lock
   (regla anti-overbooking; aplica desde el módulo 2).
 
+## Delegación por partes (módulos con backend + frontend)
+Si un módulo tiene alcance en `server/` y en el frontend (raíz), la
+delegación se hace por parte (backend y frontend por separado).
+Ninguna delegación abarca más alcance del que se va a verificar en
+ese mismo paso.
+
 ## Revisión antes de mergear (módulos de pagos o datos de huéspedes)
 Todo módulo que toque pagos, dinero, o datos personales de huéspedes
 cierra con una pasada de revisión de riesgo (`review-risk` o
