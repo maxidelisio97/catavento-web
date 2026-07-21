@@ -31,6 +31,7 @@ export interface AvailabilityRoom {
   capacity: number;
   available: boolean;
   units_left: number;
+  total_units: number;
   total_cents: number | null;
   min_stay_ok: boolean;
 }

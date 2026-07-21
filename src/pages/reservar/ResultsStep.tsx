@@ -93,7 +93,7 @@ export default function ResultsStep({ checkIn, checkOut, guests, onSelectRoom, o
               {!room.available && (
                 <p className="mt-2 font-body text-xs text-coral-600">Sem disponibilidade para essas datas</p>
               )}
-              {room.available && room.units_left <= 2 && (
+              {room.available && room.units_left <= 2 && room.units_left < room.total_units && (
                 <p className="mt-2 font-body text-xs text-coral-600">Últimas {room.units_left}!</p>
               )}
             </div>

@@ -39,6 +39,7 @@ const responseSchema = z.object({
       capacity: z.number(),
       available: z.boolean(),
       units_left: z.number(),
+      total_units: z.number(),
       total_cents: z.number().nullable(),
       min_stay_ok: z.boolean(),
     }),
@@ -96,6 +97,7 @@ const availabilityPlugin: FastifyPluginAsync = async (fastify) => {
           capacity: stayData.capacity,
           available: availability.available && price.status === 'available',
           units_left: availability.unitsLeft,
+          total_units: stayData.totalUnits,
           total_cents: totalCents,
           min_stay_ok: minStayOk,
         });
