@@ -14,6 +14,7 @@ import panelTapeChartPlugin from '../panelTapeChart.js';
 import { hashPassword } from '../../auth/hashPassword.js';
 import { SESSION_COOKIE_NAME } from '../../auth/cookie.js';
 import { eachNightUTC, addDaysUTC, formatDateUTC, parseDateUTC, todayISO } from '../../shared/dateUtils.js';
+import type { TapeChartNight } from '../../panel/tapeChartQuery.js';
 
 function buildApp() {
   const app = Fastify().withTypeProvider<ZodTypeProvider>();
@@ -178,14 +179,14 @@ describe('GET /panel/tape-chart', () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.nights).toHaveLength(3);
-    const byNight = new Map(body.nights.map((n: any) => [n.night, n]));
-    expect(byNight.get(checkIn).is_first_night).toBe(true);
-    expect(byNight.get(checkIn).is_last_night).toBe(false);
+    const byNight = new Map<string, TapeChartNight>(body.nights.map((n: TapeChartNight) => [n.night, n]));
+    expect(byNight.get(checkIn)!.is_first_night).toBe(true);
+    expect(byNight.get(checkIn)!.is_last_night).toBe(false);
     const secondNight = formatDateUTC(addDaysUTC(parseDateUTC(checkIn), 1));
-    expect(byNight.get(secondNight).is_first_night).toBe(false);
-    expect(byNight.get(secondNight).is_last_night).toBe(false);
+    expect(byNight.get(secondNight)!.is_first_night).toBe(false);
+    expect(byNight.get(secondNight)!.is_last_night).toBe(false);
     const lastNight = formatDateUTC(addDaysUTC(parseDateUTC(checkIn), 2));
-    expect(byNight.get(lastNight).is_last_night).toBe(true);
+    expect(byNight.get(lastNight)!.is_last_night).toBe(true);
   });
 
   it('reads two contiguous reservations on the same unit as two distinct, non-overlapping blocks', async () => {
@@ -221,12 +222,12 @@ describe('GET /panel/tape-chart', () => {
     });
 
     const body = response.json();
-    const byNight = new Map(body.nights.map((n: any) => [n.night, n]));
+    const byNight = new Map<string, TapeChartNight>(body.nights.map((n: TapeChartNight) => [n.night, n]));
     const handoffMinusOne = formatDateUTC(addDaysUTC(parseDateUTC(handoffDate), -1));
-    expect(byNight.get(handoffMinusOne).reservation_id).toBe(firstId);
-    expect(byNight.get(handoffMinusOne).is_last_night).toBe(true);
-    expect(byNight.get(handoffDate).reservation_id).toBe(secondId);
-    expect(byNight.get(handoffDate).is_first_night).toBe(true);
+    expect(byNight.get(handoffMinusOne)!.reservation_id).toBe(firstId);
+    expect(byNight.get(handoffMinusOne)!.is_last_night).toBe(true);
+    expect(byNight.get(handoffDate)!.reservation_id).toBe(secondId);
+    expect(byNight.get(handoffDate)!.is_first_night).toBe(true);
   });
 
   it('flags has_balance_due only when paid received payments are short of total_cents', async () => {
@@ -264,9 +265,9 @@ describe('GET /panel/tape-chart', () => {
     });
 
     const body = response.json();
-    const byReservation = new Map(body.nights.map((n: any) => [n.reservation_id, n]));
-    expect(byReservation.get(unpaidId).has_balance_due).toBe(true);
-    expect(byReservation.get(settledId).has_balance_due).toBe(false);
+    const byReservation = new Map<number, TapeChartNight>(body.nights.map((n: TapeChartNight) => [n.reservation_id, n]));
+    expect(byReservation.get(unpaidId)!.has_balance_due).toBe(true);
+    expect(byReservation.get(settledId)!.has_balance_due).toBe(false);
   });
 
   it('flags fragmented reservations across their full history, not just the visible window', async () => {
