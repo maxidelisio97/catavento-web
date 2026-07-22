@@ -26,16 +26,19 @@ function buildRowCells(nights: string[], unitId: number, byKey: Map<string, Tape
 
 function headerCellClasses(night: string, isToday: boolean): string {
   const base = "px-2 py-1.5 text-center text-xs font-medium border-b border-panel-200";
-  const weekend = isWeekendNight(night) ? "bg-panel-100" : "bg-panel-50";
+  const background = isToday ? "bg-accent-500/10" : isWeekendNight(night) ? "bg-panel-100" : "bg-panel-50";
   const today = isToday ? "text-accent-600 font-semibold" : "text-panel-500";
-  return `${base} ${weekend} ${today}`;
+  return `${base} ${background} ${today}`;
 }
 
+// Today's column is a background tint spanning the whole column (header +
+// every body cell, occupied or not), not an outline on individual cells —
+// an outline drew a visible empty box on every unit that has no reservation
+// today, which read as unexplained stray UI rather than a column marker.
 function bodyCellClasses(night: string, isToday: boolean): string {
   const base = "border-b border-panel-100 p-0 align-middle";
-  const weekend = isWeekendNight(night) ? "bg-panel-100/60" : "";
-  const today = isToday ? "outline outline-2 outline-offset-[-2px] outline-accent-500/50" : "";
-  return `${base} ${weekend} ${today}`;
+  const background = isToday ? "bg-accent-500/10" : isWeekendNight(night) ? "bg-panel-100/60" : "";
+  return `${base} ${background}`;
 }
 
 export default function TapeGrid({ data, onSelectReservation }: TapeGridProps) {
