@@ -1,6 +1,7 @@
 import { sql, type Kysely, type Transaction } from 'kysely';
 import type { DB } from '../db/types.js';
-import { eachNightUTC } from '../shared/dateUtils.js';
+import { eachNightUTC, addDaysUTC, parseDateUTC, formatDateUTC } from '../shared/dateUtils.js';
+import { isReservationActive } from './isReservationActive.js';
 
 export interface RoomStayData {
   roomId: number;
@@ -26,11 +27,15 @@ export interface RoomStayData {
   /** Active physical units for this room type — módulo 5. */
   roomUnits: { id: number; label: string }[];
   /**
-   * Active reservations (same "active" definition as `occupiedByDate`)
-   * that have an assigned unit and overlap [checkIn, checkOut) — módulo 5.
-   * Unlike `occupiedByDate`, ranges here are NOT clipped to the query
-   * window: `findFreeUnits` needs the reservation's real bounds to decide
-   * overlap for the whole requested stay.
+   * One 1-night range per occupied night, sourced from `reservation_nights`
+   * (módulo 6A — SPEC-modulo-6-panel-base.md § "6A.1"), for nights that
+   * overlap [checkIn, checkOut). Deliberately built as 1-night ranges
+   * (`{ roomUnitId, checkIn: night, checkOut: nextNight }`) rather than the
+   * reservation's whole-stay range: `findFreeUnits.ts`/`combinedAvailability.ts`
+   * already operate on arbitrary ranges, so a single night is just a
+   * 1-night range — this means those two files need ZERO changes even
+   * though the underlying data source moved from `reservations.room_unit_id`
+   * to the per-night table.
    */
   unitReservations: { roomUnitId: number; checkIn: string; checkOut: string }[];
 }
@@ -103,7 +108,6 @@ export async function fetchRoomStayData(
       sql<string>`check_out::text`.as('check_out'),
       'status',
       'expires_at',
-      'room_unit_id',
     ])
     .where('room_id', '=', roomId)
     .where('check_in', '<', sql<Date>`${checkOut}::date`)
@@ -117,15 +121,9 @@ export async function fetchRoomStayData(
   const reservationRows = await reservationQuery.execute();
 
   const occupiedByDate: Record<string, number> = {};
-  const unitReservations: { roomUnitId: number; checkIn: string; checkOut: string }[] = [];
-  const now = new Date();
 
   for (const reservation of reservationRows) {
-    const isActive =
-      reservation.status === 'confirmed' ||
-      reservation.expires_at == null ||
-      new Date(reservation.expires_at) > now;
-    if (!isActive) continue;
+    if (!isReservationActive(reservation.status, reservation.expires_at)) continue;
 
     const overlapStart = reservation.check_in > checkIn ? reservation.check_in : checkIn;
     const overlapEnd = reservation.check_out < checkOut ? reservation.check_out : checkOut;
@@ -133,13 +131,45 @@ export async function fetchRoomStayData(
     for (const night of eachNightUTC(overlapStart, overlapEnd)) {
       occupiedByDate[night] = (occupiedByDate[night] ?? 0) + 1;
     }
+  }
 
-    if (reservation.room_unit_id != null) {
-      unitReservations.push({
-        roomUnitId: reservation.room_unit_id,
-        checkIn: reservation.check_in,
-        checkOut: reservation.check_out,
-      });
+  // Per-unit occupancy — módulo 6A: sourced from `reservation_nights`, not
+  // `reservations.room_unit_id` (see `unitReservations` doc comment above).
+  // Joins to `reservations` only to read status/expires_at for
+  // `isReservationActive`; `excludeReservationId` (re-check of a
+  // reservation's own occupancy) is honored the same way as the aggregate
+  // query above.
+  const unitReservations: { roomUnitId: number; checkIn: string; checkOut: string }[] = [];
+
+  if (roomUnitRows.length > 0) {
+    let nightsQuery = executor
+      .selectFrom('reservation_nights')
+      .innerJoin('reservations', 'reservations.id', 'reservation_nights.reservation_id')
+      .select([
+        'reservation_nights.room_unit_id as room_unit_id',
+        sql<string>`reservation_nights.night::text`.as('night'),
+        'reservations.status as status',
+        'reservations.expires_at as expires_at',
+      ])
+      .where(
+        'reservation_nights.room_unit_id',
+        'in',
+        roomUnitRows.map((u) => u.id),
+      )
+      .where('reservation_nights.night', '>=', sql<Date>`${checkIn}::date`)
+      .where('reservation_nights.night', '<', sql<Date>`${checkOut}::date`)
+      .where('reservations.status', '!=', 'cancelled');
+
+    if (excludeReservationId !== undefined) {
+      nightsQuery = nightsQuery.where('reservation_nights.reservation_id', '!=', excludeReservationId);
+    }
+
+    const nightRows = await nightsQuery.execute();
+
+    for (const row of nightRows) {
+      if (!isReservationActive(row.status, row.expires_at)) continue;
+      const nextNight = formatDateUTC(addDaysUTC(parseDateUTC(row.night), 1));
+      unitReservations.push({ roomUnitId: row.room_unit_id, checkIn: row.night, checkOut: nextNight });
     }
   }
 

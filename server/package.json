@@ -14,7 +14,8 @@
     "migrate:up": "node-pg-migrate up -j ts",
     "migrate:down": "node-pg-migrate down -j ts",
     "codegen": "kysely-codegen --out-file src/db/types.ts",
-    "seed:rooms": "tsx scripts/seed-rooms.ts"
+    "seed:rooms": "tsx scripts/seed-rooms.ts",
+    "check:reservation-nights": "tsx scripts/checkReservationNightsConsistency.ts"
   },
   "dependencies": {
     "@fastify/type-provider-zod": "^1.0.0",

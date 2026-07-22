@@ -15,9 +15,10 @@ import { testDb, testPool } from '../../db/testClient.js';
 import { fetchRoomStayData } from '../repository.js';
 import { calculateAvailability } from '../calculateAvailability.js';
 import { createReservation, NoAvailabilityError } from '../createReservation.js';
+import { eachNightUTC } from '../../shared/dateUtils.js';
 
 async function resetDb(): Promise<void> {
-  await sql`TRUNCATE TABLE reservations, rate_overrides, room_rates, rooms RESTART IDENTITY CASCADE`.execute(
+  await sql`TRUNCATE TABLE reservation_nights, reservations, rate_overrides, room_rates, rooms RESTART IDENTITY CASCADE`.execute(
     testDb,
   );
 }
@@ -55,6 +56,15 @@ interface ReservationFixtureOptions {
   expiresAt?: Date | null;
 }
 
+/**
+ * Also writes matching `reservation_nights` rows (módulo 6A — one per night
+ * in [checkIn, checkOut)) so the fixture reflects real occupancy under the
+ * per-night model that repository.ts now reads from. This intentionally
+ * writes rows regardless of `status` — tests that simulate stale data
+ * (expired/cancelled reservations with leftover reservation_nights rows,
+ * see reservationNights.test.ts) rely on that to set up the "stale rows
+ * present" starting state the lazy sweep is meant to clean up.
+ */
 async function insertReservation(options: ReservationFixtureOptions): Promise<number> {
   const row = await testDb
     .insertInto('reservations')
@@ -70,6 +80,15 @@ async function insertReservation(options: ReservationFixtureOptions): Promise<nu
     })
     .returning('id')
     .executeTakeFirstOrThrow();
+
+  const nights = eachNightUTC(options.checkIn, options.checkOut);
+  if (nights.length > 0) {
+    await testDb
+      .insertInto('reservation_nights')
+      .values(nights.map((night) => ({ reservation_id: row.id, night, room_unit_id: options.roomUnitId })))
+      .execute();
+  }
+
   return row.id;
 }
 

@@ -2,9 +2,10 @@ import { sql } from 'kysely';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { testDb } from '../../db/testClient.js';
 import { processPaymentReceived } from '../confirmPendingReservation.js';
+import { createReservation } from '../createReservation.js';
 
 async function resetDb(): Promise<void> {
-  await sql`TRUNCATE TABLE reservations, rate_overrides, room_rates, rooms RESTART IDENTITY CASCADE`.execute(
+  await sql`TRUNCATE TABLE reservation_nights, reservations, rate_overrides, room_rates, rooms RESTART IDENTITY CASCADE`.execute(
     testDb,
   );
 }
@@ -214,6 +215,85 @@ describe('processPaymentReceived', () => {
       .where('status', 'in', ['confirmed', 'pending_payment'])
       .executeTakeFirstOrThrow();
     expect(Number(activeCount.count)).toBe(1);
+  });
+
+  it('moves to payment_conflict (never confirmed with zero rows) when a late webhook arrives after a concurrent createReservation already swept the expired hold\'s reservation_nights', async () => {
+    const roomId = await insertTestRoom({ totalUnits: 1 });
+    // createReservation (unlike this file's insertReservation fixture) prices
+    // the stay, which needs a matching room_rates row.
+    await testDb
+      .insertInto('room_rates')
+      .values({ room_id: roomId, occupancy: 2, weekday_cents: 10000, weekend_cents: 15000 })
+      .execute();
+
+    // The stale hold: created through createReservation (módulo 6A — one
+    // reservation_nights row per night) but already expired.
+    const stale = await createReservation(testDb, {
+      roomId,
+      checkIn: '2026-09-01',
+      checkOut: '2026-09-03',
+      guests: 2,
+      expiresAt: new Date(Date.now() - 60_000),
+    });
+    await insertPayment(stale.id, 'pay_race');
+
+    const staleNightsBeforeSweep = await testDb
+      .selectFrom('reservation_nights')
+      .selectAll()
+      .where('reservation_id', '=', stale.id)
+      .execute();
+    expect(staleNightsBeforeSweep).toHaveLength(2);
+
+    // The lazy sweep in action: a new reservation for the same room/nights
+    // finds the stale hold inactive, sweeps its reservation_nights, and
+    // takes the only unit for itself — exactly what would happen if a guest
+    // booked the room while the first guest's Asaas webhook was still in
+    // flight.
+    const winner = await createReservation(testDb, {
+      roomId,
+      checkIn: '2026-09-01',
+      checkOut: '2026-09-03',
+      guests: 2,
+    });
+
+    const staleNightsAfterSweep = await testDb
+      .selectFrom('reservation_nights')
+      .selectAll()
+      .where('reservation_id', '=', stale.id)
+      .execute();
+    expect(staleNightsAfterSweep).toHaveLength(0);
+
+    // The stale hold's late webhook finally arrives.
+    const outcome = await processPaymentReceived(testDb, {
+      asaasPaymentId: 'pay_race',
+      rawEvent: { event: 'PAYMENT_RECEIVED' },
+    });
+
+    expect(outcome).toEqual({ kind: 'payment_conflict', reservationId: stale.id });
+
+    const staleReservation = await testDb
+      .selectFrom('reservations')
+      .select('status')
+      .where('id', '=', stale.id)
+      .executeTakeFirstOrThrow();
+    expect(staleReservation.status).toBe('payment_conflict');
+
+    // Never confirmed with zero (or any mismatched count of) rows — the
+    // whole point of this test.
+    const staleNightsAfterWebhook = await testDb
+      .selectFrom('reservation_nights')
+      .selectAll()
+      .where('reservation_id', '=', stale.id)
+      .execute();
+    expect(staleNightsAfterWebhook).toHaveLength(0);
+
+    // The winner's reservation_nights are untouched by the conflict.
+    const winnerNights = await testDb
+      .selectFrom('reservation_nights')
+      .selectAll()
+      .where('reservation_id', '=', winner.id)
+      .execute();
+    expect(winnerNights).toHaveLength(2);
   });
 
   it('marks the payment received without re-confirming a reservation already settled by another path', async () => {
