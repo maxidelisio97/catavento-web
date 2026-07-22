@@ -25,7 +25,7 @@ function buildRowCells(nights: string[], unitId: number, byKey: Map<string, Tape
 }
 
 function headerCellClasses(night: string, isToday: boolean): string {
-  const base = "px-2 py-1.5 text-center text-xs font-medium border-b border-panel-200 min-w-14";
+  const base = "px-2 py-1.5 text-center text-xs font-medium border-b border-panel-200";
   const weekend = isWeekendNight(night) ? "bg-panel-100" : "bg-panel-50";
   const today = isToday ? "text-accent-600 font-semibold" : "text-panel-500";
   return `${base} ${weekend} ${today}`;
@@ -50,10 +50,23 @@ export default function TapeGrid({ data, onSelectReservation }: TapeGridProps) {
 
   return (
     <div className="bg-white border border-panel-200 rounded-lg overflow-x-auto">
-      <table className="border-collapse text-sm w-full">
+      <table className="border-collapse text-sm w-full table-fixed">
+        <colgroup>
+          {/* Explicit, fixed column widths — with table-layout: fixed these are
+              the ONLY thing that determines column width, so a long guest name
+              can never inflate one column and desync it from its header date
+              (see server/CLAUDE.md-adjacent bug: table-layout: auto let the
+              widest cell in a column — here, the today column's guest names —
+              stretch that column past every other, breaking the "block == its
+              exact night" guarantee the tape chart depends on). */}
+          <col className="w-[72px]" />
+          {nights.map((night) => (
+            <col key={night} className="w-[52px]" />
+          ))}
+        </colgroup>
         <thead>
           <tr>
-            <th className="sticky left-0 z-20 bg-panel-50 border-b border-r border-panel-200 px-2 py-1.5 text-left text-xs font-medium text-panel-500 min-w-16">
+            <th className="sticky left-0 z-20 bg-panel-50 border-b border-r border-panel-200 px-2 py-1.5 text-left text-xs font-medium text-panel-500">
               Unidade
             </th>
             {nights.map((night) => (
@@ -110,7 +123,9 @@ export default function TapeGrid({ data, onSelectReservation }: TapeGridProps) {
                               : "",
                           ].join(" ")}
                         >
-                          {showName && entry.guest_name && <span className="truncate">{entry.guest_name}</span>}
+                          {showName && entry.guest_name && (
+                            <span className="truncate min-w-0">{entry.guest_name}</span>
+                          )}
                           {entry.has_balance_due && (
                             <span role="img" aria-label="Saldo pendente" className="shrink-0 ml-auto">
                               <BalanceDueIcon />
