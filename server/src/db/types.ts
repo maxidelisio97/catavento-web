@@ -53,6 +53,14 @@ export interface RateOverrides {
   updated_at: Generated<Timestamp>;
 }
 
+export interface ReservationNights {
+  created_at: Generated<Timestamp>;
+  id: Generated<number>;
+  night: Timestamp;
+  reservation_id: number;
+  room_unit_id: number;
+}
+
 export interface Reservations {
   babies: Generated<number>;
   check_in: Timestamp;
@@ -69,25 +77,17 @@ export interface Reservations {
   guests: number;
   id: Generated<number>;
   notes: string | null;
+  origin: Generated<string>;
+  room_id: number;
   /**
    * Deprecated as of módulo 6A (SPEC-modulo-6-panel-base.md § 6A.1) — kept
    * as a legacy/derived column, still written with the first night's unit.
    * All new reads use `reservation_nights` instead.
    */
   room_unit_id: number | null;
-  origin: Generated<string>;
-  room_id: number;
   status: Generated<string>;
   total_cents: number;
   updated_at: Generated<Timestamp>;
-}
-
-export interface ReservationNights {
-  created_at: Generated<Timestamp>;
-  id: Generated<number>;
-  night: Timestamp;
-  reservation_id: number;
-  room_unit_id: number;
 }
 
 export interface RoomRates {
@@ -98,16 +98,6 @@ export interface RoomRates {
   updated_at: Generated<Timestamp>;
   weekday_cents: number;
   weekend_cents: number;
-}
-
-export interface RoomUnits {
-  active: Generated<boolean>;
-  created_at: Generated<Timestamp>;
-  id: Generated<number>;
-  label: string;
-  notes: string | null;
-  room_id: number;
-  updated_at: Generated<Timestamp>;
 }
 
 export interface Rooms {
@@ -124,10 +114,43 @@ export interface Rooms {
   updated_at: Generated<Timestamp>;
 }
 
+export interface RoomUnits {
+  active: Generated<boolean>;
+  created_at: Generated<Timestamp>;
+  id: Generated<number>;
+  label: string;
+  notes: string | null;
+  room_id: number;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface Sessions {
+  created_at: Generated<Timestamp>;
+  expires_at: Timestamp;
+  id: Generated<string>;
+  ip: string | null;
+  last_used_at: Generated<Timestamp>;
+  revoked_at: Timestamp | null;
+  token_hash: string;
+  user_agent: string | null;
+  user_id: number;
+}
+
 export interface Settings {
   key: string;
   updated_at: Generated<Timestamp>;
   value: string;
+}
+
+export interface Users {
+  created_at: Generated<Timestamp>;
+  email: string;
+  id: Generated<number>;
+  is_active: Generated<boolean>;
+  name: string;
+  password_hash: string;
+  role: Generated<string>;
+  updated_at: Generated<Timestamp>;
 }
 
 export interface DB {
@@ -139,5 +162,7 @@ export interface DB {
   room_rates: RoomRates;
   room_units: RoomUnits;
   rooms: Rooms;
+  sessions: Sessions;
   settings: Settings;
+  users: Users;
 }

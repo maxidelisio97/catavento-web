@@ -20,6 +20,12 @@ export const config = {
   // Required (not defaulted) — a silent localhost fallback in production
   // would send paying guests to a dead redirect after a real charge.
   frontendBaseUrl: process.env.FRONTEND_BASE_URL as string,
+  isProduction: process.env.NODE_ENV === 'production',
+  // SPEC-modulo-6-panel-base.md § "6B.2 Sesiones": Domain of the session
+  // cookie in production is painel.cataventotaiba.com. Left undefined in
+  // dev/test on purpose — the cookie then defaults to the request's own
+  // host, which is what makes login work against localhost.
+  panelCookieDomain: process.env.PANEL_COOKIE_DOMAIN,
   asaas: {
     env,
     apiKey: process.env.ASAAS_API_KEY as string,

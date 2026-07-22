@@ -1,0 +1,60 @@
+# Reference only — NOT deployed. This is the server block for
+# painel.cataventotaiba.com on the Hostinger VPS (179.197.225.17), to be
+# added by hand when the SSL certificate is ready (SPEC-modulo-6-panel-base.md
+# § 6B.5). DNS A record already points here; SSL is pending.
+#
+# Same manual-deploy model as the rest of the repo: no CI/CD, applied by
+# hand on the VPS alongside a `certbot --nginx` run for this subdomain.
+
+server {
+    listen 80;
+    server_name painel.cataventotaiba.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name painel.cataventotaiba.com;
+
+    # ssl_certificate / ssl_certificate_key: filled in by certbot once the
+    # cert for this subdomain exists. Do not point this at the public
+    # site's cert — separate subdomain, separate cert.
+
+    # SPEC § 6B.4: "El panel no se indexa" — belt-and-suspenders with
+    # panel/public/robots.txt, enforced at the server level so it holds
+    # even if the SPA's robots.txt is ever missing from a build.
+    add_header X-Robots-Tag "noindex" always;
+
+    root /var/www/catavento-panel/dist;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /panel/ {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        # Fastify trusts X-Forwarded-For/-Proto only from 127.0.0.1 (see
+        # `trustProxy` in src/index.ts). Without X-Forwarded-For here,
+        # every request behind this proxy looks like it comes from
+        # 127.0.0.1 to Fastify — collapsing the per-IP login rate limiter
+        # into one shared bucket and logging the wrong IP on every
+        # sessions row. X-Forwarded-Proto makes request.protocol reflect
+        # the browser's real HTTPS connection instead of the plain-HTTP
+        # hop from Nginx to Fastify.
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}

@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+/*
+ * Paleta neutra propia del panel — deliberadamente SIN los tokens sand/
+ * coral/warm del sitio público (ver server/SPEC-modulo-6-panel-base.md
+ * § 6B.4: el panel no hereda la identidad visual del sitio de cara al
+ * huésped). Back office: prioriza densidad y legibilidad. El único acento
+ * de color es para foco/estados interactivos, no para "atmósfera".
+ */
+@theme {
+  --color-panel-950: oklch(18% 0.01 260);
+  --color-panel-900: oklch(24% 0.012 260);
+  --color-panel-700: oklch(38% 0.012 260);
+  --color-panel-500: oklch(55% 0.01 260);
+  --color-panel-300: oklch(75% 0.008 260);
+  --color-panel-200: oklch(88% 0.006 260);
+  --color-panel-100: oklch(94% 0.004 260);
+  --color-panel-50: oklch(98% 0.002 260);
+
+  --color-accent-600: oklch(52% 0.15 250);
+  --color-accent-500: oklch(60% 0.15 250);
+}
+
+body {
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    Arial,
+    sans-serif;
+}
