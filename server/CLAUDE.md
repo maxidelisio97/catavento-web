@@ -60,12 +60,6 @@ es punto de partida.
 - Toda escritura sobre disponibilidad pasa por transacción con lock
   (regla anti-overbooking; aplica desde el módulo 2).
 
-## Delegación por partes (módulos con backend + frontend)
-Si un módulo tiene alcance en `server/` y en el frontend (raíz), la
-delegación se hace por parte (backend y frontend por separado).
-Ninguna delegación abarca más alcance del que se va a verificar en
-ese mismo paso.
-
 ## Revisión antes de mergear (módulos de pagos o datos de huéspedes)
 Todo módulo que toque pagos, dinero, o datos personales de huéspedes
 cierra con una pasada de revisión de riesgo (`review-risk` o
@@ -86,6 +80,29 @@ hallazgo puede esperar.
 - Noches: DATE (la fila 2026-10-15 es la noche del 15 al 16).
 - Fin de semana = noches de viernes y sábado.
 - El precio de una reserva se congela al crearla.
+
+## Módulo 6A — asignación de unidad por noche (reservation_nights)
+- La asignación de unidad física es por noche (`reservation_nights`), no
+  por reserva. Una reserva activa SIEMPRE tiene exactamente una fila por
+  noche con unidad asignada. La noche de departure no genera fila.
+  `reservations.room_unit_id` es legacy (unidad de la primera noche);
+  toda lectura nueva usa `reservation_nights`.
+- `UNIQUE (room_unit_id, night)` es anti-overbooking a nivel base, no
+  solo aplicativo. No removerlo al optimizar.
+- No existe cron de expiración: las filas de reservas inactivas se
+  liberan con barrido perezoso dentro del lock de `createReservation`,
+  acotado a las unidades del tipo pedido y las noches del rango.
+  Consecuencia crítica: una reserva vencida puede quedar sin filas antes
+  de que llegue su webhook tardío de Asaas. Por eso
+  `confirmPendingReservation` re-chequea disponibilidad física antes de
+  confirmar y va a `payment_conflict` si la unidad ya no está libre —
+  nunca confirmar sin verificar filas.
+- El predicado "reserva activa" vive en un solo helper
+  (`isReservationActive`). No reescribirlo a mano en ningún lugar de
+  lectura ni en el barrido.
+- `assertReservationNightsConsistency` se invoca al final de toda
+  transacción que toque reservas. Si agregás una ruta nueva que las
+  modifique, cableala también.
 
 ## Flujo de ramas
 Ver CLAUDE.md raíz — regla de todo el repo, no solo del backend.
