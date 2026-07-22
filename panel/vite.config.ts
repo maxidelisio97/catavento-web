@@ -9,7 +9,7 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
-      '/panel/auth': 'http://localhost:3001',
+      '/panel': 'http://localhost:3001',
       '/api': 'http://localhost:3001',
     },
   },

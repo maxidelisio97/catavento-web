@@ -6,7 +6,7 @@ import type { DB } from '../db/types.js';
 import { db as prodDb } from '../db/client.js';
 import { createReservationWithCode } from '../reservations/createReservationWithCode.js';
 import { NoAvailabilityError, MinStayNotMetError } from '../availability/createReservation.js';
-import { eachNightUTC } from '../shared/dateUtils.js';
+import { eachNightUTC, todayISO } from '../shared/dateUtils.js';
 import { getBusinessSettings } from '../settings/settings.js';
 import {
   createOrReusePayment,
@@ -127,10 +127,6 @@ function httpError(statusCode: number, message: string): FastifyError {
   err.code = 'RESERVATION_ERROR';
   err.name = 'ReservationError';
   return err;
-}
-
-function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
 }
 
 function paymentDetailsToResponse(details: PaymentDetails) {

@@ -79,11 +79,6 @@ export interface Reservations {
   notes: string | null;
   origin: Generated<string>;
   room_id: number;
-  /**
-   * Deprecated as of módulo 6A (SPEC-modulo-6-panel-base.md § 6A.1) — kept
-   * as a legacy/derived column, still written with the first night's unit.
-   * All new reads use `reservation_nights` instead.
-   */
   room_unit_id: number | null;
   status: Generated<string>;
   total_cents: number;
@@ -110,6 +105,7 @@ export interface Rooms {
   id: Generated<number>;
   name: string;
   pets_allowed: Generated<boolean>;
+  sort_order: Generated<number>;
   total_units: Generated<number>;
   updated_at: Generated<Timestamp>;
 }
