@@ -69,11 +69,25 @@ export interface Reservations {
   guests: number;
   id: Generated<number>;
   notes: string | null;
-  room_id: number;
+  /**
+   * Deprecated as of módulo 6A (SPEC-modulo-6-panel-base.md § 6A.1) — kept
+   * as a legacy/derived column, still written with the first night's unit.
+   * All new reads use `reservation_nights` instead.
+   */
   room_unit_id: number | null;
+  origin: Generated<string>;
+  room_id: number;
   status: Generated<string>;
   total_cents: number;
   updated_at: Generated<Timestamp>;
+}
+
+export interface ReservationNights {
+  created_at: Generated<Timestamp>;
+  id: Generated<number>;
+  night: Timestamp;
+  reservation_id: number;
+  room_unit_id: number;
 }
 
 export interface RoomRates {
@@ -120,6 +134,7 @@ export interface DB {
   payments: Payments;
   pgmigrations: Pgmigrations;
   rate_overrides: RateOverrides;
+  reservation_nights: ReservationNights;
   reservations: Reservations;
   room_rates: RoomRates;
   room_units: RoomUnits;

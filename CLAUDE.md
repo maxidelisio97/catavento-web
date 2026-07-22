@@ -2,11 +2,21 @@
 
 ## Alcance de este archivo (monorepo)
 Este repo contiene el frontend (raíz) y el backend (`server/`).
-TODO lo que sigue en este archivo aplica SOLO al frontend, EXCEPTO la
-sección "Flujo de ramas" de acá abajo, que es regla de todo el repo.
-El backend tiene su propio `server/CLAUDE.md` con sus reglas — al
-trabajar dentro de `server/`, ese archivo manda y las reglas de
-screenshots/layout/motion de acá no aplican.
+TODO lo que sigue en este archivo aplica SOLO al frontend, EXCEPTO las
+secciones "Flujo de ramas" y "Delegación a agentes" de acá abajo, que
+son reglas de todo el repo. El backend tiene su propio `server/CLAUDE.md`
+con sus reglas — al trabajar dentro de `server/`, ese archivo manda y
+las reglas de screenshots/layout/motion de acá no aplican.
+
+## Delegación a agentes (todo el repo)
+No uses el tool Agent para tareas en segundo plano salvo que el
+usuario lo pida explícitamente. Motivo: una sesión de agente que falla
+o tarda mucho puede consumir una cantidad grande de tokens sin
+producir resultado verificable, y esto ya pasó — el usuario perdió
+visibilidad sobre ese gasto más de una vez en la misma sesión.
+Preferir implementación directa. Los agentes solo para tareas acotadas
+y paralelizables, nunca un módulo completo — delegar el módulo 6A
+entero costó ~200k tokens y trabajo duplicado.
 
 ## Flujo de ramas (todo el repo — frontend y backend)
 - `main` es la única rama permanente y la única que se deploya. Deploy
