@@ -118,7 +118,7 @@ async function insertPayment(reservationId: number, amountCents: number, status:
     .values({
       reservation_id: reservationId,
       asaas_payment_id: `pay_${randomBytes(6).toString('hex')}`,
-      method: 'pix',
+      method: 'asaas_pix',
       amount_cents: amountCents,
       status,
     })

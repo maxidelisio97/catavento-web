@@ -80,7 +80,7 @@ async function insertPayment(reservationId: number, asaasPaymentId: string, stat
     .values({
       reservation_id: reservationId,
       asaas_payment_id: asaasPaymentId,
-      method: 'pix',
+      method: 'asaas_pix',
       amount_cents: 10000,
       status,
     })

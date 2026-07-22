@@ -9,6 +9,8 @@ export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
   ? ColumnType<S, I | undefined, U>
   : ColumnType<T, T | undefined, T>;
 
+export type Int8 = ColumnType<string, bigint | number | string, bigint | number | string>;
+
 export type Json = JsonValue;
 
 export type JsonArray = JsonValue[];
@@ -28,6 +30,7 @@ export interface Payments {
   asaas_payment_id: string;
   created_at: Generated<Timestamp>;
   id: Generated<number>;
+  kind: Generated<string>;
   method: string;
   raw_last_event: Json | null;
   reservation_id: number;
@@ -53,6 +56,23 @@ export interface RateOverrides {
   updated_at: Generated<Timestamp>;
 }
 
+export interface ReservationBalances {
+  amount_paid_cents: Int8 | null;
+  balance_due_cents: Int8 | null;
+  code: string | null;
+  reservation_id: number | null;
+  total_cents: number | null;
+}
+
+export interface ReservationExtras {
+  amount_cents: number;
+  concept: string;
+  created_at: Generated<Timestamp>;
+  created_by: number;
+  id: Generated<number>;
+  reservation_id: number;
+}
+
 export interface ReservationNights {
   created_at: Generated<Timestamp>;
   id: Generated<number>;
@@ -63,12 +83,20 @@ export interface ReservationNights {
 
 export interface Reservations {
   babies: Generated<number>;
+  cancel_reason: string | null;
+  cancelled_at: Timestamp | null;
+  cancelled_by: number | null;
   check_in: Timestamp;
   check_out: Timestamp;
+  checked_in_at: Timestamp | null;
+  checked_in_by: number | null;
+  checked_out_at: Timestamp | null;
+  checked_out_by: number | null;
   children: Generated<number>;
   children_ages: Generated<number[]>;
   code: string | null;
   created_at: Generated<Timestamp>;
+  created_by: number | null;
   deposit_cents: number | null;
   expires_at: Timestamp | null;
   guest_email: string | null;
@@ -78,6 +106,7 @@ export interface Reservations {
   id: Generated<number>;
   notes: string | null;
   origin: Generated<string>;
+  override_total_cents: number | null;
   room_id: number;
   room_unit_id: number | null;
   status: Generated<string>;
@@ -153,6 +182,8 @@ export interface DB {
   payments: Payments;
   pgmigrations: Pgmigrations;
   rate_overrides: RateOverrides;
+  reservation_balances: ReservationBalances;
+  reservation_extras: ReservationExtras;
   reservation_nights: ReservationNights;
   reservations: Reservations;
   room_rates: RoomRates;

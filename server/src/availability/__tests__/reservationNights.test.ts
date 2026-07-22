@@ -50,8 +50,9 @@ interface StaleReservationOptions {
   roomUnitId: number;
   checkIn: string;
   checkOut: string;
-  status: 'cancelled' | 'pending_payment';
+  status: 'cancelled' | 'pending_payment' | 'confirmed';
   expiresAt?: Date | null;
+  origin?: 'web' | 'manual';
 }
 
 /** Inserts a reservation + its reservation_nights rows directly, bypassing
@@ -69,6 +70,7 @@ async function insertStaleReservation(options: StaleReservationOptions): Promise
       guests: 2,
       status: options.status,
       expires_at: options.expiresAt ?? null,
+      origin: options.origin ?? 'web',
       total_cents: 10000,
     })
     .returning('id')
@@ -243,6 +245,39 @@ describe('reservation_nights — lazy sweep frees stale rows at write time', () 
       .where('reservation_id', '=', result.id)
       .execute();
     expect(newRows).toHaveLength(2);
+  });
+
+  // SPEC-modulo-7-gestion-operativa.md § 7.1: a manual reservation is
+  // confirmed instantly and never expires — it must never be swept, even in
+  // the worst case where a bug left a past expires_at on it. If the sweep
+  // ever mistakenly swept it, this new reservation would succeed on the same
+  // unit/nights instead of failing — that's the observable symptom of the
+  // "manual reservation disappears" bug the spec calls out as the worst
+  // possible bug in this module.
+  it('a confirmed manual reservation with a stale (past) expires_at is NEVER swept, even though it would qualify as "expired" by date alone', async () => {
+    const casalId = await insertRoom('Casal', 2);
+    const [unitA] = await insertUnits(casalId, ['101']);
+
+    const manual = await insertStaleReservation({
+      roomId: casalId,
+      roomUnitId: unitA,
+      checkIn: '2026-09-10',
+      checkOut: '2026-09-12',
+      status: 'confirmed',
+      origin: 'manual',
+      expiresAt: new Date(Date.now() - 60_000),
+    });
+
+    await expect(
+      createReservation(testDb, { roomId: casalId, checkIn: '2026-09-10', checkOut: '2026-09-12', guests: 2 }),
+    ).rejects.toBeInstanceOf(NoAvailabilityError);
+
+    const manualRowsAfter = await testDb
+      .selectFrom('reservation_nights')
+      .selectAll()
+      .where('reservation_id', '=', manual)
+      .execute();
+    expect(manualRowsAfter).toHaveLength(2);
   });
 });
 
