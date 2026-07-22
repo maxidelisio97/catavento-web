@@ -104,6 +104,25 @@ hallazgo puede esperar.
   transacción que toque reservas. Si agregás una ruta nueva que las
   modifique, cableala también.
 
+## Módulo 6C — tape chart y detalle de reserva
+- `rooms.sort_order` es la fuente de orden de los grupos de tipo de
+  cuarto en el tape chart (hoy: Casal 1, Triplo 2, Quádruplo 3). Es una
+  columna explícita, no un CASE por nombre en la query — así, cuando
+  el M8 permita renombrar un tipo de cuarto desde el panel, el orden
+  del mapa no se desordena en silencio.
+- El panel (`panel/`, painel.cataventotaiba.com) NO hereda la
+  identidad visual ni las reglas de motion del PRODUCT.md: es back
+  office, prioriza densidad y legibilidad de la información.
+- Los endpoints `/panel/*` son autenticados y SÍ exponen datos de
+  menores (edades de niños, cantidad de bebés). La restricción de la
+  risk-review del M4 aplica solo al GET público por código
+  (`/api/reservations/:code`). No confundir ambos endpoints.
+- El mobile del panel está resuelto a nivel funcional (grilla con
+  scroll + drawer), sin pulido visual. Decisión deliberada: el
+  rediseño del panel como app queda para después del M7/M8, cuando
+  las acciones reales estén definidas. No invertir en pulido visual
+  del panel mobile hasta entonces.
+
 ## Flujo de ramas
 Ver CLAUDE.md raíz — regla de todo el repo, no solo del backend.
 

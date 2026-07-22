@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { PanelUser } from "../api/auth";
+import TapeChartPage from "./TapeChartPage";
 
 interface PanelLayoutProps {
   user: PanelUser;
@@ -59,8 +60,9 @@ export default function PanelLayout({ user, onLogout, onLogoutAll }: PanelLayout
         </div>
       </header>
 
-      {/* Contenedor vacío — 6C monta acá el tape chart. */}
-      <main className="p-6" />
+      <main className="p-6">
+        <TapeChartPage />
+      </main>
     </div>
   );
 }

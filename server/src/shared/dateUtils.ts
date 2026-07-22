@@ -25,3 +25,8 @@ export function eachNightUTC(checkIn: string, checkOut: string): string[] {
   }
   return nights;
 }
+
+/** Today's date as 'YYYY-MM-DD', UTC-based — consistent with every other date in the system. */
+export function todayISO(): string {
+  return formatDateUTC(new Date());
+}

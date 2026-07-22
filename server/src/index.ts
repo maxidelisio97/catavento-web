@@ -9,6 +9,7 @@ import roomsPlugin from './plugins/rooms.js';
 import availabilityPlugin from './plugins/availability.js';
 import reservationsPlugin from './plugins/reservations.js';
 import authPlugin from './plugins/auth.js';
+import panelTapeChartPlugin from './plugins/panelTapeChart.js';
 
 // trustProxy scoped to 127.0.0.1, not `true`: Nginx proxies here from
 // loopback (see nginx.conf.example / nginx-panel.conf.example), so only
@@ -40,6 +41,7 @@ app.register(roomsPlugin, { prefix: '/api' });
 app.register(availabilityPlugin, { prefix: '/api' });
 app.register(reservationsPlugin, { prefix: '/api' });
 app.register(authPlugin);
+app.register(panelTapeChartPlugin);
 
 registerErrorHandler(app);
 
