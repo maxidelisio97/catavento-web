@@ -143,6 +143,26 @@ hallazgo puede esperar.
   las acciones reales estén definidas. No invertir en pulido visual
   del panel mobile hasta entonces.
 
+## Deuda conocida
+
+Decisiones de alcance tomadas al cerrar `fix-public-payment-method-500`,
+anotadas para no repetir la investigación ni reabrirlas sin pedirlo.
+
+- **ConfirmationStep decide `awaitingCard` mirando solo `payment?.method`,
+  nunca `payment_status`.** Si un payment con method desconocido (fail-soft
+  del backend) o `cash/external/pix_manual` quedara en `status='pending'`,
+  el huésped vería el form de pago de nuevo; si lo reenvía,
+  `createOrReusePayment` marca el pago existente como `'failed'` y crea uno
+  nuevo — pisando un registro que el staff pudo haber cargado. Hoy no
+  debería pasar (es convención de aplicación, no constraint de DB). No
+  tocar en un fix urgente — requiere decidir la fuente de verdad correcta
+  para `awaitingCard` (probablemente `payment_status`, no `payment.method`).
+- **`apiFetch` (`src/lib/api.ts`) no tiene timeout/`AbortController`.** Un
+  502/504 explícito cae bien en `ApiError`, pero una conexión colgada sin
+  respuesta deja el `fetch()` sin resolver nunca — el huésped queda en el
+  estado de carga para siempre, sin ver el aviso de reintento/WhatsApp.
+  Fix propio pendiente: agregar timeout con `AbortController`.
+
 ## Flujo de ramas
 Ver CLAUDE.md raíz — regla de todo el repo, no solo del backend.
 

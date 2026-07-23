@@ -13,6 +13,11 @@ export class ApiError extends Error {
   }
 }
 
+// No timeout/AbortController — deuda conocida (ver server/CLAUDE.md "Deuda
+// conocida"). Un 502/504 explicito cae bien en ApiError, pero una conexion
+// colgada sin respuesta deja el fetch() sin resolver nunca: el huesped
+// queda en el estado de carga para siempre, sin ver justo el aviso de
+// reintento/WhatsApp que este mismo fix agrego (ver ReservarPage.tsx).
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,

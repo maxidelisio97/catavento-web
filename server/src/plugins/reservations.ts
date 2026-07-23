@@ -121,6 +121,56 @@ const paymentResponseSchema = z.discriminatedUnion('method', [
   }),
 ]);
 
+// Mirrors the CHECK constraint on payments.method (SPEC-modulo-7-gestion-
+// operativa.md § 5.1). kysely-codegen doesn't turn a CHECK constraint into a
+// TS literal union — payments.method is plain `string` at the type level —
+// so this local type is what gives toPublicPaymentMethod's switch its
+// exhaustiveness guarantee below: add a value to the CHECK constraint
+// without adding a case to the switch, and the build stops compiling
+// instead of silently dropping the new value.
+//
+// This exact class of gap — 7A widened payments.method from ('pix','card')
+// to this wider set, and this file kept comparing the raw DB value against
+// the old literal 'pix'/'card' — is what made this endpoint 500 for every
+// reservation with an active payment (see server/CLAUDE.md "Deuda
+// conocida"). Consumers of the public 'pix'/'card' contract this maps back
+// to: ConfirmationStep.tsx (~L46/57, decides whether to show the PIX QR or
+// the "awaiting card" state when the guest reloads) and ReservarPage.tsx
+// (initial fetch after the Asaas card-payment redirect).
+type KnownPaymentDbMethod = 'asaas_pix' | 'asaas_card' | 'cash' | 'external' | 'pix_manual';
+
+const KNOWN_PAYMENT_DB_METHODS = new Set<string>([
+  'asaas_pix',
+  'asaas_card',
+  'cash',
+  'external',
+  'pix_manual',
+] satisfies KnownPaymentDbMethod[]);
+
+function isKnownPaymentDbMethod(method: string): method is KnownPaymentDbMethod {
+  return KNOWN_PAYMENT_DB_METHODS.has(method);
+}
+
+/** Only 'asaas_pix'/'asaas_card' have a live QR/invoice to show — manually-registered payments (§ 5.2 camino B) map to null on purpose. */
+function toPublicPaymentMethod(dbMethod: KnownPaymentDbMethod): 'pix' | 'card' | null {
+  switch (dbMethod) {
+    case 'asaas_pix':
+      return 'pix';
+    case 'asaas_card':
+      return 'card';
+    case 'cash':
+    case 'external':
+    case 'pix_manual':
+      return null;
+    default: {
+      // Compile-time exhaustiveness check: if KnownPaymentDbMethod gains a
+      // member without a case above, this line fails to compile.
+      const exhaustive: never = dbMethod;
+      throw new Error(`Unhandled payment method: ${String(exhaustive)}`);
+    }
+  }
+}
+
 function httpError(statusCode: number, message: string): FastifyError {
   const err = new Error(message) as FastifyError;
   err.statusCode = statusCode;
@@ -294,30 +344,46 @@ const reservationsPlugin: FastifyPluginAsync<ReservationsPluginOptions> = async 
 
       let payment: z.infer<typeof reservationDetailResponseSchema>['payment'] = null;
       if (activePayment) {
-        payment = { method: activePayment.method as 'pix' | 'card' };
+        if (!isKnownPaymentDbMethod(activePayment.method)) {
+          // Never seen before (DB drifted ahead of this code, e.g. a new
+          // CHECK constraint value with no matching case yet) — fail soft.
+          // payment_status below still reflects the payment; only the
+          // live-QR/invoice enrichment is skipped. This endpoint must never
+          // 500 again over an unmapped method value.
+          fastify.log.warn({ method: activePayment.method }, 'unrecognized payment method on public reservation lookup');
+        } else {
+          const publicMethod = toPublicPaymentMethod(activePayment.method);
 
-        // Only worth a live Asaas round-trip while the payment is still
-        // actionable by the guest (pending) — avoids hammering Asaas from
-        // frontend polling once the payment is settled either way.
-        if (activePayment.status === 'pending') {
-          try {
-            if (activePayment.method === 'pix') {
-              const qr = await getPixQrCode(activePayment.asaas_payment_id);
-              payment.pix = {
-                encoded_image: qr.encodedImage,
-                payload: qr.payload,
-                expiration_date: qr.expirationDate,
-              };
-            } else {
-              const remote = await getPayment(activePayment.asaas_payment_id);
-              payment.invoice_url = remote.invoiceUrl;
+          // Only worth a live Asaas round-trip while the payment is still
+          // actionable by the guest (pending) — avoids hammering Asaas from
+          // frontend polling once the payment is settled either way.
+          if (publicMethod) {
+            payment = { method: publicMethod };
+
+            if (activePayment.status === 'pending') {
+              try {
+                if (publicMethod === 'pix') {
+                  const qr = await getPixQrCode(activePayment.asaas_payment_id);
+                  payment.pix = {
+                    encoded_image: qr.encodedImage,
+                    payload: qr.payload,
+                    expiration_date: qr.expirationDate,
+                  };
+                } else {
+                  const remote = await getPayment(activePayment.asaas_payment_id);
+                  payment.invoice_url = remote.invoiceUrl;
+                }
+              } catch (err) {
+                if (!(err instanceof AsaasApiError)) throw err;
+                // Don't log `err` whole — AsaasApiError.body carries the guest's
+                // PII (name/email/phone/CPF) echoed back by Asaas.
+                fastify.log.warn({ status: err.status }, 'failed to refresh live payment details from Asaas');
+              }
             }
-          } catch (err) {
-            if (!(err instanceof AsaasApiError)) throw err;
-            // Don't log `err` whole — AsaasApiError.body carries the guest's
-            // PII (name/email/phone/CPF) echoed back by Asaas.
-            fastify.log.warn({ status: err.status }, 'failed to refresh live payment details from Asaas');
           }
+          // publicMethod === null (cash/external/pix_manual): no live
+          // QR/invoice to show — `payment` stays null, payment_status alone
+          // already reflects it.
         }
       }
 

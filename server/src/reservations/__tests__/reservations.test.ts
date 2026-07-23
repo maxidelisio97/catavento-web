@@ -1,10 +1,27 @@
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from '@fastify/type-provider-zod';
 import { sql } from 'kysely';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { testDb, testPool } from '../../db/testClient.js';
 import { registerErrorHandler } from '../../errorHandler.js';
-import reservationsPlugin from '../../plugins/reservations.js';
+
+const getPixQrCode = vi.fn();
+const getPayment = vi.fn();
+
+// Only getPixQrCode/getPayment are mocked (createCustomer/createPayment
+// aren't touched by this file's tests) — the live-enrichment branch of
+// GET /api/reservations/:code is what regression-tests the method-mapping
+// fix below; no other test in this file reaches Asaas at all.
+vi.mock('../../asaasClient.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../asaasClient.js')>();
+  return {
+    ...actual,
+    getPixQrCode: (...args: unknown[]) => getPixQrCode(...args),
+    getPayment: (...args: unknown[]) => getPayment(...args),
+  };
+});
+
+const { default: reservationsPlugin } = await import('../../plugins/reservations.js');
 
 function buildApp() {
   const app = Fastify().withTypeProvider<ZodTypeProvider>();
@@ -345,6 +362,194 @@ describe('GET /api/reservations/:code', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json().status).toBe('expired');
     expect(inserted.status).toBe('pending_payment'); // the row itself was never touched
+  });
+
+  // Regression: 7A widened payments.method from ('pix','card') to
+  // ('asaas_pix','asaas_card','cash','external','pix_manual'), but this
+  // endpoint kept comparing the raw DB value against the old literal
+  // 'pix'/'card' and cast it straight into the response — Zod's response
+  // serializer (z.enum(['pix','card'])) threw on the mismatch, turning this
+  // into a bare 500 for every reservation with an active payment. See
+  // server/CLAUDE.md "Deuda conocida".
+  it('maps a pending asaas_pix payment to the public "pix" method instead of 500ing', async () => {
+    const roomId = await insertTestRoom();
+    const reservation = await testDb
+      .insertInto('reservations')
+      .values({
+        room_id: roomId,
+        check_in: '2026-09-01',
+        check_out: '2026-09-03',
+        guests: 2,
+        status: 'pending_payment',
+        expires_at: new Date(Date.now() + 30 * 60 * 1000),
+        total_cents: 20000,
+        deposit_cents: 10000,
+        code: 'PIXOK001',
+      })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+    await testDb
+      .insertInto('payments')
+      .values({
+        reservation_id: reservation.id,
+        asaas_payment_id: 'pay_regress_1',
+        method: 'asaas_pix',
+        amount_cents: 10000,
+        status: 'pending',
+      })
+      .execute();
+    getPixQrCode.mockResolvedValue({ encodedImage: 'img', payload: 'copy', expirationDate: '2026-09-01T00:00:00Z' });
+
+    const app = buildApp();
+    const response = await app.inject({ method: 'GET', url: '/api/reservations/PIXOK001' });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.payment).toEqual({
+      method: 'pix',
+      pix: { encoded_image: 'img', payload: 'copy', expiration_date: '2026-09-01T00:00:00Z' },
+    });
+    expect(body.payment_status).toBe('pending');
+  });
+
+  // Same regression as above, but the reported bug was specifically with
+  // card payments (the asaas_pix test alone would still pass with the
+  // original bug in place, since it never reaches the invoice_url/getPayment
+  // branch below).
+  it('maps a pending asaas_card payment to the public "card" method instead of 500ing', async () => {
+    const roomId = await insertTestRoom();
+    const reservation = await testDb
+      .insertInto('reservations')
+      .values({
+        room_id: roomId,
+        check_in: '2026-09-01',
+        check_out: '2026-09-03',
+        guests: 2,
+        status: 'pending_payment',
+        expires_at: new Date(Date.now() + 30 * 60 * 1000),
+        total_cents: 20000,
+        deposit_cents: 10000,
+        code: 'CARDOK01',
+      })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+    await testDb
+      .insertInto('payments')
+      .values({
+        reservation_id: reservation.id,
+        asaas_payment_id: 'pay_regress_2',
+        method: 'asaas_card',
+        amount_cents: 10000,
+        status: 'pending',
+      })
+      .execute();
+    getPayment.mockResolvedValue({ invoiceUrl: 'https://asaas.example/invoice/pay_regress_2' });
+
+    const app = buildApp();
+    const response = await app.inject({ method: 'GET', url: '/api/reservations/CARDOK01' });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.payment).toEqual({
+      method: 'card',
+      invoice_url: 'https://asaas.example/invoice/pay_regress_2',
+    });
+    expect(body.payment_status).toBe('pending');
+  });
+
+  it.each(['cash', 'external', 'pix_manual'] as const)(
+    'maps a %s payment to payment: null, keeping payment_status as the source of truth',
+    async (method) => {
+      const roomId = await insertTestRoom();
+      const reservation = await testDb
+        .insertInto('reservations')
+        .values({
+          room_id: roomId,
+          check_in: '2026-09-01',
+          check_out: '2026-09-03',
+          guests: 2,
+          status: 'pending_payment',
+          expires_at: new Date(Date.now() + 30 * 60 * 1000),
+          total_cents: 20000,
+          deposit_cents: 10000,
+          code: `MAN${method.slice(0, 5).toUpperCase()}`,
+        })
+        .returning('id')
+        .executeTakeFirstOrThrow();
+      await testDb
+        .insertInto('payments')
+        .values({
+          reservation_id: reservation.id,
+          asaas_payment_id: `pay_${method}`,
+          method,
+          amount_cents: 10000,
+          status: 'received',
+        })
+        .execute();
+
+      const app = buildApp();
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/reservations/MAN${method.slice(0, 5).toUpperCase()}`,
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(body.payment).toBeNull();
+      expect(body.payment_status).toBe('received');
+    },
+  );
+
+  // The fail-soft this endpoint depends on: an unrecognized DB value for
+  // payments.method (DB drifted ahead of this code) must degrade to
+  // payment: null, never 500 — this is the exact failure mode the original
+  // bug produced, just triggered by a hypothetical future value instead of
+  // asaas_pix/asaas_card.
+  it('fails soft to payment: null on an unrecognized payment method instead of 500ing', async () => {
+    const roomId = await insertTestRoom();
+    const reservation = await testDb
+      .insertInto('reservations')
+      .values({
+        room_id: roomId,
+        check_in: '2026-09-01',
+        check_out: '2026-09-03',
+        guests: 2,
+        status: 'pending_payment',
+        expires_at: new Date(Date.now() + 30 * 60 * 1000),
+        total_cents: 20000,
+        deposit_cents: 10000,
+        code: 'UNKNOWN1',
+      })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+    // payments.method has a CHECK constraint, so a genuinely unmapped value
+    // can only exist if the DB drifts ahead of this code (a migration adds a
+    // new allowed value before this file grows a matching case). Simulate
+    // that drift directly: drop the constraint, insert the unmapped value,
+    // restore it — this is the exact scenario the fail-soft path exists for.
+    await sql`ALTER TABLE payments DROP CONSTRAINT payments_method_check`.execute(testDb);
+    try {
+      await sql`
+        INSERT INTO payments (reservation_id, asaas_payment_id, method, amount_cents, status)
+        VALUES (${reservation.id}, ${'pay_unknown'}, ${'boleto'}, ${10000}, ${'pending'})
+      `.execute(testDb);
+
+      const app = buildApp();
+      const response = await app.inject({ method: 'GET', url: '/api/reservations/UNKNOWN1' });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(body.payment).toBeNull();
+      expect(body.payment_status).toBe('pending');
+    } finally {
+      // ADD CONSTRAINT re-validates every existing row, including the one
+      // just inserted above — delete it first or the restore itself fails.
+      await sql`DELETE FROM payments WHERE asaas_payment_id = ${'pay_unknown'}`.execute(testDb);
+      await sql`
+        ALTER TABLE payments ADD CONSTRAINT payments_method_check
+        CHECK (method IN ('asaas_pix','asaas_card','cash','external','pix_manual'))
+      `.execute(testDb);
+    }
   });
 });
 

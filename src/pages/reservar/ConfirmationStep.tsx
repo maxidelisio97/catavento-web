@@ -11,11 +11,16 @@
 import { useEffect, useState } from "react";
 import { LuCheck, LuCircleCheck, LuClock, LuCopy, LuLoaderCircle } from "react-icons/lu";
 import { ApiError, fetchReservationByCode, requestPayment, type ReservationResponse } from "../../lib/api";
+import { WHATSAPP_URL } from "../../config/site";
 import type { DatesStepInitial } from "./DatesStep";
 import { formatCents, formatIsoDateLabel } from "./formatters";
 import { formatCountdown, useCountdown } from "./countdown";
 import PaymentMethodForm from "./PaymentMethodForm";
 import PixPayment from "./PixPayment";
+
+// After this many consecutive poll failures (~15s at the 5s interval below)
+// we stop pretending everything's fine — see the note by the poll effect.
+const POLL_FAILURES_BEFORE_WARNING = 3;
 
 interface ConfirmationStepProps {
   reservation: ReservationResponse;
@@ -53,6 +58,13 @@ export default function ConfirmationStep({ reservation: initialReservation, onRe
   // Se a reserva ja chega com um pagamento de cartao criado (volta do redirect
   // do Asaas), so falta aguardar o webhook confirmar — nunca mostra o form de
   // novo nem cria um segundo pagamento.
+  //
+  // Decide isso olhando so para payment?.method, nunca payment_status —
+  // deuda conocida (ver server/CLAUDE.md "Deuda conocida"): um payment com
+  // method desconhecido (fail-soft do backend) ou cash/external/pix_manual
+  // parado em status='pending' faria o huesped ver o form de novo; se ele
+  // reenviar, createOrReusePayment marca o pagamento existente como 'failed'
+  // e cria outro — pisando um registro que o staff pode ter carregado.
   const [awaitingCard] = useState(
     initialReservation.status === "pending_payment" && initialReservation.payment?.method === "card",
   );
@@ -60,6 +72,7 @@ export default function ConfirmationStep({ reservation: initialReservation, onRe
   const [paymentError, setPaymentError] = useState<string | null>(null);
 
   const [codeCopied, setCodeCopied] = useState(false);
+  const [pollFailures, setPollFailures] = useState(0);
 
   const remainingMs = useCountdown(reservation.expires_at);
   const paymentInFlight = pix !== null || awaitingCard;
@@ -75,16 +88,23 @@ export default function ConfirmationStep({ reservation: initialReservation, onRe
   }
 
   // Poll enquanto houver um pagamento em andamento, ate a reserva sair de
-  // pending_payment (confirmed / expired / payment_conflict).
+  // pending_payment (confirmed / expired / payment_conflict). Continua
+  // tentando mesmo apos varias falhas seguidas (uma falha real do backend
+  // pode se resolver sozinha), mas a partir de POLL_FAILURES_BEFORE_WARNING
+  // avisa o hospede em vez de deixá-lo olhando pra uma roda infinita sem
+  // nenhum sinal — ver server/CLAUDE.md "Deuda conocida".
   useEffect(() => {
     if (reservation.status !== "pending_payment" || !paymentInFlight) return;
     let cancelled = false;
     const interval = window.setInterval(async () => {
       try {
         const fresh = await fetchReservationByCode(reservation.code);
-        if (!cancelled) setReservation(fresh);
+        if (!cancelled) {
+          setReservation(fresh);
+          setPollFailures(0);
+        }
       } catch {
-        // falha transitoria de rede durante o polling — tenta de novo no proximo tick.
+        if (!cancelled) setPollFailures((n) => n + 1);
       }
     }, 5000);
     return () => {
@@ -249,6 +269,19 @@ export default function ConfirmationStep({ reservation: initialReservation, onRe
         <div className="rounded-2xl border border-stone-300 bg-white p-5 flex items-center justify-center gap-2">
           <LuLoaderCircle size={18} className="animate-spin text-coral-600" aria-hidden />
           <p className="font-body text-sm text-warm-800/70">Confirmando seu pagamento…</p>
+        </div>
+      )}
+
+      {reservation.status === "pending_payment" && paymentInFlight && pollFailures >= POLL_FAILURES_BEFORE_WARNING && (
+        <div className="rounded-2xl border border-dashed border-stone-300 bg-sand-50 p-4 text-left space-y-1.5">
+          <p className="font-body text-sm text-warm-800/70">
+            Não conseguimos confirmar automaticamente. Se você já pagou, não pague de novo — o pagamento pode ter
+            sido registrado mesmo assim. Atualize a página em instantes ou{" "}
+            <a href={WHATSAPP_URL} target="_blank" rel="noreferrer" className="text-coral-600 hover:underline">
+              fale com a pousada pelo WhatsApp
+            </a>{" "}
+            informando o código <span className="font-semibold text-warm-900">{reservation.code}</span>.
+          </p>
         </div>
       )}
     </div>
