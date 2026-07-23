@@ -74,7 +74,12 @@ async function insertReservation(options: ReservationFixtureOptions): Promise<nu
   return reservation.id;
 }
 
-async function insertPayment(reservationId: number, asaasPaymentId: string, status = 'pending'): Promise<number> {
+async function insertPayment(
+  reservationId: number,
+  asaasPaymentId: string,
+  status = 'pending',
+  kind = 'deposit',
+): Promise<number> {
   const payment = await testDb
     .insertInto('payments')
     .values({
@@ -83,6 +88,7 @@ async function insertPayment(reservationId: number, asaasPaymentId: string, stat
       method: 'asaas_pix',
       amount_cents: 10000,
       status,
+      kind,
     })
     .returning('id')
     .executeTakeFirstOrThrow();
@@ -325,5 +331,75 @@ describe('processPaymentReceived', () => {
       .where('id', '=', reservationId)
       .executeTakeFirstOrThrow();
     expect(reservation.status).toBe('cancelled'); // untouched
+  });
+
+  it('SPEC-modulo-7 § 5.2: a balance payment on an already-confirmed reservation is recorded but never re-triggers confirmation', async () => {
+    const roomId = await insertTestRoom({ totalUnits: 1 });
+    const reservationId = await insertReservation({ roomId, status: 'confirmed' });
+    await insertPayment(reservationId, 'pay_balance_1', 'pending', 'balance');
+
+    const before = await testDb
+      .selectFrom('reservation_nights')
+      .selectAll()
+      .where('reservation_id', '=', reservationId)
+      .execute();
+
+    const outcome = await processPaymentReceived(testDb, {
+      asaasPaymentId: 'pay_balance_1',
+      rawEvent: { event: 'PAYMENT_RECEIVED' },
+    });
+
+    expect(outcome).toEqual({
+      kind: 'payment_marked_received_only',
+      reservationId,
+      reservationStatus: 'confirmed',
+    });
+
+    const payment = await testDb
+      .selectFrom('payments')
+      .select(['status', 'kind'])
+      .where('reservation_id', '=', reservationId)
+      .executeTakeFirstOrThrow();
+    expect(payment.status).toBe('received');
+    expect(payment.kind).toBe('balance');
+
+    // The reservation stays confirmed — not re-confirmed, not touched — and
+    // its reservation_nights are exactly as before (no reinsert/no wipe from
+    // the confirm-room codepath, which a `deposit` payment WOULD trigger).
+    const reservation = await testDb
+      .selectFrom('reservations')
+      .select('status')
+      .where('id', '=', reservationId)
+      .executeTakeFirstOrThrow();
+    expect(reservation.status).toBe('confirmed');
+
+    const after = await testDb
+      .selectFrom('reservation_nights')
+      .selectAll()
+      .where('reservation_id', '=', reservationId)
+      .execute();
+    expect(after).toEqual(before);
+  });
+
+  it('is idempotent for a balance payment: processing the same webhook twice only marks it received once, no double side effects', async () => {
+    const roomId = await insertTestRoom({ totalUnits: 1 });
+    const reservationId = await insertReservation({ roomId, status: 'confirmed' });
+    await insertPayment(reservationId, 'pay_balance_2', 'pending', 'balance');
+
+    const first = await processPaymentReceived(testDb, {
+      asaasPaymentId: 'pay_balance_2',
+      rawEvent: { event: 'PAYMENT_RECEIVED' },
+    });
+    const second = await processPaymentReceived(testDb, {
+      asaasPaymentId: 'pay_balance_2',
+      rawEvent: { event: 'PAYMENT_RECEIVED' },
+    });
+
+    expect(first).toEqual({
+      kind: 'payment_marked_received_only',
+      reservationId,
+      reservationStatus: 'confirmed',
+    });
+    expect(second).toEqual({ kind: 'noop_idempotent' });
   });
 });

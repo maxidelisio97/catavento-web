@@ -1,11 +1,17 @@
 /**
- * Creates the Asaas charge for a reservation's deposit, or reuses the
- * existing one, per SPEC-modulo-4-pago-asaas.md § "Flujo" point 2 and the
- * approved retry rule: if a `pending` payment already exists for the
+ * Creates the Asaas charge for a reservation payment, or reuses the existing
+ * one, per SPEC-modulo-4-pago-asaas.md § "Flujo" point 2 and the approved
+ * retry rule: if a `pending` payment of the SAME kind already exists for the
  * reservation, check its REAL status in Asaas before deciding — reuse it
  * if it's still pending there (same QR/invoice, no duplicate charge),
  * or create a new one if Asaas marked it overdue/failed. Never leaves two
- * `pending` payments for the same reservation.
+ * `pending` payments of the same kind for the same reservation.
+ *
+ * Generalized in SPEC-modulo-7-gestion-operativa.md § 5.4 from "always the
+ * deposit" (M4) to any `kind` collectable via Asaas (deposit/balance/extra —
+ * `refund` is never charged through this path, see § 10 dec.2). `kind` is
+ * part of the "is there already a pending charge to reuse" lookup so a stale
+ * pending deposit can't be mistaken for (or block) a balance charge attempt.
  */
 
 import { sql, type Kysely } from 'kysely';
@@ -34,11 +40,21 @@ const DB_METHOD: Record<PaymentMethod, 'asaas_pix' | 'asaas_card'> = {
   card: 'asaas_card',
 };
 
-export interface CreateOrReusePaymentInput {
+/** `payments.kind` values collectable through Asaas (§ 5.4) — `refund` excluded, see § 10 dec.2. */
+export type AsaasPaymentKind = 'deposit' | 'balance' | 'extra';
+
+const KIND_LABEL: Record<AsaasPaymentKind, string> = {
+  deposit: 'Depósito',
+  balance: 'Saldo',
+  extra: 'Extra',
+};
+
+export interface CreateOrReuseAsaasPaymentInput {
   reservationId: number;
   code: string;
+  kind: AsaasPaymentKind;
   method: PaymentMethod;
-  depositCents: number;
+  amountCents: number;
   dueDate: string; // YYYY-MM-DD, calendar date of expires_at (see spec decision #4)
   guestName: string;
   guestEmail: string;
@@ -91,7 +107,10 @@ async function buildDetails(method: PaymentMethod, payment: AsaasPaymentResponse
  * Without this, two concurrent requests (double-click, retried fetch) can
  * both pass the "no pending payment" check and both charge the guest.
  */
-export async function createOrReusePayment(db: Kysely<DB>, input: CreateOrReusePaymentInput): Promise<PaymentDetails> {
+export async function createOrReuseAsaasPayment(
+  db: Kysely<DB>,
+  input: CreateOrReuseAsaasPaymentInput,
+): Promise<PaymentDetails> {
   return db.transaction().execute(async (trx) => {
     await sql`SELECT pg_advisory_xact_lock(${input.reservationId})`.execute(trx);
 
@@ -99,11 +118,21 @@ export async function createOrReusePayment(db: Kysely<DB>, input: CreateOrReuseP
       .selectFrom('payments')
       .selectAll()
       .where('reservation_id', '=', input.reservationId)
+      .where('kind', '=', input.kind)
       .where('status', '=', 'pending')
       .orderBy('created_at', 'desc')
       .executeTakeFirst();
 
     if (existing) {
+      if (existing.asaas_payment_id == null) {
+        // Defensive: only this function ever inserts a 'pending' payment row,
+        // and it always sets asaas_payment_id. A manually-registered payment
+        // (§ 5.2 camino B) is always inserted as 'received', never 'pending'.
+        // A null here means that invariant broke somewhere else — fail loudly
+        // rather than call Asaas with a null payment id.
+        throw new Error(`Payment ${existing.id} is 'pending' but has no asaas_payment_id`);
+      }
+
       const remote = await getPayment(existing.asaas_payment_id);
 
       if (remote.status === 'PENDING' || remote.status === 'AWAITING_RISK_ANALYSIS') {
@@ -120,9 +149,13 @@ export async function createOrReusePayment(db: Kysely<DB>, input: CreateOrReuseP
           .where('id', '=', existing.id)
           .execute();
       } else if (RECEIVED_LIKE_STATUSES.has(remote.status)) {
-        // Align our record so the webhook (or a retry of it) finds a
-        // consistent state, then surface this as a conflict — creating a
-        // second charge here would risk double-collecting the deposit.
+        // KNOWN BUG (pre-M7, not fixed here — see server/CLAUDE.md "deuda
+        // conocida"): this UPDATE and the throw below run in the same
+        // transaction, so Kysely rolls the UPDATE back along with everything
+        // else before rethrowing. The local row stays 'pending' even though
+        // Asaas already has the money — it does NOT get aligned. Harmless
+        // today because the webhook is the real confirmation path, but don't
+        // build new logic on top of assuming this persists.
         await trx
           .updateTable('payments')
           .set({ status: 'received', updated_at: new Date() })
@@ -149,9 +182,9 @@ export async function createOrReusePayment(db: Kysely<DB>, input: CreateOrReuseP
     const payment = await createPayment({
       customer: customer.id,
       billingType: input.method === 'pix' ? 'PIX' : 'CREDIT_CARD',
-      value: input.depositCents / 100,
+      value: input.amountCents / 100,
       dueDate: input.dueDate,
-      description: `Depósito reserva ${input.code} — Pousada Catavento`,
+      description: `${KIND_LABEL[input.kind]} reserva ${input.code} — Pousada Catavento`,
       externalReference: input.code,
       callback: {
         successUrl: `${config.frontendBaseUrl}/reservar?code=${input.code}`,
@@ -164,8 +197,9 @@ export async function createOrReusePayment(db: Kysely<DB>, input: CreateOrReuseP
       .values({
         reservation_id: input.reservationId,
         asaas_payment_id: payment.id,
+        kind: input.kind,
         method: DB_METHOD[input.method],
-        amount_cents: input.depositCents,
+        amount_cents: input.amountCents,
         status: 'pending',
       })
       .execute();

@@ -9,7 +9,7 @@ import { NoAvailabilityError, MinStayNotMetError } from '../availability/createR
 import { eachNightUTC, todayISO } from '../shared/dateUtils.js';
 import { getBusinessSettings } from '../settings/settings.js';
 import {
-  createOrReusePayment,
+  createOrReuseAsaasPayment,
   PaymentAlreadyReceivedError,
   type PaymentDetails,
 } from '../reservations/createOrReusePayment.js';
@@ -356,11 +356,15 @@ const reservationsPlugin: FastifyPluginAsync<ReservationsPluginOptions> = async 
 
           // Only worth a live Asaas round-trip while the payment is still
           // actionable by the guest (pending) — avoids hammering Asaas from
-          // frontend polling once the payment is settled either way.
+          // frontend polling once the payment is settled either way. The
+          // asaas_payment_id null check is for manually-registered payments
+          // (SPEC-modulo-7 § 5.2 camino B) — those never touch Asaas, and per
+          // that same section are always inserted as 'received', never
+          // 'pending', so this is defensive rather than an expected path.
           if (publicMethod) {
             payment = { method: publicMethod };
 
-            if (activePayment.status === 'pending') {
+            if (activePayment.status === 'pending' && activePayment.asaas_payment_id) {
               try {
                 if (publicMethod === 'pix') {
                   const qr = await getPixQrCode(activePayment.asaas_payment_id);
@@ -437,11 +441,12 @@ const reservationsPlugin: FastifyPluginAsync<ReservationsPluginOptions> = async 
       const expiresAt = row.expires_at;
 
       try {
-        const details = await createOrReusePayment(db, {
+        const details = await createOrReuseAsaasPayment(db, {
           reservationId: row.id,
           code,
+          kind: 'deposit',
           method,
-          depositCents: row.deposit_cents,
+          amountCents: row.deposit_cents,
           dueDate: new Date(expiresAt).toISOString().slice(0, 10),
           guestName: row.guest_name ?? '',
           guestEmail: row.guest_email ?? '',

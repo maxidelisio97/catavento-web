@@ -86,9 +86,20 @@ export async function processPaymentReceived(
     }
 
     const alreadyReceived = payment.status === 'received';
+    // SPEC-modulo-7-gestion-operativa.md § 5.2: M7 adds `kind='balance'`
+    // payments (and 'extra') that can arrive here via the same webhook. Only
+    // a `deposit` payment is allowed to drive the pending_payment -> confirmed
+    // transition below — a balance/extra payment must NEVER re-trigger
+    // confirmation, even if it happened to land while the reservation was
+    // (implausibly) still pending_payment. This is deliberately keyed off
+    // `payment.kind`, not `reservation.status`, per the spec's explicit
+    // warning: the discriminator is "which payment is this", not "what state
+    // is the reservation in" — the latter is a coincidence of M4's flow
+    // (deposit always precedes confirmation), not a guarantee.
+    const drivesConfirmation = payment.kind === 'deposit';
     const reservationSettled = reservation.status !== 'pending_payment';
 
-    if (alreadyReceived && reservationSettled) {
+    if (alreadyReceived && (reservationSettled || !drivesConfirmation)) {
       // Idempotency: this exact outcome was already applied by a previous
       // delivery of this (or an equivalent) webhook event.
       return { kind: 'noop_idempotent' };
@@ -102,10 +113,13 @@ export async function processPaymentReceived(
         .execute();
     }
 
-    if (reservationSettled) {
-      // Reservation was already confirmed/cancelled/payment_conflict by
-      // another path (e.g. a previous webhook delivery that crashed after
-      // updating the payment but before this point). Nothing more to do.
+    if (reservationSettled || !drivesConfirmation) {
+      // Either the reservation was already confirmed/cancelled/payment_conflict
+      // by another path (e.g. a previous webhook delivery that crashed after
+      // updating the payment but before this point), or this payment is a
+      // balance/extra that must only ever record money, never drive a state
+      // transition. Nothing more to do — the balance itself is derived from
+      // `reservation_balances`, not recalculated here.
       return {
         kind: 'payment_marked_received_only',
         reservationId: reservation.id,

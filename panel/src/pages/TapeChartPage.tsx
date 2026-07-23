@@ -27,6 +27,9 @@ export default function TapeChartPage() {
   const [data, setData] = useState<TapeChartResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedReservationId, setSelectedReservationId] = useState<number | null>(null);
+  // Bumped by the drawer after a check-in/check-out/payment so the tape
+  // chart's has_balance_due flags and summary stay in sync with the ficha.
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const to = useMemo(() => formatDateUTC(addDaysUTC(parseDateUTC(from), windowNights)), [from, windowNights]);
 
@@ -43,7 +46,7 @@ export default function TapeChartPage() {
     return () => {
       cancelled = true;
     };
-  }, [from, to]);
+  }, [from, to, refreshKey]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -66,7 +69,11 @@ export default function TapeChartPage() {
       {data && <TapeGrid data={data} onSelectReservation={setSelectedReservationId} />}
 
       {selectedReservationId != null && (
-        <ReservationDrawer reservationId={selectedReservationId} onClose={() => setSelectedReservationId(null)} />
+        <ReservationDrawer
+          reservationId={selectedReservationId}
+          onClose={() => setSelectedReservationId(null)}
+          onChanged={() => setRefreshKey((k) => k + 1)}
+        />
       )}
     </div>
   );
