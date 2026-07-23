@@ -12,10 +12,12 @@ import { eachNightUTC, todayISO } from '../shared/dateUtils.js';
 
 const MAX_TAPE_CHART_NIGHTS = 60;
 
-// Reservations in these statuses can never be active (see isReservationActive) —
+// Reservations outside these statuses can never be active (see isReservationActive) —
 // filtered at the SQL level purely to shrink the row set before the JS
 // isReservationActive check runs (which additionally excludes expired holds).
-const NON_TERMINAL_STATUSES = ['confirmed', 'pending_payment'] as const;
+// Must stay in sync with isReservationActive's notion of "active" — checked_in
+// and checked_out both count as active (see server/CLAUDE.md).
+const POSSIBLY_ACTIVE_STATUSES = ['confirmed', 'pending_payment', 'checked_in', 'checked_out'] as const;
 
 export class InvalidTapeChartRangeError extends Error {}
 
@@ -96,7 +98,7 @@ export async function getTapeChart(db: Kysely<DB>, from: string, to: string): Pr
     ])
     .where('reservation_nights.night', '>=', sql<Date>`${from}::date`)
     .where('reservation_nights.night', '<', sql<Date>`${to}::date`)
-    .where('reservations.status', 'in', NON_TERMINAL_STATUSES)
+    .where('reservations.status', 'in', POSSIBLY_ACTIVE_STATUSES)
     .execute();
 
   const activeNights = rawNights.filter((row) => isReservationActive(row.status, row.expires_at));
@@ -184,7 +186,7 @@ async function getTapeChartSummary(db: Kysely<DB>, totalUnits: number): Promise<
     .where((eb) =>
       eb.or([eb('check_in', '=', sql<Date>`${today}::date`), eb('check_out', '=', sql<Date>`${today}::date`)]),
     )
-    .where('status', 'in', NON_TERMINAL_STATUSES)
+    .where('status', 'in', POSSIBLY_ACTIVE_STATUSES)
     .execute();
 
   const activeEdges = todaysEdges.filter((row) => isReservationActive(row.status, row.expires_at));
@@ -200,7 +202,7 @@ async function getTapeChartSummary(db: Kysely<DB>, totalUnits: number): Promise<
       'reservations.expires_at as expires_at',
     ])
     .where('reservation_nights.night', '=', sql<Date>`${today}::date`)
-    .where('reservations.status', 'in', NON_TERMINAL_STATUSES)
+    .where('reservations.status', 'in', POSSIBLY_ACTIVE_STATUSES)
     .execute();
 
   const occupiedToday = new Set(

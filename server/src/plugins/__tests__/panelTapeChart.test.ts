@@ -357,6 +357,44 @@ describe('GET /panel/tape-chart', () => {
     expect(body.summary.occupied_today).toBe(0);
   });
 
+  it('includes checked_in and checked_out reservations in nights and summary', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom('Casal', 1);
+    const unitCheckedIn = await insertUnit(roomId, '101');
+    const unitCheckedOut = await insertUnit(roomId, '102');
+    const today = todayISO();
+    const tomorrow = formatDateUTC(addDaysUTC(parseDateUTC(today), 1));
+
+    await insertReservation({
+      roomId,
+      checkIn: today,
+      checkOut: tomorrow,
+      nightUnitIds: [unitCheckedIn],
+      status: 'checked_in',
+    });
+    await insertReservation({
+      roomId,
+      checkIn: today,
+      checkOut: tomorrow,
+      nightUnitIds: [unitCheckedOut],
+      status: 'checked_out',
+    });
+
+    const { from, to } = windowAround(0, 14);
+    const app = buildApp();
+    const response = await app.inject({
+      method: 'GET',
+      url: `/panel/tape-chart?from=${from}&to=${to}`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+
+    const body = response.json();
+    const statuses = body.nights.map((n: TapeChartNight) => n.room_unit_id);
+    expect(statuses).toEqual(expect.arrayContaining([unitCheckedIn, unitCheckedOut]));
+    expect(body.summary.occupied_today).toBe(2);
+    expect(body.summary.arrivals_today).toBe(2);
+  });
+
   it('rejects a range over 60 nights with a controlled 400', async () => {
     const token = await insertSessionCookie();
     const { from, to } = windowAround(0, 61);
