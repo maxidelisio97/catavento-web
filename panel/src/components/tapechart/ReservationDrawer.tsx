@@ -62,6 +62,11 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged }:
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentCpf, setPaymentCpf] = useState("");
   const [paymentResult, setPaymentResult] = useState<RegisterPaymentResult | null>(null);
+  // Generated once when the form opens, not per submit — so retries of the
+  // SAME intent (double-click, or resubmit after a hung request) reuse it
+  // and dedupe server-side, while closing and reopening the form to register
+  // a second, legitimately identical payment gets a fresh key.
+  const [paymentIdempotencyKey, setPaymentIdempotencyKey] = useState<string | null>(null);
 
   useEffect(() => {
     const raf = requestAnimationFrame(() => setEntered(true));
@@ -136,6 +141,7 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged }:
         method: paymentMethod,
         amount_cents: amountCents,
         cpf_cnpj: isAsaas ? paymentCpf.trim() : undefined,
+        idempotency_key: paymentIdempotencyKey ?? undefined,
       });
       setPaymentResult(result);
       if (result.method !== "pix" && result.method !== "card") {
@@ -150,11 +156,17 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged }:
     }
   }
 
+  function openPaymentForm() {
+    setPaymentIdempotencyKey(crypto.randomUUID());
+    setShowPaymentForm(true);
+  }
+
   function closePaymentForm() {
     setShowPaymentForm(false);
     setPaymentResult(null);
     setPaymentAmount("");
     setPaymentCpf("");
+    setPaymentIdempotencyKey(null);
     setActionError(null);
     // A pix/card charge only settles later via webhook — reload now so the
     // ficha shows the fresh 'pending' payment even before it's received.
@@ -315,7 +327,7 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged }:
                 {!NOT_PAYABLE_STATUSES.has(detail.status) && (
                   <button
                     type="button"
-                    onClick={() => setShowPaymentForm((v) => !v)}
+                    onClick={() => (showPaymentForm ? closePaymentForm() : openPaymentForm())}
                     className="rounded border border-panel-300 px-3 py-1.5 text-xs font-medium text-panel-900 hover:bg-panel-100"
                   >
                     Registrar pagamento

@@ -8,6 +8,8 @@ export interface RegisterPaymentInput {
   method: PanelPaymentMethod;
   amount_cents: number;
   cpf_cnpj?: string;
+  /** Required for cash/external/pix_manual — generate once per payment-form session (on open, not on submit) so retries of the same intent dedupe server-side. */
+  idempotency_key?: string;
 }
 
 export type RegisterPaymentResult =

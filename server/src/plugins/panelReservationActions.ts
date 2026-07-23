@@ -14,6 +14,7 @@ import {
   ReservationNotFoundError,
   ReservationNotPayableError,
   MissingCpfCnpjError,
+  MissingIdempotencyKeyError,
   BalanceDueError,
   InvalidReservationTransitionError,
   type RegisterPaymentResult,
@@ -24,6 +25,11 @@ const paymentBodySchema = z.object({
   method: z.enum(['asaas_pix', 'asaas_card', 'cash', 'external', 'pix_manual']),
   amount_cents: z.number().int().positive(),
   cpf_cnpj: z.string().min(11).optional(),
+  // Required for cash/external/pix_manual (enforced in registerPayment, not
+  // here — the plugin doesn't know which methods need it, that's the
+  // service's rule). Client generates it once per payment-form session, per
+  // MissingIdempotencyKeyError's docstring.
+  idempotency_key: z.string().uuid().optional(),
 });
 
 const pixDetailsSchema = z.object({
@@ -100,12 +106,14 @@ const panelReservationActionsPlugin: FastifyPluginAsync<PanelReservationActionsP
         schema: {
           params: codeParamsSchema,
           body: paymentBodySchema,
-          response: { 201: paymentResponseSchema },
+          // 200 = an existing payment with the same idempotency_key was
+          // replayed back, not inserted again (see registerPayment).
+          response: { 200: paymentResponseSchema, 201: paymentResponseSchema },
         },
       },
       async (request, reply) => {
         const { code } = request.params;
-        const { kind, method, amount_cents, cpf_cnpj } = request.body;
+        const { kind, method, amount_cents, cpf_cnpj, idempotency_key } = request.body;
 
         try {
           const result = await registerPayment(db, {
@@ -114,15 +122,17 @@ const panelReservationActionsPlugin: FastifyPluginAsync<PanelReservationActionsP
             method,
             amountCents: amount_cents,
             cpfCnpj: cpf_cnpj,
+            idempotencyKey: idempotency_key,
             changedBy: request.user!.id,
           });
 
-          reply.status(201);
+          reply.status('replayed' in result && result.replayed ? 200 : 201);
           return paymentResultToResponse(result);
         } catch (err) {
           if (err instanceof ReservationNotFoundError) throw httpError(404, 'RESERVATION_NOT_FOUND');
           if (err instanceof ReservationNotPayableError) throw httpError(409, 'RESERVATION_NOT_PAYABLE');
           if (err instanceof MissingCpfCnpjError) throw httpError(400, 'CPF_CNPJ_REQUIRED');
+          if (err instanceof MissingIdempotencyKeyError) throw httpError(400, 'IDEMPOTENCY_KEY_REQUIRED');
           if (err instanceof PaymentAlreadyReceivedError) throw httpError(409, 'PAYMENT_ALREADY_RECEIVED');
           if (err instanceof AsaasApiError) {
             // Keep the real Asaas error out of the client response (it can

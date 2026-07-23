@@ -31,6 +31,7 @@ export interface Payments {
   changed_by: number | null;
   created_at: Generated<Timestamp>;
   id: Generated<number>;
+  idempotency_key: string | null;
   kind: Generated<string>;
   method: string;
   raw_last_event: Json | null;

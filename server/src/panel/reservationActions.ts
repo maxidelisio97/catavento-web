@@ -7,7 +7,7 @@
  * guards physical-unit integrity (§ 1's "NUNCA salteable" is about the
  * unit-night, not about money or status).
  */
-import type { Kysely } from 'kysely';
+import { sql, type Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
 import {
   createOrReuseAsaasPayment,
@@ -31,7 +31,23 @@ const ASAAS_METHOD_MAP: Record<'asaas_pix' | 'asaas_card', AsaasClientMethod> = 
 // left for the money to apply to. Not a rule stated verbatim in § 5, but a
 // direct consequence of § 3's state machine (these states have no outgoing
 // transitions a payment could ever unblock).
-const NOT_PAYABLE_STATUSES = new Set<ReservationStatus>(['cancelled', 'no_show', 'checked_out', 'payment_conflict']);
+//
+// `pending_payment` is included too (risk-review finding, not terminal but
+// still excluded): a reservation in this state is still subject to the lazy
+// expiry sweep (server/CLAUDE.md § 6A) — its `reservation_nights` rows can be
+// released by another incoming reservation the moment its hold expires, even
+// with a `received` payment already attached to it. Registering money against
+// it here would silently orphan that payment. Confirming the reservation is
+// a separate, explicit action (webhook for web reservations; there is no
+// "confirm manual" endpoint yet, that's § 7 / M7D) — this endpoint must never
+// do it as a side effect of taking money.
+const NOT_PAYABLE_STATUSES = new Set<ReservationStatus>([
+  'pending_payment',
+  'cancelled',
+  'no_show',
+  'checked_out',
+  'payment_conflict',
+]);
 
 export class ReservationNotFoundError extends Error {
   constructor() {
@@ -51,10 +67,33 @@ export class MissingCpfCnpjError extends Error {
   }
 }
 
+// Risk-review finding (§ 5.2 camino B): unlike the Asaas path — which dedupes
+// via createOrReuseAsaasPayment's advisory lock + "reuse pending payment of
+// this kind" lookup — a manual payment was a bare INSERT with no protection
+// at all. Given the pousada's irregular connectivity, the realistic trigger
+// isn't a double-click but a network retry: the operator submits, the
+// connection hangs, they see no confirmation, and resubmit 15s later. Without
+// this, that resubmit silently records the same cash payment twice — nothing
+// else (no Asaas statement, no webhook) would ever catch the mismatch; it
+// surfaces only when the guest has already left still owing the balance.
+//
+// The client generates `idempotencyKey` once per payment-form session (when
+// the operator opens the form, not per submit) so repeated submits of the
+// SAME intent reuse it, while closing and reopening the form to register a
+// second, legitimately identical payment (e.g. two equal installments) gets
+// a fresh key and is never merged.
+export class MissingIdempotencyKeyError extends Error {
+  constructor() {
+    super('idempotency_key is required for cash/external/pix_manual payments');
+  }
+}
+
 export interface ManualPaymentResult {
   method: 'cash' | 'external' | 'pix_manual';
   paymentId: number;
   status: 'received';
+  /** True when an existing payment with the same idempotency_key was returned instead of inserting a new one. */
+  replayed: boolean;
 }
 
 export type RegisterPaymentResult = PaymentDetails | ManualPaymentResult;
@@ -65,6 +104,8 @@ export interface RegisterPaymentInput {
   method: PanelPaymentMethod;
   amountCents: number;
   cpfCnpj?: string;
+  /** Required for cash/external/pix_manual (see MissingIdempotencyKeyError); ignored for asaas_* (already deduped upstream). */
+  idempotencyKey?: string;
   changedBy: number;
 }
 
@@ -99,20 +140,45 @@ export async function registerPayment(db: Kysely<DB>, input: RegisterPaymentInpu
 
   // § 5.2 camino B: cash/external/pix_manual never touch Asaas — confirmed
   // in the act by the authority of the logged-in operator.
-  const row = await db
-    .insertInto('payments')
-    .values({
-      reservation_id: reservation.id,
-      kind: input.kind,
-      method: input.method,
-      amount_cents: input.amountCents,
-      status: 'received',
-      changed_by: input.changedBy,
-    })
-    .returning('id')
-    .executeTakeFirstOrThrow();
+  if (!input.idempotencyKey) throw new MissingIdempotencyKeyError();
+  const idempotencyKey = input.idempotencyKey;
+  const method = input.method as 'cash' | 'external' | 'pix_manual';
 
-  return { method: input.method as 'cash' | 'external' | 'pix_manual', paymentId: row.id, status: 'received' };
+  return db.transaction().execute(async (trx) => {
+    // Advisory lock (same reservationId, same mechanism as
+    // createOrReuseAsaasPayment) serializes concurrent requests for this
+    // reservation so the dedupe lookup below is reliable — without it, two
+    // near-simultaneous retries could both miss the SELECT before either has
+    // committed its INSERT.
+    await sql`SELECT pg_advisory_xact_lock(${reservation.id})`.execute(trx);
+
+    const existing = await trx
+      .selectFrom('payments')
+      .select('id')
+      .where('reservation_id', '=', reservation.id)
+      .where('idempotency_key', '=', idempotencyKey)
+      .executeTakeFirst();
+
+    if (existing) {
+      return { method, paymentId: existing.id, status: 'received' as const, replayed: true };
+    }
+
+    const row = await trx
+      .insertInto('payments')
+      .values({
+        reservation_id: reservation.id,
+        kind: input.kind,
+        method: input.method,
+        amount_cents: input.amountCents,
+        status: 'received',
+        changed_by: input.changedBy,
+        idempotency_key: idempotencyKey,
+      })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+
+    return { method, paymentId: row.id, status: 'received' as const, replayed: false };
+  });
 }
 
 export interface CheckInInput {
@@ -152,35 +218,58 @@ export interface CheckOutInput {
 }
 
 export async function checkOut(db: Kysely<DB>, input: CheckOutInput): Promise<void> {
-  const reservation = await db
-    .selectFrom('reservations')
-    .select(['id', 'status'])
-    .where('code', '=', input.code)
-    .executeTakeFirst();
+  await db.transaction().execute(async (trx) => {
+    // Same pattern as the webhook (confirmPendingReservation.ts): lock the
+    // reservation row first so a second concurrent check-out blocks here
+    // instead of reading a stale status/balance snapshot. Risk-review found
+    // that without this lock, two near-simultaneous check-out requests could
+    // both read balance_due_cents == 0 and both pass, silently letting the
+    // second overwrite checked_out_by/at — or worse, let one through after a
+    // concurrent payment/extra had already changed the real balance.
+    const reservation = await trx
+      .selectFrom('reservations')
+      .select(['id', 'status'])
+      .where('code', '=', input.code)
+      .forUpdate()
+      .executeTakeFirst();
 
-  if (!reservation) throw new ReservationNotFoundError();
+    if (!reservation) throw new ReservationNotFoundError();
 
-  // Precondición 1 (§ 6.2): throws for anything other than
-  // 'checked_in' -> 'checked_out'.
-  assertValidTransition(reservation.status as ReservationStatus, 'checked_out');
+    // Precondición 1 (§ 6.2): throws for anything other than
+    // 'checked_in' -> 'checked_out'.
+    assertValidTransition(reservation.status as ReservationStatus, 'checked_out');
 
-  // Precondición 2 (§ 6.2, DURA — no warning-y-procedo): balance_due_cents
-  // must be exactly 0. Checked AFTER the transition check so an invalid
-  // status always reports as a transition error, not a balance error.
-  const balance = await db
-    .selectFrom('reservation_balances')
-    .select('balance_due_cents')
-    .where('reservation_id', '=', reservation.id)
-    .executeTakeFirst();
+    // Precondición 2 (§ 6.2, DURA — no warning-y-procedo): balance_due_cents
+    // must be exactly 0. Checked AFTER the transition check so an invalid
+    // status always reports as a transition error, not a balance error. Read
+    // inside the same transaction, while the reservation row is locked, so
+    // this reflects the balance at the instant we're about to commit the
+    // transition — not a snapshot taken before some other writer landed.
+    const balance = await trx
+      .selectFrom('reservation_balances')
+      .select('balance_due_cents')
+      .where('reservation_id', '=', reservation.id)
+      .executeTakeFirst();
 
-  const balanceDueCents = Number(balance?.balance_due_cents ?? 0);
-  if (balanceDueCents > 0) throw new BalanceDueError(balanceDueCents);
+    const balanceDueCents = Number(balance?.balance_due_cents ?? 0);
+    if (balanceDueCents > 0) throw new BalanceDueError(balanceDueCents);
 
-  await db
-    .updateTable('reservations')
-    .set({ status: 'checked_out', checked_out_at: new Date(), checked_out_by: input.changedBy })
-    .where('id', '=', reservation.id)
-    .execute();
+    // Guarded by status in the WHERE clause (not just id) as a second,
+    // independent line of defense: even if the row lock above were ever
+    // weakened or bypassed, an update that matches zero rows here means
+    // someone else already moved this reservation out of 'checked_in', and
+    // that must surface as a 409, never a silent no-op success.
+    const result = await trx
+      .updateTable('reservations')
+      .set({ status: 'checked_out', checked_out_at: new Date(), checked_out_by: input.changedBy })
+      .where('id', '=', reservation.id)
+      .where('status', '=', 'checked_in')
+      .executeTakeFirst();
+
+    if (Number(result.numUpdatedRows) === 0) {
+      throw new InvalidReservationTransitionError('checked_in', 'checked_out');
+    }
+  });
 }
 
 export { InvalidReservationTransitionError };

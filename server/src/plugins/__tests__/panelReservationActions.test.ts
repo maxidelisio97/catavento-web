@@ -6,7 +6,7 @@ import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from '@fastify/type-provider-zod';
 import cookiePlugin from '@fastify/cookie';
 import { sql } from 'kysely';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { testDb } from '../../db/testClient.js';
 import { registerErrorHandler } from '../../errorHandler.js';
@@ -163,6 +163,30 @@ describe('POST /panel/reservations/:code/payment', () => {
     expect(response.json().error).toBe('RESERVATION_NOT_PAYABLE');
   });
 
+  it('409 when the reservation is pending_payment (unconfirmed web reservation, exposed to the lazy expiry sweep)', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId, status: 'pending_payment' });
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'deposit', method: 'cash', amount_cents: 5000 },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toBe('RESERVATION_NOT_PAYABLE');
+
+    const row = await testDb
+      .selectFrom('payments')
+      .selectAll()
+      .where('reservation_id', '=', reservation.id)
+      .executeTakeFirst();
+    expect(row).toBeUndefined();
+  });
+
   it('cash: records a received payment in the act, with changed_by set to the operator', async () => {
     const token = await insertSessionCookie();
     const roomId = await insertRoom();
@@ -173,7 +197,7 @@ describe('POST /panel/reservations/:code/payment', () => {
       method: 'POST',
       url: `/panel/reservations/${reservation.code}/payment`,
       cookies: { [SESSION_COOKIE_NAME]: token },
-      payload: { kind: 'balance', method: 'cash', amount_cents: 5000 },
+      payload: { kind: 'balance', method: 'cash', amount_cents: 5000, idempotency_key: randomUUID() },
     });
 
     expect(response.statusCode).toBe(201);
@@ -190,6 +214,95 @@ describe('POST /panel/reservations/:code/payment', () => {
     expect(row.amount_cents).toBe(5000);
     expect(row.asaas_payment_id).toBeNull();
     expect(row.changed_by).not.toBeNull();
+  });
+
+  it('cash: 400 IDEMPOTENCY_KEY_REQUIRED without idempotency_key, nothing inserted', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId });
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'balance', method: 'cash', amount_cents: 5000 },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toBe('IDEMPOTENCY_KEY_REQUIRED');
+
+    const row = await testDb
+      .selectFrom('payments')
+      .selectAll()
+      .where('reservation_id', '=', reservation.id)
+      .executeTakeFirst();
+    expect(row).toBeUndefined();
+  });
+
+  it('cash: resubmitting the same idempotency_key returns the SAME payment (200, not a new row) — the network-retry case', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId });
+    const app = buildApp();
+    const idempotencyKey = randomUUID();
+    const payload = { kind: 'balance' as const, method: 'cash' as const, amount_cents: 5000, idempotency_key: idempotencyKey };
+
+    const first = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload,
+    });
+    const second = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload,
+    });
+
+    expect(first.statusCode).toBe(201);
+    expect(second.statusCode).toBe(200);
+    expect(second.json()).toEqual(first.json());
+
+    const rows = await testDb
+      .selectFrom('payments')
+      .selectAll()
+      .where('reservation_id', '=', reservation.id)
+      .execute();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.amount_cents).toBe(5000);
+  });
+
+  it('cash: two DIFFERENT idempotency_key with the same amount/method are two real payments — legitimate identical installments are not merged', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId });
+    const app = buildApp();
+
+    const first = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'balance', method: 'cash', amount_cents: 5000, idempotency_key: randomUUID() },
+    });
+    const second = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'balance', method: 'cash', amount_cents: 5000, idempotency_key: randomUUID() },
+    });
+
+    expect(first.statusCode).toBe(201);
+    expect(second.statusCode).toBe(201);
+    expect(first.json().payment_id).not.toBe(second.json().payment_id);
+
+    const rows = await testDb
+      .selectFrom('payments')
+      .selectAll()
+      .where('reservation_id', '=', reservation.id)
+      .execute();
+    expect(rows).toHaveLength(2);
   });
 
   it('asaas_pix: 400 without cpf_cnpj, never calls Asaas', async () => {
@@ -369,6 +482,45 @@ describe('POST /panel/reservations/:code/check-out', () => {
       .executeTakeFirstOrThrow();
     expect(row.status).toBe('checked_out');
     expect(row.checked_out_at).not.toBeNull();
+    expect(row.checked_out_by).not.toBeNull();
+  });
+
+  it('two simultaneous check-outs on the same reservation: one wins (200), the other gets 409 — never both 200', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId, status: 'checked_in', totalCents: 20000 });
+    await insertPayment(reservation.id, 20000, 'received');
+    const app = buildApp();
+
+    const [first, second] = await Promise.all([
+      app.inject({
+        method: 'POST',
+        url: `/panel/reservations/${reservation.code}/check-out`,
+        cookies: { [SESSION_COOKIE_NAME]: token },
+      }),
+      app.inject({
+        method: 'POST',
+        url: `/panel/reservations/${reservation.code}/check-out`,
+        cookies: { [SESSION_COOKIE_NAME]: token },
+      }),
+    ]);
+
+    const statusCodes = [first.statusCode, second.statusCode].sort();
+    expect(statusCodes).toEqual([200, 409]);
+
+    const winner = first.statusCode === 200 ? first : second;
+    const loser = first.statusCode === 200 ? second : first;
+    expect(winner.json()).toEqual({ status: 'checked_out' });
+    expect(loser.json().error).toBe('INVALID_TRANSITION');
+
+    const row = await testDb
+      .selectFrom('reservations')
+      .select(['status', 'checked_out_by'])
+      .where('id', '=', reservation.id)
+      .executeTakeFirstOrThrow();
+    expect(row.status).toBe('checked_out');
+    // Exactly one write won — the audit column reflects a single actor, not
+    // whichever request happened to run last.
     expect(row.checked_out_by).not.toBeNull();
   });
 });
