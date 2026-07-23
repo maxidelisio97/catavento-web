@@ -81,6 +81,26 @@ hallazgo puede esperar.
 - Fin de semana = noches de viernes y sábado.
 - El precio de una reserva se congela al crearla.
 
+## Módulo 7A — schema real y máquina de estados
+
+### Schema real (nombres — no asumir de memoria)
+- payments.status: 'pending'|'received'|'failed'|'refunded'. "Pago
+  confirmado" = status='received' (NO 'confirmed', no existe).
+- payments.method: 'asaas_pix'|'asaas_card'|'cash'|'external'|'pix_manual'.
+- payments.kind: 'deposit'|'balance'|'extra'|'refund'.
+- reservations.status: 'pending_payment'|'confirmed'|'checked_in'|
+  'checked_out'|'cancelled'|'no_show'|'payment_conflict' (NO 'pending').
+
+### isReservationActive (no romper)
+- Debe contar checked_in Y checked_out como ACTIVOS. Si no, el barrido
+  perezoso borra las reservation_nights de un huésped con checkout hecho
+  — esas filas son registro histórico (M7 §6.2). Bug encontrado y
+  corregido en 7A; no "optimizar" esta función sin releer esto.
+
+### Migraciones sobre base de test
+- npm run migrate:up:test aplica migraciones contra catavento_db_test
+  (scripts/migrateTestDb.ts). Usar eso, no tocar .env a mano.
+
 ## Módulo 6A — asignación de unidad por noche (reservation_nights)
 - La asignación de unidad física es por noche (`reservation_nights`), no
   por reserva. Una reserva activa SIEMPRE tiene exactamente una fila por
@@ -122,6 +142,26 @@ hallazgo puede esperar.
   rediseño del panel como app queda para después del M7/M8, cuando
   las acciones reales estén definidas. No invertir en pulido visual
   del panel mobile hasta entonces.
+
+## Deuda conocida
+
+Decisiones de alcance tomadas al cerrar `fix-public-payment-method-500`,
+anotadas para no repetir la investigación ni reabrirlas sin pedirlo.
+
+- **ConfirmationStep decide `awaitingCard` mirando solo `payment?.method`,
+  nunca `payment_status`.** Si un payment con method desconocido (fail-soft
+  del backend) o `cash/external/pix_manual` quedara en `status='pending'`,
+  el huésped vería el form de pago de nuevo; si lo reenvía,
+  `createOrReusePayment` marca el pago existente como `'failed'` y crea uno
+  nuevo — pisando un registro que el staff pudo haber cargado. Hoy no
+  debería pasar (es convención de aplicación, no constraint de DB). No
+  tocar en un fix urgente — requiere decidir la fuente de verdad correcta
+  para `awaitingCard` (probablemente `payment_status`, no `payment.method`).
+- **`apiFetch` (`src/lib/api.ts`) no tiene timeout/`AbortController`.** Un
+  502/504 explícito cae bien en `ApiError`, pero una conexión colgada sin
+  respuesta deja el `fetch()` sin resolver nunca — el huésped queda en el
+  estado de carga para siempre, sin ver el aviso de reintento/WhatsApp.
+  Fix propio pendiente: agregar timeout con `AbortController`.
 
 ## Flujo de ramas
 Ver CLAUDE.md raíz — regla de todo el repo, no solo del backend.

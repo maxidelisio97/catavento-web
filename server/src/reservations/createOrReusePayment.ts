@@ -21,6 +21,19 @@ import { config } from '../config.js';
 
 export type PaymentMethod = 'pix' | 'card';
 
+// SPEC-modulo-7-gestion-operativa.md § 5.1: `payments.method` was widened
+// from ('pix','card') to also cover manually-registered payments
+// ('cash','external','pix_manual'). The Asaas-originated values were
+// prefixed ('pix' -> 'asaas_pix', 'card' -> 'asaas_card') so the column
+// still tells "how it was collected", not just "which Asaas billing type".
+// This module's public `PaymentMethod` stays 'pix'|'card' (that's what the
+// Asaas API and the public reservation flow speak) — only the DB write uses
+// the prefixed form.
+const DB_METHOD: Record<PaymentMethod, 'asaas_pix' | 'asaas_card'> = {
+  pix: 'asaas_pix',
+  card: 'asaas_card',
+};
+
 export interface CreateOrReusePaymentInput {
   reservationId: number;
   code: string;
@@ -94,7 +107,7 @@ export async function createOrReusePayment(db: Kysely<DB>, input: CreateOrReuseP
       const remote = await getPayment(existing.asaas_payment_id);
 
       if (remote.status === 'PENDING' || remote.status === 'AWAITING_RISK_ANALYSIS') {
-        if (existing.method === input.method) {
+        if (existing.method === DB_METHOD[input.method]) {
           return buildDetails(input.method, remote);
         }
         // Guest switched method while the old charge is still live in Asaas.
@@ -151,7 +164,7 @@ export async function createOrReusePayment(db: Kysely<DB>, input: CreateOrReuseP
       .values({
         reservation_id: input.reservationId,
         asaas_payment_id: payment.id,
-        method: input.method,
+        method: DB_METHOD[input.method],
         amount_cents: input.depositCents,
         status: 'pending',
       })

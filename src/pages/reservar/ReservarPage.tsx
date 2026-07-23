@@ -13,7 +13,8 @@ import DatesStep, { type DatesStepInitial } from "./DatesStep";
 import ResultsStep from "./ResultsStep";
 import GuestDataStep from "./GuestDataStep";
 import ConfirmationStep from "./ConfirmationStep";
-import { fetchReservationByCode, type AvailabilityRoom, type ReservationResponse } from "../../lib/api";
+import { ApiError, fetchReservationByCode, type AvailabilityRoom, type ReservationResponse } from "../../lib/api";
+import { WHATSAPP_URL } from "../../config/site";
 
 interface PartyFields {
   guests: number;
@@ -27,7 +28,13 @@ type Step =
   | { name: "dates"; initial?: DatesStepInitial }
   | ({ name: "results"; checkIn: string; checkOut: string } & PartyFields)
   | ({ name: "guest"; checkIn: string; checkOut: string; room: AvailabilityRoom } & PartyFields)
-  | { name: "confirmation"; reservation: ReservationResponse };
+  | { name: "confirmation"; reservation: ReservationResponse }
+  // Distinct from a genuine 404: this is "we don't know if your reservation
+  // exists" (network blip, backend error), NOT "your reservation doesn't
+  // exist" — conflating the two here previously sent guests who had just
+  // paid back to a blank search after their confirmation page failed to
+  // load (see server/CLAUDE.md "Deuda conocida").
+  | { name: "code-lookup-failed"; code: string };
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -74,25 +81,35 @@ export default function ReservarPage() {
     return { name: "dates", initial: initialFromUrl };
   });
 
+  // retryCount only exists to give the "Tentar novamente" button a way to
+  // re-run this effect without duplicating the fetch call inline.
+  const [retryCount, setRetryCount] = useState(0);
+
   useEffect(() => {
     if (!codeFromUrl) return;
     let cancelled = false;
+    setStep({ name: "loading" });
     fetchReservationByCode(codeFromUrl)
       .then((reservation) => {
         if (!cancelled) setStep({ name: "confirmation", reservation });
       })
-      .catch(() => {
-        if (!cancelled) {
+      .catch((err) => {
+        if (cancelled) return;
+        if (err instanceof ApiError && err.status === 404) {
           setStep({
             name: "dates",
             initial: { errorMessage: "Não encontramos essa reserva. Faça uma nova busca." },
           });
+        } else {
+          // Anything else (5xx, network) means we genuinely don't know the
+          // reservation's status — never claim "not found" for that.
+          setStep({ name: "code-lookup-failed", code: codeFromUrl });
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [codeFromUrl]);
+  }, [codeFromUrl, retryCount]);
 
   return (
     <div className="min-h-screen bg-sand-50 flex flex-col">
@@ -192,6 +209,32 @@ export default function ReservarPage() {
             reservation={step.reservation}
             onRestart={(initial) => setStep({ name: "dates", initial })}
           />
+        )}
+
+        {step.name === "code-lookup-failed" && (
+          <div className="w-full max-w-md mx-auto text-center space-y-4 pt-16">
+            <p className="font-body text-sm text-warm-800/70">
+              Não conseguimos carregar sua reserva agora. Se você acabou de pagar, o pagamento pode ter sido
+              registrado mesmo assim — antes de tentar pagar de novo, atualize esta página em alguns instantes ou
+              fale com a pousada pelo WhatsApp informando o código{" "}
+              <span className="font-semibold text-warm-900">{step.code}</span>.
+            </p>
+            <button
+              type="button"
+              onClick={() => setRetryCount((c) => c + 1)}
+              className="w-full h-12 rounded-xl bg-coral-600 hover:bg-coral-500 text-white font-body font-semibold transition-colors active:scale-[0.98]"
+            >
+              Tentar novamente
+            </button>
+            <a
+              href={WHATSAPP_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="block font-body text-sm text-coral-600 hover:underline"
+            >
+              Falar com a pousada pelo WhatsApp
+            </a>
+          </div>
         )}
       </main>
     </div>
