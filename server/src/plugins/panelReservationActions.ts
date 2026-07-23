@@ -15,6 +15,7 @@ import {
   ReservationNotPayableError,
   MissingCpfCnpjError,
   MissingIdempotencyKeyError,
+  IdempotencyKeyReusedError,
   BalanceDueError,
   InvalidReservationTransitionError,
   type RegisterPaymentResult,
@@ -133,6 +134,7 @@ const panelReservationActionsPlugin: FastifyPluginAsync<PanelReservationActionsP
           if (err instanceof ReservationNotPayableError) throw httpError(409, 'RESERVATION_NOT_PAYABLE');
           if (err instanceof MissingCpfCnpjError) throw httpError(400, 'CPF_CNPJ_REQUIRED');
           if (err instanceof MissingIdempotencyKeyError) throw httpError(400, 'IDEMPOTENCY_KEY_REQUIRED');
+          if (err instanceof IdempotencyKeyReusedError) throw httpError(409, 'IDEMPOTENCY_KEY_REUSED');
           if (err instanceof PaymentAlreadyReceivedError) throw httpError(409, 'PAYMENT_ALREADY_RECEIVED');
           if (err instanceof AsaasApiError) {
             // Keep the real Asaas error out of the client response (it can

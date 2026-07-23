@@ -45,6 +45,10 @@ es punto de partida.
   Criterio: "¿una sesión nueva sin este dato repetiría un error o
   reabriría una decisión?" Si no, no es regla.
 - Sesiones separadas por tema para no inflar contexto.
+- **Archivos nuevos:** `git add` apenas se crean, aunque no se
+  commiteen. Un archivo untracked no sobrevive a un `git stash` (sin
+  `-u`) ni a un `git checkout`. Pasó dos veces en 7B: el plugin de
+  acciones del panel y la migración de `idempotency_key`.
 
 ## Reglas de seguridad (no negociables)
 - `server/.env` está en .gitignore y NUNCA se commitea. Ninguna
@@ -160,6 +164,26 @@ Ver CLAUDE.md raíz — regla de todo el repo, no solo del backend.
   automatizados (mismo Postgres del VPS, mismo usuario `catavento_app`).
   Migraciones y seed de datos reales van SIEMPRE contra `catavento_db`.
   Ningún test debe conectarse a `catavento_db`.
+
+### Tests de concurrencia
+- Todo fix de concurrencia (lock, FOR UPDATE, idempotencia) necesita un
+  test que corra las operaciones en paralelo real (Promise.all), no
+  secuencial. Verificación obligatoria: sacar el lock del código y
+  confirmar que el test FALLA. Si pasa igual sin el lock, el test no
+  prueba nada. Pasó en 7B con la idempotencia de pago manual.
+- **Un `Promise.all` desnudo puede no alcanzar.** En Postgres local
+  (mismo host que los tests) los round-trips son tan rápidos que dos
+  requests "concurrentes" suelen terminar sirializándose solas antes
+  de pisarse — el `Promise.all` para el lock de idempotencia de 7B
+  pasó 8/8 veces incluso con el lock sacado del código. Si al hacer la
+  verificación de arriba el test NO falla sacando el lock, no asumir
+  que el fix está mal: puede ser que el test no esté forzando la
+  carrera. Solución usada en 7B: un plugin de Kysely de solo-test que
+  agrega una demora (~120ms) después de cada resultado de query, para
+  ensanchar la ventana entre el SELECT de dedupe y el INSERT y
+  garantizar el solape — sin tocar el código de producción. Repetir
+  la verificación (sacar lock → falla, restaurar lock → pasa) contra
+  ESE test, no contra el `Promise.all` desnudo.
 
 ## Deuda conocida
 - **ConfirmationStep decide `awaitingCard` mirando solo `payment?.method`,

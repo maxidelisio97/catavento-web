@@ -5,13 +5,35 @@
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from '@fastify/type-provider-zod';
 import cookiePlugin from '@fastify/cookie';
-import { sql } from 'kysely';
+import {
+  Kysely,
+  PostgresDialect,
+  sql,
+  type KyselyPlugin,
+  type PluginTransformQueryArgs,
+  type PluginTransformResultArgs,
+} from 'kysely';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { testDb } from '../../db/testClient.js';
+import { testDb, testPool } from '../../db/testClient.js';
+import type { DB } from '../../db/types.js';
 import { registerErrorHandler } from '../../errorHandler.js';
 import { hashPassword } from '../../auth/hashPassword.js';
 import { SESSION_COOKIE_NAME } from '../../auth/cookie.js';
+
+// Test-only Kysely plugin that inserts an artificial delay after every query
+// result comes back. Used by exactly one test to force a genuine race
+// between two concurrent requests' SELECT+INSERT round trips — see that
+// test's comment for why a bare Promise.all isn't reliable enough on its own.
+class ArtificialRaceWindowPlugin implements KyselyPlugin {
+  transformQuery(args: PluginTransformQueryArgs) {
+    return args.node;
+  }
+  async transformResult(args: PluginTransformResultArgs) {
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    return args.result;
+  }
+}
 
 const createCustomer = vi.fn();
 const createPayment = vi.fn();
@@ -31,12 +53,12 @@ vi.mock('../../asaasClient.js', async (importOriginal) => {
 
 const { default: panelReservationActionsPlugin } = await import('../panelReservationActions.js');
 
-function buildApp() {
+function buildApp(db: Kysely<DB> = testDb) {
   const app = Fastify().withTypeProvider<ZodTypeProvider>();
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   app.register(cookiePlugin);
-  app.register(panelReservationActionsPlugin, { db: testDb });
+  app.register(panelReservationActionsPlugin, { db });
   registerErrorHandler(app);
   return app;
 }
@@ -240,7 +262,118 @@ describe('POST /panel/reservations/:code/payment', () => {
     expect(row).toBeUndefined();
   });
 
-  it('cash: resubmitting the same idempotency_key returns the SAME payment (200, not a new row) — the network-retry case', async () => {
+  // Second risk-review finding: a SEQUENTIAL pair of requests (await one,
+  // then await the other) fully serializes on its own via the JS event loop
+  // — the first request's transaction always commits before the second one's
+  // queries even start. That proves the dedupe SELECT works, but proves
+  // NOTHING about the advisory lock, since a sequential test passes exactly
+  // the same with or without it.
+  //
+  // Keep this concurrent (Promise.all) — do not "simplify" it back to two
+  // sequential awaits, that silently deletes the coverage. That said: this
+  // Promise.all alone is a SMOKE test, not a proof. Verified by hand (ran it
+  // 8x with `pg_advisory_xact_lock` removed from registerPayment): on fast
+  // localhost Postgres, both requests' SELECT+INSERT round trips consistently
+  // completed fully serialized "by luck" every single time — the interleaving
+  // this lock guards against never naturally occurred, so this test alone
+  // passed 8/8 even with the lock gone. The deterministic proof is the next
+  // test below, which forces the exact interleaving by hand instead of hoping
+  // for it. Both tests stay: this one is what a real double-submit looks like
+  // over HTTP; the next one is what actually catches a regression.
+  it('cash: two truly concurrent requests with the SAME idempotency_key never both insert — the network-retry case, raced for real', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId });
+    const app = buildApp();
+    const idempotencyKey = randomUUID();
+    const payload = { kind: 'balance' as const, method: 'cash' as const, amount_cents: 5000, idempotency_key: idempotencyKey };
+
+    const [first, second] = await Promise.all([
+      app.inject({
+        method: 'POST',
+        url: `/panel/reservations/${reservation.code}/payment`,
+        cookies: { [SESSION_COOKIE_NAME]: token },
+        payload,
+      }),
+      app.inject({
+        method: 'POST',
+        url: `/panel/reservations/${reservation.code}/payment`,
+        cookies: { [SESSION_COOKIE_NAME]: token },
+        payload,
+      }),
+    ]);
+
+    const statusCodes = [first.statusCode, second.statusCode].sort();
+    expect(statusCodes).toEqual([200, 201]);
+
+    const winner = first.statusCode === 201 ? first : second;
+    const loser = first.statusCode === 201 ? second : first;
+    expect(loser.json()).toEqual(winner.json());
+
+    const rows = await testDb
+      .selectFrom('payments')
+      .selectAll()
+      .where('reservation_id', '=', reservation.id)
+      .execute();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.amount_cents).toBe(5000);
+  });
+
+  // DETERMINISTIC version of the race above, through the REAL registerPayment
+  // code path (not a hand-rolled reimplementation of it). A plain Promise.all
+  // over HTTP is a coin flip on fast localhost Postgres — both requests'
+  // SELECT+INSERT round trips tend to complete fully serialized "by luck"
+  // before the interleaving the lock guards against ever occurs (verified: 8
+  // consecutive runs of the test above, with the lock removed, all passed).
+  // To force the actual race deterministically, this test runs the request
+  // through a second app instance whose db client has an artificial delay
+  // injected after every query result — wide enough (120ms) that two
+  // concurrent requests are guaranteed to both pass the dedupe SELECT before
+  // either has committed its INSERT, every single run. This still goes
+  // through the real HTTP handler and the real registerPayment function —
+  // only the timing is forced, not the logic.
+  it('DETERMINISTIC: with the dedupe window artificially widened, two concurrent requests with the SAME key still never both insert', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId });
+    const delayedDb = new Kysely<DB>({
+      dialect: new PostgresDialect({ pool: testPool }),
+      plugins: [new ArtificialRaceWindowPlugin()],
+    });
+    const app = buildApp(delayedDb);
+    const idempotencyKey = randomUUID();
+    const payload = { kind: 'balance' as const, method: 'cash' as const, amount_cents: 5000, idempotency_key: idempotencyKey };
+
+    const [first, second] = await Promise.all([
+      app.inject({
+        method: 'POST',
+        url: `/panel/reservations/${reservation.code}/payment`,
+        cookies: { [SESSION_COOKIE_NAME]: token },
+        payload,
+      }),
+      app.inject({
+        method: 'POST',
+        url: `/panel/reservations/${reservation.code}/payment`,
+        cookies: { [SESSION_COOKIE_NAME]: token },
+        payload,
+      }),
+    ]);
+
+    // Both requests must resolve gracefully (200 replay + 201 original) —
+    // never a raw 500 from an unhandled unique-constraint violation, and
+    // never two 201s.
+    const statusCodes = [first.statusCode, second.statusCode].sort();
+    expect(statusCodes).toEqual([200, 201]);
+
+    const rows = await testDb
+      .selectFrom('payments')
+      .selectAll()
+      .where('reservation_id', '=', reservation.id)
+      .execute();
+    expect(rows).toHaveLength(1);
+  });
+
+  it('cash: replaying the same idempotency_key with the SAME kind/method/amount_cents returns the existing payment (200)', async () => {
     const token = await insertSessionCookie();
     const roomId = await insertRoom();
     const reservation = await insertReservation({ roomId });
@@ -272,6 +405,71 @@ describe('POST /panel/reservations/:code/payment', () => {
       .execute();
     expect(rows).toHaveLength(1);
     expect(rows[0]!.amount_cents).toBe(5000);
+  });
+
+  it('cash: reusing the same idempotency_key with a DIFFERENT amount_cents is 409 IDEMPOTENCY_KEY_REUSED, nothing inserted', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId });
+    const app = buildApp();
+    const idempotencyKey = randomUUID();
+
+    const first = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'balance', method: 'cash', amount_cents: 5000, idempotency_key: idempotencyKey },
+    });
+    const second = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'balance', method: 'cash', amount_cents: 7500, idempotency_key: idempotencyKey },
+    });
+
+    expect(first.statusCode).toBe(201);
+    expect(second.statusCode).toBe(409);
+    expect(second.json().error).toBe('IDEMPOTENCY_KEY_REUSED');
+
+    const rows = await testDb
+      .selectFrom('payments')
+      .selectAll()
+      .where('reservation_id', '=', reservation.id)
+      .execute();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.amount_cents).toBe(5000);
+  });
+
+  it('cash: reusing the same idempotency_key with a DIFFERENT kind is 409 IDEMPOTENCY_KEY_REUSED, nothing inserted', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId });
+    const app = buildApp();
+    const idempotencyKey = randomUUID();
+
+    const first = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'balance', method: 'cash', amount_cents: 5000, idempotency_key: idempotencyKey },
+    });
+    const second = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'extra', method: 'cash', amount_cents: 5000, idempotency_key: idempotencyKey },
+    });
+
+    expect(first.statusCode).toBe(201);
+    expect(second.statusCode).toBe(409);
+    expect(second.json().error).toBe('IDEMPOTENCY_KEY_REUSED');
+
+    const rows = await testDb
+      .selectFrom('payments')
+      .selectAll()
+      .where('reservation_id', '=', reservation.id)
+      .execute();
+    expect(rows).toHaveLength(1);
   });
 
   it('cash: two DIFFERENT idempotency_key with the same amount/method are two real payments — legitimate identical installments are not merged', async () => {

@@ -88,6 +88,21 @@ export class MissingIdempotencyKeyError extends Error {
   }
 }
 
+// Second risk-review finding on the fix above: the replay lookup matched
+// only on (reservation_id, idempotency_key), so a key accidentally reused
+// for a DIFFERENT payment (e.g. the operator edits the amount and resubmits
+// after a hung request, without closing/reopening the form to mint a fresh
+// key) silently returned the OLD payment as if the new one had been
+// recorded — 200, no error, wrong amount on the ledger. A replay is only
+// safe to treat as "the same intent" if kind/method/amount_cents match the
+// original; if they don't, this is a genuinely different payment wearing a
+// stale key, and must be rejected rather than silently substituted.
+export class IdempotencyKeyReusedError extends Error {
+  constructor() {
+    super('idempotency_key was already used for a different payment (kind/method/amount_cents mismatch)');
+  }
+}
+
 export interface ManualPaymentResult {
   method: 'cash' | 'external' | 'pix_manual';
   paymentId: number;
@@ -154,12 +169,15 @@ export async function registerPayment(db: Kysely<DB>, input: RegisterPaymentInpu
 
     const existing = await trx
       .selectFrom('payments')
-      .select('id')
+      .select(['id', 'kind', 'method', 'amount_cents'])
       .where('reservation_id', '=', reservation.id)
       .where('idempotency_key', '=', idempotencyKey)
       .executeTakeFirst();
 
     if (existing) {
+      const sameIntent =
+        existing.kind === input.kind && existing.method === input.method && existing.amount_cents === input.amountCents;
+      if (!sameIntent) throw new IdempotencyKeyReusedError();
       return { method, paymentId: existing.id, status: 'received' as const, replayed: true };
     }
 
