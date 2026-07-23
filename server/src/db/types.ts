@@ -27,7 +27,8 @@ export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
 export interface Payments {
   amount_cents: number;
-  asaas_payment_id: string;
+  asaas_payment_id: string | null;
+  changed_by: number | null;
   created_at: Generated<Timestamp>;
   id: Generated<number>;
   kind: Generated<string>;

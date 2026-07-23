@@ -143,26 +143,6 @@ hallazgo puede esperar.
   las acciones reales estén definidas. No invertir en pulido visual
   del panel mobile hasta entonces.
 
-## Deuda conocida
-
-Decisiones de alcance tomadas al cerrar `fix-public-payment-method-500`,
-anotadas para no repetir la investigación ni reabrirlas sin pedirlo.
-
-- **ConfirmationStep decide `awaitingCard` mirando solo `payment?.method`,
-  nunca `payment_status`.** Si un payment con method desconocido (fail-soft
-  del backend) o `cash/external/pix_manual` quedara en `status='pending'`,
-  el huésped vería el form de pago de nuevo; si lo reenvía,
-  `createOrReusePayment` marca el pago existente como `'failed'` y crea uno
-  nuevo — pisando un registro que el staff pudo haber cargado. Hoy no
-  debería pasar (es convención de aplicación, no constraint de DB). No
-  tocar en un fix urgente — requiere decidir la fuente de verdad correcta
-  para `awaitingCard` (probablemente `payment_status`, no `payment.method`).
-- **`apiFetch` (`src/lib/api.ts`) no tiene timeout/`AbortController`.** Un
-  502/504 explícito cae bien en `ApiError`, pero una conexión colgada sin
-  respuesta deja el `fetch()` sin resolver nunca — el huésped queda en el
-  estado de carga para siempre, sin ver el aviso de reintento/WhatsApp.
-  Fix propio pendiente: agregar timeout con `AbortController`.
-
 ## Flujo de ramas
 Ver CLAUDE.md raíz — regla de todo el repo, no solo del backend.
 
@@ -180,6 +160,69 @@ Ver CLAUDE.md raíz — regla de todo el repo, no solo del backend.
   automatizados (mismo Postgres del VPS, mismo usuario `catavento_app`).
   Migraciones y seed de datos reales van SIEMPRE contra `catavento_db`.
   Ningún test debe conectarse a `catavento_db`.
+
+## Deuda conocida
+- **ConfirmationStep decide `awaitingCard` mirando solo `payment?.method`,
+  nunca `payment_status`.** Si un payment con method desconocido (fail-soft
+  del backend) o `cash/external/pix_manual` quedara en `status='pending'`,
+  el huésped vería el form de pago de nuevo; si lo reenvía,
+  `createOrReuseAsaasPayment` marca el pago existente como `'failed'` y crea
+  uno nuevo — pisando un registro que el staff pudo haber cargado. Hoy no
+  debería pasar (es convención de aplicación, no constraint de DB). No
+  tocar en un fix urgente — requiere decidir la fuente de verdad correcta
+  para `awaitingCard` (probablemente `payment_status`, no `payment.method`).
+  Encontrado al cerrar `fix-public-payment-method-500`.
+- **`apiFetch` (`src/lib/api.ts`) no tiene timeout/`AbortController`.** Un
+  502/504 explícito cae bien en `ApiError`, pero una conexión colgada sin
+  respuesta deja el `fetch()` sin resolver nunca — el huésped queda en el
+  estado de carga para siempre, sin ver el aviso de reintento/WhatsApp.
+  Fix propio pendiente: agregar timeout con `AbortController`. Encontrado al
+  cerrar `fix-public-payment-method-500`.
+- `createOrReusePayment` (rama "Asaas ya tiene el pago recibido"): el
+  UPDATE que marca el pago local `received` corre en la misma
+  transacción que el `throw PaymentAlreadyReceivedError` inmediatamente
+  después — Kysely revierte ese UPDATE junto con todo lo demás antes de
+  relanzar el error. El pago local queda en `pending` aunque Asaas ya
+  tenga la plata. Hoy es inofensivo porque el webhook es la vía real de
+  confirmación, no este UPDATE. Encontrado durante 7B (bug preexistente
+  de M4) vía test de caracterización (`createOrReusePayment.test.ts`)
+  antes de generalizar la función para pagos de saldo. Fix pendiente
+  como cambio propio, con su test y su revisión de riesgo — no mezclar
+  con otro módulo.
+
+- **[GRAVE, rompe el flujo público en producción — arreglado en rama
+  propia, no en 7B]** `GET /api/reservations/:code` devolvía 500 crudo
+  (`{"error":"internal_error"}`) para cualquier reserva con un pago Asaas
+  activo — confirmado empíricamente, no teórico. Causa raíz: la migración
+  `add-payment-kind-and-broaden-method` (7A) prefijó `payments.method` de
+  `'pix'/'card'` a `'asaas_pix'/'asaas_card'`, pero
+  `src/plugins/reservations.ts` seguía leyendo el valor crudo de la DB y
+  casteándolo `as 'pix' | 'card'` (mentira al compilador) para un response
+  schema que exigía `z.enum(['pix','card'])` — el serializer de Zod
+  reventaba al armar la respuesta. Mismo bug de raíz que la nota anterior
+  (`createOrReusePayment`): el prefijo de 7A no se propagó a todos los call
+  sites que comparaban `method` contra el literal viejo (grep hecho en 7B:
+  este era el único otro caso real). Impacto confirmado en el flujo
+  público: `ConfirmationStep.tsx` hacía polling cada 5s con este endpoint
+  mientras el pago estaba en curso, y el catch trataba el 500 como falla
+  transitoria — nunca detectaba la confirmación sola. Peor: el callback de
+  Asaas tras pagar con tarjeta redirige a `/reservar?code=XXXX`, y
+  `ReservarPage.tsx` interpretaba cualquier error de ese fetch como
+  "reserva no encontrada" — un huésped que acababa de pagar con tarjeta
+  podía ver "não encontramos essa reserva". Encontrado durante 7B (bug
+  preexistente de M4/7A), pero por tocar plata de cara al huésped en
+  producción no esperó a que 7B terminara: se sacó a su propia rama,
+  con su propia mini risk-review, antes de retomar 7B.
+
+- `npm run codegen` (kysely-codegen) apunta a producción por default vía
+  `.env`/`DATABASE_URL`, no a `catavento_db_test`. Si se corre después de
+  aplicar una migración solo con `migrate:up:test` (el flujo normal de
+  desarrollo, antes de aplicarla también en producción), regenera
+  `src/db/types.ts` reflejando el schema VIEJO de producción y borra del
+  archivo checkeado las columnas/vistas que ya existen en
+  `catavento_db_test` pero no en producción todavía — pasó en 7B. Para
+  regenerar tipos durante desarrollo, usar explícitamente:
+  `npx kysely-codegen --url 'env(TEST_DATABASE_URL)' --out-file src/db/types.ts`.
 
 ## Plan de módulos (orden; se puede parar en cualquier punto)
 1. Cuartos y tarifas (spec: SPEC-modulo-1-cuartos-y-tarifas.md)

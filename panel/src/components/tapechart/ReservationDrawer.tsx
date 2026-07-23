@@ -1,10 +1,21 @@
 import { useEffect, useState } from "react";
 import { getReservationDetail, type ReservationDetail } from "../../api/tapeChart";
+import {
+  checkIn,
+  checkOut,
+  registerPayment,
+  type PanelPaymentKind,
+  type PanelPaymentMethod,
+  type RegisterPaymentResult,
+} from "../../api/reservationActions";
+import { ApiError } from "../../api/client";
 import { formatDateDisplay, formatMoneyCents } from "../../lib/dateUtils";
 
 interface ReservationDrawerProps {
   reservationId: number;
   onClose: () => void;
+  /** Called after check-in/check-out/payment succeeds, so the tape chart behind can refresh. */
+  onChanged?: () => void;
 }
 
 const ORIGIN_LABELS: Record<string, string> = { web: "Site", manual: "Manual", ota: "OTA" };
@@ -13,6 +24,22 @@ const STATUS_LABELS: Record<string, string> = {
   confirmed: "Confirmada",
   cancelled: "Cancelada",
   payment_conflict: "Conflito de pagamento",
+  checked_in: "Check-in feito",
+  checked_out: "Check-out feito",
+  no_show: "No-show",
+};
+
+// SPEC-modulo-7-gestion-operativa.md § 5 — states with no outgoing
+// transition that could ever need a new payment (mirrors the backend's
+// NOT_PAYABLE_STATUSES in panel/reservationActions.ts).
+const NOT_PAYABLE_STATUSES = new Set(["cancelled", "no_show", "checked_out", "payment_conflict"]);
+
+const PAYMENT_METHOD_LABELS: Record<PanelPaymentMethod, string> = {
+  asaas_pix: "PIX (Asaas)",
+  asaas_card: "Cartão (Asaas)",
+  cash: "Dinheiro",
+  external: "Transferência",
+  pix_manual: "PIX direto",
 };
 
 function whatsappHref(phone: string): string {
@@ -20,11 +47,21 @@ function whatsappHref(phone: string): string {
   return `https://wa.me/${digits}`;
 }
 
-export default function ReservationDrawer({ reservationId, onClose }: ReservationDrawerProps) {
+export default function ReservationDrawer({ reservationId, onClose, onChanged }: ReservationDrawerProps) {
   const [detail, setDetail] = useState<ReservationDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [entered, setEntered] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [version, setVersion] = useState(0);
+
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [showPaymentForm, setShowPaymentForm] = useState(false);
+  const [paymentKind, setPaymentKind] = useState<PanelPaymentKind>("balance");
+  const [paymentMethod, setPaymentMethod] = useState<PanelPaymentMethod>("cash");
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const [paymentCpf, setPaymentCpf] = useState("");
+  const [paymentResult, setPaymentResult] = useState<RegisterPaymentResult | null>(null);
 
   useEffect(() => {
     const raf = requestAnimationFrame(() => setEntered(true));
@@ -45,7 +82,84 @@ export default function ReservationDrawer({ reservationId, onClose }: Reservatio
     return () => {
       cancelled = true;
     };
-  }, [reservationId]);
+  }, [reservationId, version]);
+
+  function reload() {
+    setVersion((v) => v + 1);
+    onChanged?.();
+  }
+
+  async function handleCheckIn() {
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      await checkIn(detail!.code!);
+      reload();
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : "Não foi possível fazer o check-in.");
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function handleCheckOut() {
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      await checkOut(detail!.code!);
+      reload();
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : "Não foi possível fazer o check-out.");
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function handleRegisterPayment(e: React.FormEvent) {
+    e.preventDefault();
+    const amountCents = Math.round(Number(paymentAmount.replace(",", ".")) * 100);
+    if (!Number.isFinite(amountCents) || amountCents <= 0) {
+      setActionError("Informe um valor válido.");
+      return;
+    }
+    const isAsaas = paymentMethod === "asaas_pix" || paymentMethod === "asaas_card";
+    if (isAsaas && paymentCpf.trim().length < 11) {
+      setActionError("CPF/CNPJ é obrigatório para pagamento via Asaas.");
+      return;
+    }
+
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      const result = await registerPayment(detail!.code!, {
+        kind: paymentKind,
+        method: paymentMethod,
+        amount_cents: amountCents,
+        cpf_cnpj: isAsaas ? paymentCpf.trim() : undefined,
+      });
+      setPaymentResult(result);
+      if (result.method !== "pix" && result.method !== "card") {
+        // Manual payment: already 'received', nothing more for the operator
+        // to do — refresh the balance right away.
+        reload();
+      }
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : "Não foi possível registrar o pagamento.");
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  function closePaymentForm() {
+    setShowPaymentForm(false);
+    setPaymentResult(null);
+    setPaymentAmount("");
+    setPaymentCpf("");
+    setActionError(null);
+    // A pix/card charge only settles later via webhook — reload now so the
+    // ficha shows the fresh 'pending' payment even before it's received.
+    reload();
+  }
 
   // SPEC § 6C.4: cierra con Escape, con clic fuera y con botón explícito.
   useEffect(() => {
@@ -154,6 +268,174 @@ export default function ReservationDrawer({ reservationId, onClose }: Reservatio
                   {formatMoneyCents(detail.money.balance_cents)}
                 </dd>
               </dl>
+            </section>
+
+            <section className="text-sm flex flex-col gap-2">
+              <p className="text-panel-500">Ações</p>
+
+              {actionError && (
+                <p role="alert" className="text-xs text-red-600">
+                  {actionError}
+                </p>
+              )}
+
+              <div className="flex flex-wrap gap-2">
+                {detail.status === "confirmed" && (
+                  <button
+                    type="button"
+                    onClick={handleCheckIn}
+                    disabled={actionBusy}
+                    className="rounded border border-panel-300 px-3 py-1.5 text-xs font-medium text-panel-900 hover:bg-panel-100 disabled:opacity-50"
+                  >
+                    Check-in
+                  </button>
+                )}
+
+                {detail.status === "checked_in" && (
+                  <button
+                    type="button"
+                    onClick={handleCheckOut}
+                    disabled={actionBusy || detail.money.balance_cents > 0}
+                    title={
+                      detail.money.balance_cents > 0
+                        ? `Falta cobrar ${formatMoneyCents(detail.money.balance_cents)} — registre o pagamento para poder fechar`
+                        : undefined
+                    }
+                    className="rounded border border-panel-300 px-3 py-1.5 text-xs font-medium text-panel-900 hover:bg-panel-100 disabled:opacity-50"
+                  >
+                    Check-out
+                  </button>
+                )}
+                {detail.status === "checked_in" && detail.money.balance_cents > 0 && (
+                  <p className="w-full text-xs text-amber-700">
+                    Falta cobrar {formatMoneyCents(detail.money.balance_cents)} para poder fechar o check-out.
+                  </p>
+                )}
+
+                {!NOT_PAYABLE_STATUSES.has(detail.status) && (
+                  <button
+                    type="button"
+                    onClick={() => setShowPaymentForm((v) => !v)}
+                    className="rounded border border-panel-300 px-3 py-1.5 text-xs font-medium text-panel-900 hover:bg-panel-100"
+                  >
+                    Registrar pagamento
+                  </button>
+                )}
+              </div>
+
+              {showPaymentForm && (
+                <div className="rounded border border-panel-200 p-3 flex flex-col gap-2">
+                  {paymentResult ? (
+                    <div className="flex flex-col gap-2 text-xs">
+                      {paymentResult.method === "pix" && (
+                        <>
+                          <img
+                            src={`data:image/png;base64,${paymentResult.qr_code.encoded_image}`}
+                            alt="QR code PIX"
+                            className="h-40 w-40"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => navigator.clipboard.writeText(paymentResult.qr_code.payload)}
+                            className="text-accent-600 hover:underline text-left"
+                          >
+                            Copiar código PIX
+                          </button>
+                        </>
+                      )}
+                      {paymentResult.method === "card" && (
+                        <a
+                          href={paymentResult.invoice_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-accent-600 hover:underline"
+                        >
+                          Abrir link de pagamento
+                        </a>
+                      )}
+                      {(paymentResult.method === "cash" ||
+                        paymentResult.method === "external" ||
+                        paymentResult.method === "pix_manual") && (
+                        <p className="text-panel-900">Pagamento registrado.</p>
+                      )}
+                      <button
+                        type="button"
+                        onClick={closePaymentForm}
+                        className="rounded border border-panel-300 px-3 py-1.5 font-medium text-panel-900 hover:bg-panel-100 self-start"
+                      >
+                        Fechar
+                      </button>
+                    </div>
+                  ) : (
+                    <form onSubmit={handleRegisterPayment} className="flex flex-col gap-2 text-xs">
+                      <label className="flex flex-col gap-1">
+                        Tipo
+                        <select
+                          value={paymentKind}
+                          onChange={(e) => setPaymentKind(e.target.value as PanelPaymentKind)}
+                          className="rounded border border-panel-300 px-2 py-1"
+                        >
+                          <option value="deposit">Depósito</option>
+                          <option value="balance">Saldo</option>
+                          <option value="extra">Extra</option>
+                        </select>
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        Forma de pagamento
+                        <select
+                          value={paymentMethod}
+                          onChange={(e) => setPaymentMethod(e.target.value as PanelPaymentMethod)}
+                          className="rounded border border-panel-300 px-2 py-1"
+                        >
+                          {(Object.keys(PAYMENT_METHOD_LABELS) as PanelPaymentMethod[]).map((method) => (
+                            <option key={method} value={method}>
+                              {PAYMENT_METHOD_LABELS[method]}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        Valor (R$)
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={paymentAmount}
+                          onChange={(e) => setPaymentAmount(e.target.value)}
+                          placeholder="0,00"
+                          className="rounded border border-panel-300 px-2 py-1"
+                        />
+                      </label>
+                      {(paymentMethod === "asaas_pix" || paymentMethod === "asaas_card") && (
+                        <label className="flex flex-col gap-1">
+                          CPF/CNPJ do hóspede
+                          <input
+                            type="text"
+                            value={paymentCpf}
+                            onChange={(e) => setPaymentCpf(e.target.value)}
+                            className="rounded border border-panel-300 px-2 py-1"
+                          />
+                        </label>
+                      )}
+                      <div className="flex gap-2">
+                        <button
+                          type="submit"
+                          disabled={actionBusy}
+                          className="rounded bg-accent-600 px-3 py-1.5 font-medium text-white hover:bg-accent-700 disabled:opacity-50"
+                        >
+                          Confirmar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={closePaymentForm}
+                          className="rounded border border-panel-300 px-3 py-1.5 font-medium text-panel-900 hover:bg-panel-100"
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    </form>
+                  )}
+                </div>
+              )}
             </section>
 
             <section className="text-sm">
