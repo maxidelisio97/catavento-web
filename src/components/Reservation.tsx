@@ -14,6 +14,7 @@ import {
   WHATSAPP_NUMBER,
   WHATSAPP_URL,
 } from "../config/site";
+import { trackEvent } from "../lib/analytics";
 import { EASE } from "../lib/motion";
 import { goToBookingForm } from "../lib/scroll";
 
@@ -67,6 +68,7 @@ export default function Reservation() {
               href={WHATSAPP_URL}
               target="_blank"
               rel="noopener noreferrer"
+              onClick={() => trackEvent("whatsapp-duvida")}
               className="inline-flex items-center justify-center gap-2 border border-white/25 text-white hover:bg-white/8 font-body font-medium text-[11px] uppercase tracking-[0.12em] px-7 py-3.5 rounded-full transition-all duration-200 active:scale-[0.97] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
             >
               <MdWhatsapp size={14} />
@@ -101,10 +103,11 @@ export default function Reservation() {
             href={INSTAGRAM_URL}
             target="_blank"
             rel="noopener noreferrer"
+            onClick={() => trackEvent("click_instagram")}
             className="inline-flex items-center gap-2 mt-6 text-white/40 hover:text-white transition-colors text-sm font-body focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white rounded"
           >
             <FaInstagram size={16} />
-            @pousadacatavento
+            @cataventotaiba
           </a>
         </motion.div>
 
@@ -148,6 +151,7 @@ export default function Reservation() {
                 href={WHATSAPP_URL}
                 target="_blank"
                 rel="noopener noreferrer"
+                onClick={() => trackEvent("whatsapp-falar")}
                 className="inline-flex items-center gap-2.5 font-body text-sm text-white/60 hover:text-white transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white rounded"
               >
                 <MdWhatsapp size={16} />
@@ -180,6 +184,7 @@ export default function Reservation() {
             href={MAPS_URL}
             target="_blank"
             rel="noopener noreferrer"
+            onClick={() => trackEvent("click_google_maps")}
             className="inline-flex items-start gap-2.5 font-body text-sm text-white/60 hover:text-white transition-colors leading-[1.6] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white rounded"
           >
             <MdLocationOn size={15} className="mt-0.5 shrink-0" />

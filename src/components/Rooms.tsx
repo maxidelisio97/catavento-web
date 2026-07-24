@@ -20,13 +20,12 @@ import {
   MdFreeBreakfast,
 } from "react-icons/md";
 import { PiFanFill, PiTowel } from "react-icons/pi";
-import { assetPath, buildHqbedsUrl } from "../config/site";
+import { useState } from "react";
+import { assetPath } from "../config/site";
+import { trackEvent } from "../lib/analytics";
 import { EASE } from "../lib/motion";
-import { useBookingDates } from "../lib/bookingDates";
-import { toIsoDate } from "../lib/dates";
-import { goToBookingForm } from "../lib/scroll";
-import { useToast } from "../lib/toast";
 import Carousel from "./Carousel";
+import RoomBookingModal, { type ModalRoom } from "./RoomBookingModal";
 
 const AMENITIES = [
   { icon: MdAcUnit, label: "Ar-condicionado" },
@@ -129,25 +128,7 @@ function PolicyBadge({ icon: Icon, allowed, label }: PolicyBadgeProps) {
 
 export default function Rooms() {
   const reduce = useReducedMotion();
-  const { range } = useBookingDates();
-  const toast = useToast();
-
-  // Se o usuario ja escolheu datas completas no BookingForm, leva elas
-  // junto ao ir para o HQBeds — em vez de mandar sem datas, so com a
-  // capacidade maxima do quarto (comportamento antigo, mantido como
-  // fallback quando ainda nao ha datas selecionadas).
-  const hasCompleteRange = Boolean(range?.from && range?.to && range.to.getTime() !== range.from.getTime());
-
-  function buildRoomUrl(guests: number) {
-    if (hasCompleteRange) {
-      return buildHqbedsUrl({
-        arrival: toIsoDate(range!.from!),
-        departure: toIsoDate(range!.to!),
-        adults: guests,
-      });
-    }
-    return buildHqbedsUrl({ adults: guests });
-  }
+  const [openRoom, setOpenRoom] = useState<ModalRoom | null>(null);
 
   return (
     <section id="quartos" className="relative py-24 md:py-36 bg-sand-50">
@@ -269,36 +250,32 @@ export default function Rooms() {
                   </div>
                 </div>
 
-                {/* CTA — motor de reservas real (HQBeds). adults = capacidade do quarto,
-                    para que apareça primeiro no listado (nao ha deep-link por quarto).
-                    Se ja houver datas escolhidas no BookingForm, vao junto na URL; senao,
-                    leva de volta ao formulario em vez de mandar sem datas.
-                    mt-auto (nao flex-1 na descricao): ancora o botao no fundo do
-                    card independente de quanto cresca o conteudo acima (ex.: linha
-                    de camas quebrando em 2 linhas em algum card) — mantem os 3
-                    botoes alinhados na mesma altura no grid. */}
+                {/* CTA — abre o RoomBookingModal com esta habitacao (fechas +
+                    hospedes escolhidos ali dentro, redireciona a HQBeds no
+                    confirmar). mt-auto (nao flex-1 na descricao): ancora o
+                    botao no fundo do card independente de quanto cresca o
+                    conteudo acima (ex.: linha de camas quebrando em 2 linhas
+                    em algum card) — mantem os 3 botoes alinhados na mesma
+                    altura no grid. */}
                 <div className="mt-auto pt-3">
-                  <a
-                    href={buildRoomUrl(room.guests)}
-                    target={hasCompleteRange ? "_blank" : undefined}
-                    rel={hasCompleteRange ? "noopener noreferrer" : undefined}
-                    onClick={(e) => {
-                      if (!hasCompleteRange) {
-                        e.preventDefault();
-                        goToBookingForm();
-                        toast.show("Escolha as datas de check-in e check-out para continuar");
-                      }
+                  <button
+                    type="button"
+                    onClick={() => {
+                      trackEvent("click_reservar_card", { habitacion: room.name });
+                      setOpenRoom({ name: room.name, guests: room.guests, area: room.area, beds: room.beds });
                     }}
-                    className="flex items-center justify-center bg-coral-600 hover:bg-coral-500 text-white font-body font-semibold text-[11px] uppercase tracking-[0.1em] py-2.5 rounded transition-colors duration-200 active:scale-[0.97] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral-500"
+                    className="w-full flex items-center justify-center bg-coral-600 hover:bg-coral-500 text-white font-body font-semibold text-[11px] uppercase tracking-[0.1em] py-2.5 rounded transition-colors duration-200 active:scale-[0.97] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral-500"
                   >
                     Reservar
-                  </a>
+                  </button>
                 </div>
               </div>
             </motion.article>
           ))}
         </div>
       </div>
+
+      <RoomBookingModal room={openRoom} onClose={() => setOpenRoom(null)} />
     </section>
   );
 }

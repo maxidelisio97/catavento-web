@@ -12,10 +12,10 @@ export const NAV_ITEMS = [
   { label: "Galeria", href: "#galeria" },
 ] as const;
 
-export const WHATSAPP_URL = "https://wa.link/gzgaap";
 export const WHATSAPP_NUMBER = "5599992325903";
+export const WHATSAPP_URL = `https://wa.me/${WHATSAPP_NUMBER}`;
 export const PHONE_DISPLAY = "+55 99 99232-5903";
-export const INSTAGRAM_URL = "https://www.instagram.com/pousadacatavento";
+export const INSTAGRAM_URL = "https://www.instagram.com/cataventotaiba";
 // Ya no es canal de reserva: solo se usa como atribucion de resenas (Testimonials, schema.org).
 export const BOOKING_URL = "https://www.booking.com/hotel/br/pousada-catavento.html";
 export const MAPS_URL = "https://www.google.com/maps/search/Pousada+Catavento+Taiba";
