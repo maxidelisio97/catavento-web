@@ -19,8 +19,11 @@ import WhatsAppFloatButton from "./components/WhatsAppFloatButton";
 import CookieConsent from "./components/CookieConsent";
 import { BookingDatesProvider } from "./lib/bookingDates";
 import { ToastProvider } from "./lib/toast";
+import { useSectionTracking } from "./lib/useSectionTracking";
 
 function App() {
+  useSectionTracking();
+
   return (
     <BookingDatesProvider>
       <ToastProvider>

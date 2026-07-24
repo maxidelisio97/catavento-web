@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { MdWhatsapp } from "react-icons/md";
 import { WHATSAPP_URL } from "../config/site";
+import { trackEvent } from "../lib/analytics";
 
 export default function WhatsAppFloatButton() {
   const [visible, setVisible] = useState(false);
@@ -31,6 +32,7 @@ export default function WhatsAppFloatButton() {
           target="_blank"
           rel="noopener noreferrer"
           aria-label="Dúvidas? Fale conosco"
+          onClick={() => trackEvent("whatsapp_click")}
           className="md:hidden fixed bottom-5 right-5 z-40 flex items-center justify-center w-14 h-14 rounded-full bg-coral-600 text-white shadow-lg shadow-warm-900/25 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral-500"
           initial={reduce ? false : { opacity: 0, scale: 0.7, y: 12 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}

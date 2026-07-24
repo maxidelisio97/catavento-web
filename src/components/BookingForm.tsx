@@ -14,47 +14,23 @@
  * la clase default de cada parte, y pisar por ejemplo `day_button` le hace
  * perder la clase "rdp-day_button" al elemento, rompiendo silenciosamente los
  * estilos de rango (range_start/range_end) que dependen de esa clase base.
+ *
+ * Logica de validacion/submit vive en useBookingSubmit (compartida con el
+ * drawer RoomBookingModal.tsx) — este componente solo posee el estado de
+ * presentacion (popovers abiertos, hover de preview) que es especifico de
+ * esta pildora horizontal.
  */
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { DayPicker, type DateRange, type DayButtonProps } from "react-day-picker";
 import { ptBR } from "react-day-picker/locale";
 import "react-day-picker/style.css";
-import { LuArrowRight, LuCalendar, LuChevronDown, LuCircleAlert, LuMinus, LuPlus, LuUsers } from "react-icons/lu";
-import { buildHqbedsUrl } from "../config/site";
-import { useBookingDates } from "../lib/bookingDates";
-import { toIsoDate } from "../lib/dates";
+import { LuArrowRight, LuCalendar, LuChevronDown, LuCircleAlert, LuUsers } from "react-icons/lu";
+import { formatRangeLabel, isPickingCheckout, isSameDay, startOfToday } from "../lib/bookingRange";
+import { trackEvent } from "../lib/analytics";
+import { useBookingSubmit } from "../lib/useBookingSubmit";
 import CataventoIcon from "./CataventoIcon";
-
-function startOfToday() {
-  const date = new Date();
-  date.setHours(0, 0, 0, 0);
-  return date;
-}
-
-function isSameDay(a: Date, b: Date) {
-  return a.getTime() === b.getTime();
-}
-
-// react-day-picker fixa `to = from` no primeiro clique de um range (nao fica
-// undefined) — "ainda escolhendo o check-out" significa from existe e to
-// ainda nao e uma data distinta e posterior.
-function isPickingCheckout(range: DateRange | undefined) {
-  return Boolean(range?.from) && (!range?.to || isSameDay(range.to, range.from!));
-}
-
-const rangeDateFormatter = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short" });
-
-function formatRangeLabel(range: DateRange | undefined) {
-  if (!range?.from) return "Adicionar datas";
-  if (isPickingCheckout(range)) return `${rangeDateFormatter.format(range.from)} — ?`;
-  return `${rangeDateFormatter.format(range.from)} — ${rangeDateFormatter.format(range.to!)}`;
-}
-
-type Errors = { dates?: string };
-
-const MIN_ADULTS = 1;
-const MIN_CHILDREN = 0;
-const MAX_GUESTS = 4;
+import GuestCounterRow from "./GuestCounterRow";
+import { MAX_GUESTS, MIN_ADULTS, MIN_CHILDREN } from "../lib/guestLimits";
 
 function formatGuestsLabel(adults: number, children: number) {
   const parts = [`${adults} ${adults === 1 ? "adulto" : "adultos"}`];
@@ -62,53 +38,15 @@ function formatGuestsLabel(adults: number, children: number) {
   return parts.join(", ");
 }
 
-type GuestCounterRowProps = {
-  label: string;
-  hint: string;
-  value: number;
-  min: number;
-  max: number;
-  onChange: (value: number) => void;
+type BookingFormProps = {
+  // Presente quando o form roda dentro do RoomBookingModal (uma habitacao
+  // especifica); ausente no form principal do Hero.
+  room?: { name: string; guests: number };
 };
 
-function GuestCounterRow({ label, hint, value, min, max, onChange }: GuestCounterRowProps) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <div>
-        <p className="font-body text-sm font-medium text-warm-900">{label}</p>
-        <p className="font-body text-xs text-warm-800/50">{hint}</p>
-      </div>
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          aria-label={`Diminuir ${label.toLowerCase()}`}
-          disabled={value <= min}
-          onClick={() => onChange(Math.max(min, value - 1))}
-          className="flex h-8 w-8 items-center justify-center rounded-full border border-stone-300 text-warm-800 transition-colors hover:border-coral-500 hover:text-coral-600 disabled:cursor-not-allowed disabled:opacity-30"
-        >
-          <LuMinus size={14} />
-        </button>
-        <span className="w-4 text-center font-body text-sm font-semibold tabular-nums text-warm-900">{value}</span>
-        <button
-          type="button"
-          aria-label={`Aumentar ${label.toLowerCase()}`}
-          disabled={value >= max}
-          onClick={() => onChange(Math.min(max, value + 1))}
-          className="flex h-8 w-8 items-center justify-center rounded-full border border-stone-300 text-warm-800 transition-colors hover:border-coral-500 hover:text-coral-600 disabled:cursor-not-allowed disabled:opacity-30"
-        >
-          <LuPlus size={14} />
-        </button>
-      </div>
-    </div>
-  );
-}
-
-export default function BookingForm() {
-  const { range, setRange } = useBookingDates();
+export default function BookingForm({ room }: BookingFormProps) {
+  const { range, setRange, adults, setAdults, children, setChildren, datesError, submit } = useBookingSubmit(room);
   const [hoveredDay, setHoveredDay] = useState<Date | undefined>(undefined);
-  const [adults, setAdults] = useState(2);
-  const [children, setChildren] = useState(0);
-  const [errors, setErrors] = useState<Errors>({});
   const [isPickerOpen, setPickerOpen] = useState(false);
   const [isGuestsOpen, setGuestsOpen] = useState(false);
 
@@ -209,29 +147,8 @@ export default function BookingForm() {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-
-    let datesError: string | undefined;
-    if (!range?.from || !range?.to) {
-      datesError = "Escolha as datas de check-in e check-out.";
-    } else if (range.from < startOfToday()) {
-      datesError = "A data de check-in não pode ser no passado.";
-    } else if (range.to <= range.from) {
-      datesError = "O check-out precisa ser depois do check-in.";
-    }
-
-    setErrors({ dates: datesError });
-    if (datesError) {
-      setPickerOpen(true);
-      return;
-    }
-
-    const url = buildHqbedsUrl({
-      arrival: toIsoDate(range!.from!),
-      departure: toIsoDate(range!.to!),
-      adults,
-      children,
-    });
-    window.open(url, "_blank", "noopener,noreferrer");
+    const result = submit();
+    if (!result.ok) setPickerOpen(true);
   }
 
   const labelClass =
@@ -252,11 +169,14 @@ export default function BookingForm() {
             <button
               ref={dateTriggerRef}
               type="button"
-              onClick={() => setPickerOpen((open) => !open)}
+              onClick={() => {
+                if (!isPickerOpen && !room) trackEvent("click_calendario_disponibilidad");
+                setPickerOpen((open) => !open);
+              }}
               aria-haspopup="dialog"
               aria-expanded={isPickerOpen}
-              aria-invalid={Boolean(errors.dates)}
-              aria-describedby={errors.dates ? datesErrorId : undefined}
+              aria-invalid={Boolean(datesError)}
+              aria-describedby={datesError ? datesErrorId : undefined}
               className={`${cellButtonClass} rounded-tl-2xl rounded-tr-2xl md:rounded-tl-full md:rounded-bl-full md:rounded-tr-none md:rounded-br-none`}
             >
               <span className={labelClass}>
@@ -374,18 +294,18 @@ export default function BookingForm() {
 
       <div
         className={`grid transition-[grid-template-rows] duration-300 ease-out ${
-          errors.dates ? "grid-rows-[1fr] mt-3" : "grid-rows-[0fr] mt-0"
+          datesError ? "grid-rows-[1fr] mt-3" : "grid-rows-[0fr] mt-0"
         }`}
       >
         <div className="overflow-hidden">
-          {errors.dates && (
+          {datesError && (
             <p
               id={datesErrorId}
               role="alert"
               className="flex items-start gap-1.5 font-body text-xs text-coral-600"
             >
               <LuCircleAlert size={14} className="shrink-0 mt-0.5" />
-              <span>{errors.dates}</span>
+              <span>{datesError}</span>
             </p>
           )}
         </div>

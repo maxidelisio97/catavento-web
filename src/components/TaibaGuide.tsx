@@ -6,6 +6,7 @@
 import { motion, useReducedMotion } from "motion/react";
 import { MdWbSunny, MdAir, MdSurfing, MdLocationOn } from "react-icons/md";
 import { assetPath, MAPS_URL } from "../config/site";
+import { trackEvent } from "../lib/analytics";
 import { EASE } from "../lib/motion";
 
 const HIGHLIGHTS = [
@@ -111,6 +112,7 @@ export default function TaibaGuide() {
             href={MAPS_URL}
             target="_blank"
             rel="noopener noreferrer"
+            onClick={() => trackEvent("click_google_maps")}
             className="inline-flex items-center gap-2 font-body text-sm text-white/50 hover:text-white/80 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white rounded"
           >
             <MdLocationOn size={15} />
