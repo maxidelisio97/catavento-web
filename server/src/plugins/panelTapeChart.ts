@@ -46,7 +46,7 @@ const tapeChartResponseSchema = z.object({
   }),
 });
 
-const reservationDetailResponseSchema = z.object({
+export const reservationDetailResponseSchema = z.object({
   id: z.number(),
   code: z.string().nullable(),
   status: z.string(),

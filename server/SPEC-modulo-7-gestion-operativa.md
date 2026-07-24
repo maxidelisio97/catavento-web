@@ -97,6 +97,7 @@ Una reserva puede estar `confirmed` sin un centavo pagado (reserva manual sin pa
 Ambas UIs (arrastre en tape chart, botón "cambiar de cuarto" en la ficha) escriben por **la misma operación de backend**. Cero lógica duplicada.
 
 - **`moveNight(reservationCode, night, toUnitId)`** — mueve una sola diaria. Borra la fila `reservation_nights` de esa noche y escribe una nueva con `toUnitId`. La reserva queda legítimamente **fragmentada** (noches en distintas unidades). Estado válido de primera clase, no excepción.
+  - ⚠️ **7C hace real la fragmentación por primera vez.** El tape chart de 6C ya lee por noche y la dibuja bien, pero **cualquier vista o lógica que asuma "una reserva = una unidad" se rompe**. Antes de implementar, revisar la ficha de reserva, el detalle del panel y `reservations.room_unit_id` (legacy desde 6A). Si algo muestra "la unidad" en singular, tiene que pasar a mostrar la asignación por noche.
 - **`moveStay(reservationCode, toUnitId)`** — mueve todas las noches de la reserva a `toUnitId`. **Atómico: todo o nada.** Si `toUnitId` está ocupada aunque sea una de las noches del rango, la operación falla completa y no deja la reserva a medio mover.
 
 ### 4.2 Validaciones (en orden, dentro del lock)
@@ -133,9 +134,13 @@ Respuestas:
 
 ### 4.5 Frontend
 
-- **Tape chart (M6C):** habilitar drag de una celda-noche (o de la barra completa de una reserva) a otra fila de unidad. Al soltar: llamar `moveNight`/`moveStay`. Optimistic update opcional pero con rollback si el backend rechaza.
-- **Ficha de reserva:** botón "Cambiar de cuarto" que abre un selector de unidad destino + opción "solo esta noche / toda la estadía". Mismo backend.
-- Warning comercial → modal de confirmación con el texto del warning antes de reenviar con flag.
+**Decisión de alcance (2026-07-23): el arrastre en el tape chart queda FUERA de 7C.** Se implementa solo el botón en la ficha, que funciona en desktop y mobile por igual. Razones: el drag sobre grilla (estados intermedios, feedback de celda válida/inválida, soporte touch) es la mayor parte del esfuerzo de 7C para una fracción del valor, y el botón es más preciso y mejor en mobile. Como ambas UIs comparten la misma operación de backend, el arrastre se puede agregar después sin tocar nada del servidor.
+
+- **Ficha de reserva (única UI de 7C):** botón "Cambiar de cuarto" que abre un selector de unidad destino + opción "solo esta noche / toda la estadía". Llama a `moveNight`/`moveStay`.
+  - El selector muestra **solo las unidades libres** para la(s) noche(s) en juego (evita que el operario tenga que saber de memoria qué está libre — es lo que compensa la falta del contexto visual del tape chart).
+  - Si se elige "solo esta noche" en una estadía de varias noches, hay que poder elegir **cuál** noche.
+- Warning comercial → modal de confirmación con el texto del warning antes de reenviar con `force_commercial`.
+- **Futuro (no 7C):** drag de una celda-noche o de la barra completa en el tape chart (M6C) a otra fila de unidad, con optimistic update y rollback si el backend rechaza. Solo desktop (`:hover`/drag no existen en touch). No requiere cambios de backend.
 
 ---
 
@@ -385,7 +390,7 @@ Todos bajo `requireAuth` (M6B). Todas las escrituras sobre disponibilidad/estado
 
 - **7A — Schema + estados + saldo.** Migraciones (§11), máquina de estados (§3), vista de saldo (§5.3), sin UI nueva. Base para todo lo demás.
 - **7B — Pagos y check-in/out.** Endpoints de pago con `kind`/`method` (§5.4), webhook que distingue depósito/saldo, check-in/check-out con bloqueo por saldo (§6). Frontend de ficha con saldo y botones.
-- **7C — Movimiento de unidad.** `moveNight`/`moveStay` (§4), arrastre en tape chart + botón en ficha, warnings comerciales.
+- **7C — Movimiento de unidad.** `moveNight`/`moveStay` (§4), botón "Cambiar de cuarto" en la ficha, warnings comerciales. **Sin arrastre en el tape chart** (recortado del alcance, ver §4.5) — queda como mejora futura sin cambios de backend.
 - **7D — Reservas manuales + cancelación.** Formulario manual (§7), cancel/no-show (§8), extras (§7 dec. abierta 4).
 
 Cada entrega es usable y verificable por sí sola; se puede parar entre entregas y seguir con HQBeds para lo que falte.

@@ -11,6 +11,7 @@ import reservationsPlugin from './plugins/reservations.js';
 import authPlugin from './plugins/auth.js';
 import panelTapeChartPlugin from './plugins/panelTapeChart.js';
 import panelReservationActionsPlugin from './plugins/panelReservationActions.js';
+import panelMoveReservationPlugin from './plugins/panelMoveReservation.js';
 
 // trustProxy scoped to 127.0.0.1, not `true`: Nginx proxies here from
 // loopback (see nginx.conf.example / nginx-panel.conf.example), so only
@@ -44,6 +45,7 @@ app.register(reservationsPlugin, { prefix: '/api' });
 app.register(authPlugin);
 app.register(panelTapeChartPlugin);
 app.register(panelReservationActionsPlugin);
+app.register(panelMoveReservationPlugin);
 
 registerErrorHandler(app);
 
