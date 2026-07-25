@@ -78,6 +78,24 @@ async function insertRoom(): Promise<number> {
   return room.id;
 }
 
+async function insertUnit(roomId: number, label = 'A1'): Promise<number> {
+  const unit = await testDb
+    .insertInto('room_units')
+    .values({ room_id: roomId, label })
+    .returning('id')
+    .executeTakeFirstOrThrow();
+  return unit.id;
+}
+
+async function insertNights(reservationId: number, unitId: number, checkIn: string, checkOut: string): Promise<void> {
+  const { eachNightUTC } = await import('../../shared/dateUtils.js');
+  const nights = eachNightUTC(checkIn, checkOut);
+  await testDb
+    .insertInto('reservation_nights')
+    .values(nights.map((night) => ({ reservation_id: reservationId, night, room_unit_id: unitId })))
+    .execute();
+}
+
 interface ReservationFixtureOptions {
   roomId: number;
   status?: string;
@@ -720,5 +738,282 @@ describe('POST /panel/reservations/:code/check-out', () => {
     // Exactly one write won — the audit column reflects a single actor, not
     // whichever request happened to run last.
     expect(row.checked_out_by).not.toBeNull();
+  });
+});
+
+describe('POST /panel/reservations/:code/cancel', () => {
+  it('401s without a session cookie', async () => {
+    const app = buildApp();
+    const response = await app.inject({ method: 'POST', url: '/panel/reservations/NOPE/cancel', payload: {} });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('404 when the reservation code does not exist', async () => {
+    const token = await insertSessionCookie();
+    const app = buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/reservations/NOPE/cancel',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: {},
+    });
+    expect(response.statusCode).toBe(404);
+  });
+
+  it('confirmed -> cancelled, releases reservation_nights, sets cancelled_at/by/reason', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const unitId = await insertUnit(roomId);
+    const reservation = await insertReservation({ roomId, status: 'confirmed' });
+    await insertNights(reservation.id, unitId, '2026-09-01', '2026-09-03');
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/cancel`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { reason: 'guest changed plans' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ status: 'cancelled' });
+
+    const row = await testDb
+      .selectFrom('reservations')
+      .select(['status', 'cancelled_at', 'cancelled_by', 'cancel_reason'])
+      .where('id', '=', reservation.id)
+      .executeTakeFirstOrThrow();
+    expect(row.status).toBe('cancelled');
+    expect(row.cancelled_at).not.toBeNull();
+    expect(row.cancelled_by).not.toBeNull();
+    expect(row.cancel_reason).toBe('guest changed plans');
+
+    const nights = await testDb
+      .selectFrom('reservation_nights')
+      .selectAll()
+      .where('reservation_id', '=', reservation.id)
+      .execute();
+    expect(nights).toHaveLength(0);
+  });
+
+  it('pending_payment -> cancelled is also valid (§ 8)', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId, status: 'pending_payment' });
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/cancel`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(200);
+  });
+
+  it('409 INVALID_TRANSITION when checked_in — cannot cancel a guest already inside (§ 3)', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const unitId = await insertUnit(roomId);
+    const reservation = await insertReservation({ roomId, status: 'checked_in' });
+    await insertNights(reservation.id, unitId, '2026-09-01', '2026-09-03');
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/cancel`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toBe('INVALID_TRANSITION');
+
+    const nights = await testDb
+      .selectFrom('reservation_nights')
+      .selectAll()
+      .where('reservation_id', '=', reservation.id)
+      .execute();
+    expect(nights).toHaveLength(2); // untouched
+  });
+});
+
+describe('POST /panel/reservations/:code/no-show', () => {
+  it('confirmed -> no_show, releases reservation_nights, sets no_show_at/by', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const unitId = await insertUnit(roomId);
+    const reservation = await insertReservation({ roomId, status: 'confirmed' });
+    await insertNights(reservation.id, unitId, '2026-09-01', '2026-09-03');
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/no-show`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ status: 'no_show' });
+
+    const row = await testDb
+      .selectFrom('reservations')
+      .select(['status', 'no_show_at', 'no_show_by'])
+      .where('id', '=', reservation.id)
+      .executeTakeFirstOrThrow();
+    expect(row.status).toBe('no_show');
+    expect(row.no_show_at).not.toBeNull();
+    expect(row.no_show_by).not.toBeNull();
+
+    const nights = await testDb
+      .selectFrom('reservation_nights')
+      .selectAll()
+      .where('reservation_id', '=', reservation.id)
+      .execute();
+    expect(nights).toHaveLength(0);
+  });
+
+  it('409 INVALID_TRANSITION from pending_payment (§ 8: no-show only from confirmed)', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId, status: 'pending_payment' });
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/no-show`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toBe('INVALID_TRANSITION');
+  });
+
+  it('409 INVALID_TRANSITION when checked_in (§ 3)', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId, status: 'checked_in' });
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/no-show`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toBe('INVALID_TRANSITION');
+  });
+});
+
+describe('POST /panel/reservations/:code/extra', () => {
+  it('401s without a session cookie', async () => {
+    const app = buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/reservations/NOPE/extra',
+      payload: { concept: 'Laundry', amount_cents: 1000 },
+    });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('inserts the extra and bumps total_cents in the same call', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId, status: 'checked_in', totalCents: 20000 });
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/extra`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { concept: 'Late check-out', amount_cents: 3000 },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toEqual({ extra_id: expect.any(Number), total_cents: 23000 });
+
+    const row = await testDb
+      .selectFrom('reservations')
+      .select('total_cents')
+      .where('id', '=', reservation.id)
+      .executeTakeFirstOrThrow();
+    expect(row.total_cents).toBe(23000);
+
+    const extraRow = await testDb
+      .selectFrom('reservation_extras')
+      .selectAll()
+      .where('reservation_id', '=', reservation.id)
+      .executeTakeFirstOrThrow();
+    expect(extraRow.concept).toBe('Late check-out');
+    expect(extraRow.amount_cents).toBe(3000);
+    expect(extraRow.created_by).not.toBeNull();
+  });
+
+  it('409 RESERVATION_NOT_PAYABLE when cancelled — nothing left to charge', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId, status: 'cancelled', totalCents: 20000 });
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/extra`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { concept: 'Late check-out', amount_cents: 3000 },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toBe('RESERVATION_NOT_PAYABLE');
+
+    const row = await testDb
+      .selectFrom('reservations')
+      .select('total_cents')
+      .where('id', '=', reservation.id)
+      .executeTakeFirstOrThrow();
+    expect(row.total_cents).toBe(20000); // untouched
+  });
+
+  it('two concurrent extras on the same reservation both land — total_cents reflects both, never overwrites one with the other', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId, status: 'checked_in', totalCents: 20000 });
+    const app = buildApp();
+
+    const [first, second] = await Promise.all([
+      app.inject({
+        method: 'POST',
+        url: `/panel/reservations/${reservation.code}/extra`,
+        cookies: { [SESSION_COOKIE_NAME]: token },
+        payload: { concept: 'Laundry', amount_cents: 1000 },
+      }),
+      app.inject({
+        method: 'POST',
+        url: `/panel/reservations/${reservation.code}/extra`,
+        cookies: { [SESSION_COOKIE_NAME]: token },
+        payload: { concept: 'Minibar', amount_cents: 2000 },
+      }),
+    ]);
+
+    expect(first.statusCode).toBe(201);
+    expect(second.statusCode).toBe(201);
+
+    const row = await testDb
+      .selectFrom('reservations')
+      .select('total_cents')
+      .where('id', '=', reservation.id)
+      .executeTakeFirstOrThrow();
+    expect(row.total_cents).toBe(23000);
+
+    const extras = await testDb
+      .selectFrom('reservation_extras')
+      .selectAll()
+      .where('reservation_id', '=', reservation.id)
+      .execute();
+    expect(extras).toHaveLength(2);
   });
 });

@@ -2,7 +2,7 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { testDb } from '../../db/testClient.js';
 import { getSetting, getBusinessSettings, MissingSettingError, InvalidSettingError } from '../settings.js';
 
-const KEYS = ['deposit_percent', 'hold_minutes'] as const;
+const KEYS = ['deposit_percent', 'hold_minutes', 'pet_fee_cents'] as const;
 
 // `settings` holds the real seeded business config other test files depend
 // on (e.g. reservations.test.ts calls POST /api/reservations, which reads
@@ -57,16 +57,23 @@ describe('getBusinessSettings', () => {
       .values([
         { key: 'deposit_percent', value: '50' },
         { key: 'hold_minutes', value: '30' },
+        { key: 'pet_fee_cents', value: '3000' },
       ])
       .execute();
 
     const settings = await getBusinessSettings(testDb);
-    expect(settings).toEqual({ depositPercent: 50, holdMinutes: 30 });
+    expect(settings).toEqual({ depositPercent: 50, holdMinutes: 30, petFeeCents: 3000 });
   });
 
   it('throws if any required key is missing', async () => {
     await clearKeys();
-    await testDb.insertInto('settings').values({ key: 'deposit_percent', value: '50' }).execute();
+    await testDb
+      .insertInto('settings')
+      .values([
+        { key: 'deposit_percent', value: '50' },
+        { key: 'hold_minutes', value: '30' },
+      ])
+      .execute();
 
     await expect(getBusinessSettings(testDb)).rejects.toBeInstanceOf(MissingSettingError);
   });

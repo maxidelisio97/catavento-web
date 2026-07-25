@@ -20,6 +20,7 @@ import {
   NightNotInStayError,
   DestinationUnitNotFoundError,
   PhysicalConflictError,
+  HardSpaceRuleViolationError,
   CommercialWarningError,
 } from '../panel/moveReservation.js';
 import { getMoveOptions } from '../panel/moveOptionsQuery.js';
@@ -125,6 +126,7 @@ const panelMoveReservationPlugin: FastifyPluginAsync<PanelMoveReservationPluginO
           if (err instanceof NightNotInStayError) throw httpError(409, 'NIGHT_NOT_IN_STAY');
           if (err instanceof DestinationUnitNotFoundError) throw httpError(404, 'DESTINATION_UNIT_NOT_FOUND');
           if (err instanceof PhysicalConflictError) throw httpError(409, 'PHYSICAL_CONFLICT');
+          if (err instanceof HardSpaceRuleViolationError) throw httpError(409, err.code);
           if (err instanceof CommercialWarningError) {
             reply.status(422);
             return { error: 'COMMERCIAL_WARNING' as const, warnings: err.warnings };
@@ -165,6 +167,7 @@ const panelMoveReservationPlugin: FastifyPluginAsync<PanelMoveReservationPluginO
           if (err instanceof ReservationNotMovableError) throw httpError(409, 'RESERVATION_NOT_MOVABLE');
           if (err instanceof DestinationUnitNotFoundError) throw httpError(404, 'DESTINATION_UNIT_NOT_FOUND');
           if (err instanceof PhysicalConflictError) throw httpError(409, 'PHYSICAL_CONFLICT');
+          if (err instanceof HardSpaceRuleViolationError) throw httpError(409, err.code);
           if (err instanceof CommercialWarningError) {
             reply.status(422);
             return { error: 'COMMERCIAL_WARNING' as const, warnings: err.warnings };

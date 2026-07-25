@@ -33,6 +33,13 @@ export interface CalculatePriceInput {
   rateOverrides: RateOverrideRow[];
   /** Fallback when there's no override for the check-in date. */
   roomDefaultMinStay: number;
+  /**
+   * Panel-only escape hatch (SPEC-modulo-7-gestion-operativa.md § 1, § 7.2):
+   * min-stay is a soft commercial rule for manual reservations, skippable
+   * with the operator's explicit `force_commercial` confirmation. The public
+   * web flow never sets this — min-stay stays a hard rejection there.
+   */
+  allowBelowMinStay?: boolean;
 }
 
 export interface PriceAvailable {
@@ -89,7 +96,7 @@ function findRoomRate(roomRates: RoomRateRow[], guests: number): RoomRateRow | u
 }
 
 export function calculatePrice(input: CalculatePriceInput): CalculatePriceResult {
-  const { checkIn, checkOut, guests, roomRates, rateOverrides, roomDefaultMinStay } = input;
+  const { checkIn, checkOut, guests, roomRates, rateOverrides, roomDefaultMinStay, allowBelowMinStay } = input;
 
   const checkInDate = parseDateUTC(checkIn);
   const checkOutDate = parseDateUTC(checkOut);
@@ -100,7 +107,7 @@ export function calculatePrice(input: CalculatePriceInput): CalculatePriceResult
   // Min-stay: applies the override on the check-in date, else the room's default.
   const checkInOverride = overridesByDate.get(checkIn);
   const requiredMinStay = checkInOverride?.minStay ?? roomDefaultMinStay;
-  if (requestedNights < requiredMinStay) {
+  if (requestedNights < requiredMinStay && !allowBelowMinStay) {
     return {
       status: 'unavailable_min_stay',
       requiredMinStay,

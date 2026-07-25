@@ -11,6 +11,9 @@ import {
   registerPayment,
   checkIn,
   checkOut,
+  cancelReservation,
+  markNoShow,
+  addExtra,
   ReservationNotFoundError,
   ReservationNotPayableError,
   MissingCpfCnpjError,
@@ -48,6 +51,13 @@ const paymentResponseSchema = z.discriminatedUnion('method', [
 ]);
 
 const codeParamsSchema = z.object({ code: z.string() });
+
+const cancelBodySchema = z.object({ reason: z.string().max(500).optional() });
+
+const extraBodySchema = z.object({
+  concept: z.string().min(1).max(200),
+  amount_cents: z.number().int().positive(),
+});
 
 const errorResponseSchema = z.object({ error: z.string() });
 const balanceDueResponseSchema = z.object({ error: z.literal('BALANCE_DUE'), balance_due_cents: z.number() });
@@ -194,6 +204,80 @@ const panelReservationActionsPlugin: FastifyPluginAsync<PanelReservationActionsP
             reply.status(409);
             return { error: 'BALANCE_DUE' as const, balance_due_cents: err.balanceDueCents };
           }
+          throw err;
+        }
+      },
+    );
+
+    typed.post(
+      '/panel/reservations/:code/cancel',
+      {
+        schema: {
+          params: codeParamsSchema,
+          body: cancelBodySchema,
+          response: { 200: z.object({ status: z.literal('cancelled') }), 404: errorResponseSchema, 409: errorResponseSchema },
+        },
+      },
+      async (request) => {
+        const { code } = request.params;
+
+        try {
+          await cancelReservation(db, { code, reason: request.body.reason, changedBy: request.user!.id });
+          return { status: 'cancelled' as const };
+        } catch (err) {
+          if (err instanceof ReservationNotFoundError) throw httpError(404, 'RESERVATION_NOT_FOUND');
+          if (err instanceof InvalidReservationTransitionError) throw httpError(409, 'INVALID_TRANSITION');
+          throw err;
+        }
+      },
+    );
+
+    typed.post(
+      '/panel/reservations/:code/no-show',
+      {
+        schema: {
+          params: codeParamsSchema,
+          body: cancelBodySchema,
+          response: { 200: z.object({ status: z.literal('no_show') }), 404: errorResponseSchema, 409: errorResponseSchema },
+        },
+      },
+      async (request) => {
+        const { code } = request.params;
+
+        try {
+          await markNoShow(db, { code, reason: request.body.reason, changedBy: request.user!.id });
+          return { status: 'no_show' as const };
+        } catch (err) {
+          if (err instanceof ReservationNotFoundError) throw httpError(404, 'RESERVATION_NOT_FOUND');
+          if (err instanceof InvalidReservationTransitionError) throw httpError(409, 'INVALID_TRANSITION');
+          throw err;
+        }
+      },
+    );
+    typed.post(
+      '/panel/reservations/:code/extra',
+      {
+        schema: {
+          params: codeParamsSchema,
+          body: extraBodySchema,
+          response: {
+            201: z.object({ extra_id: z.number(), total_cents: z.number() }),
+            404: errorResponseSchema,
+            409: errorResponseSchema,
+          },
+        },
+      },
+      async (request, reply) => {
+        const { code } = request.params;
+        const { concept, amount_cents } = request.body;
+
+        try {
+          const result = await addExtra(db, { code, concept, amountCents: amount_cents, changedBy: request.user!.id });
+          reply.status(201);
+          return { extra_id: result.extraId, total_cents: result.totalCents };
+        } catch (err) {
+          if (err instanceof ReservationNotFoundError) throw httpError(404, 'RESERVATION_NOT_FOUND');
+          if (err instanceof ReservationNotPayableError) throw httpError(409, 'RESERVATION_NOT_PAYABLE');
           throw err;
         }
       },

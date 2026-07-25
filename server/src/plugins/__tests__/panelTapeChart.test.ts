@@ -468,7 +468,14 @@ describe('GET /panel/reservations/:id', () => {
     expect(body.room_type.name).toBe('Casal');
     expect(body.units).toHaveLength(3);
     expect(body.guests).toEqual({ adults: 2, children: 1, children_ages: [7], babies: 1, total: 3 });
-    expect(body.money).toEqual({ total_cents: 66000, deposit_cents: 33000, paid_cents: 33000, balance_cents: 33000 });
+    expect(body.pets).toBe(false);
+    expect(body.money).toEqual({
+      total_cents: 66000,
+      deposit_cents: 33000,
+      pet_fee_cents: 0,
+      paid_cents: 33000,
+      balance_cents: 33000,
+    });
     expect(body.origin).toBe('web');
     expect(body.contact).toEqual({ name: 'Maria Gonzalez', email: 'maria@example.com', phone: '+55 85 90000-0000' });
     expect(body.comments).toBe('Chegada tarde');

@@ -106,9 +106,13 @@ export interface Reservations {
   guest_phone: string | null;
   guests: number;
   id: Generated<number>;
+  no_show_at: Timestamp | null;
+  no_show_by: number | null;
   notes: string | null;
   origin: Generated<string>;
   override_total_cents: number | null;
+  pet_fee_cents: Generated<number>;
+  pets: Generated<boolean>;
   room_id: number;
   room_unit_id: number | null;
   status: Generated<string>;

@@ -53,14 +53,17 @@ async function resetDb(): Promise<void> {
   );
 }
 
-async function insertRoom(name: string, options: { capacity?: number; adultsOnly?: boolean } = {}): Promise<number> {
+async function insertRoom(
+  name: string,
+  options: { capacity?: number; adultsOnly?: boolean; petsAllowed?: boolean } = {},
+): Promise<number> {
   const room = await testDb
     .insertInto('rooms')
     .values({
       name,
       capacity: options.capacity ?? 2,
       adults_only: options.adultsOnly ?? false,
-      pets_allowed: false,
+      pets_allowed: options.petsAllowed ?? false,
       default_min_stay: 1,
     })
     .returning('id')
@@ -86,6 +89,7 @@ interface ReservationFixtureOptions {
   status?: string;
   children?: number;
   babies?: number;
+  pets?: boolean;
   guests?: number;
   code?: string;
 }
@@ -107,6 +111,7 @@ async function insertReservation(options: ReservationFixtureOptions): Promise<{ 
       guests: options.guests ?? 2 + (options.children ?? 0),
       children: options.children ?? 0,
       babies: options.babies ?? 0,
+      pets: options.pets ?? false,
       status: options.status ?? 'confirmed',
       total_cents: 30000,
       guest_name: 'Maria Gonzalez',
@@ -275,6 +280,60 @@ describe('POST /panel/reservations/:code/move-night', () => {
     expect(rows[0]).toEqual({ night: '2026-09-01', room_unit_id: unitA }); // untouched
   });
 
+  it('409 ADULTS_ONLY_ROOM when destination is adults-only and the reservation has children — no force_commercial escape hatch (7D hardening, was skippable in 7C)', async () => {
+    const token = await insertSessionCookie();
+    const familyRoomId = await insertRoom('Triplo', { capacity: 3 });
+    const originUnit = await insertUnit(familyRoomId, 'G0');
+    const casalId = await insertRoom('Casal', { adultsOnly: true });
+    const casalUnit = await insertUnit(casalId, 'G1');
+    const reservation = await insertReservation({
+      roomId: familyRoomId,
+      checkIn: '2026-09-01',
+      checkOut: '2026-09-02',
+      nightUnitIds: [originUnit],
+      children: 1,
+    });
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/move-night`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { night: '2026-09-01', toUnitId: casalUnit, force_commercial: true },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toBe('ADULTS_ONLY_ROOM');
+    expect(await nightsOf(reservation.id)).toEqual([{ night: '2026-09-01', room_unit_id: originUnit }]);
+  });
+
+  it('409 PETS_NOT_ALLOWED when destination does not allow pets and the reservation has a pet — no force_commercial escape hatch', async () => {
+    const token = await insertSessionCookie();
+    const tripleRoomId = await insertRoom('Triplo', { capacity: 3, petsAllowed: true });
+    const originUnit = await insertUnit(tripleRoomId, 'H0');
+    const casalId = await insertRoom('Casal', { petsAllowed: false });
+    const casalUnit = await insertUnit(casalId, 'H1');
+    const reservation = await insertReservation({
+      roomId: tripleRoomId,
+      checkIn: '2026-09-01',
+      checkOut: '2026-09-02',
+      nightUnitIds: [originUnit],
+      pets: true,
+    });
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/move-night`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { night: '2026-09-01', toUnitId: casalUnit, force_commercial: true },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toBe('PETS_NOT_ALLOWED');
+    expect(await nightsOf(reservation.id)).toEqual([{ night: '2026-09-01', room_unit_id: originUnit }]);
+  });
+
   it('422 COMMERCIAL_WARNING when destination capacity is too small, nothing written; 200 after retry with force_commercial', async () => {
     const token = await insertSessionCookie();
     const roomId = await insertRoom('Casal', { capacity: 2 });
@@ -405,6 +464,33 @@ describe('POST /panel/reservations/:code/move-stay', () => {
 
     const rows = await nightsOf(mover.id);
     expect(rows.every((r) => r.room_unit_id === unitA)).toBe(true); // fully untouched
+  });
+
+  it('409 PETS_NOT_ALLOWED — hard rule, no force_commercial escape hatch, nothing moves', async () => {
+    const token = await insertSessionCookie();
+    const tripleRoomId = await insertRoom('Triplo', { capacity: 3, petsAllowed: true });
+    const originUnit = await insertUnit(tripleRoomId, 'H3');
+    const casalId = await insertRoom('Casal', { petsAllowed: false });
+    const casalUnit = await insertUnit(casalId, 'H4');
+    const reservation = await insertReservation({
+      roomId: tripleRoomId,
+      checkIn: '2026-09-01',
+      checkOut: '2026-09-03',
+      nightUnitIds: [originUnit, originUnit],
+      pets: true,
+    });
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/move-stay`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { toUnitId: casalUnit, force_commercial: true },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toBe('PETS_NOT_ALLOWED');
+    expect((await nightsOf(reservation.id)).every((r) => r.room_unit_id === originUnit)).toBe(true);
   });
 });
 

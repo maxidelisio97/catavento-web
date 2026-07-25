@@ -18,6 +18,7 @@ import { assertReservationNightsConsistency } from './checkReservationNightsCons
 import { eachNightUTC } from '../shared/dateUtils.js';
 import { calculatePrice } from '../pricing/calculatePrice.js';
 import { calculateDeposit } from '../pricing/calculateDeposit.js';
+import { calculatePetFee } from '../pricing/calculatePetFee.js';
 
 export class NoAvailabilityError extends Error {
   readonly code = 'NO_AVAILABILITY' as const;
@@ -61,6 +62,41 @@ export interface CreateReservationInput {
   babies?: number;
   /** One integer per child, range [3, 17]. Defaults to []. */
   childrenAges?: number[];
+  /**
+   * SPEC-modulo-7-gestion-operativa.md § 6A.4 / § 7.1: every current caller
+   * IS the public web flow, hence the 'web' default. Manual reservations
+   * (módulo 7D) are the only other caller and always pass 'manual' explicitly.
+   */
+  origin?: 'web' | 'manual';
+  /**
+   * Initial status. Defaults to 'pending_payment' (the web flow's only
+   * value). Manual reservations (§ 7.1) pass 'confirmed' — they're created
+   * with authority by a logged-in operator, never wait for an Asaas webhook,
+   * and NEVER get `expiresAt` (no hold to expire).
+   */
+  status?: 'pending_payment' | 'confirmed';
+  /** § 7.2b: does this stay bring a pet. Defaults to false. */
+  pets?: boolean;
+  /**
+   * `settings.pet_fee_cents` at creation time, frozen into `pet_fee_cents`
+   * as `nights × petFeeCentsPerNight`. Ignored when `pets` is false.
+   */
+  petFeeCentsPerNight?: number;
+  /** user_id of the operator creating a manual reservation. Null for web (§ 11). */
+  createdBy?: number;
+  /**
+   * § 1, § 7.2: min-stay is a soft commercial rule for manual reservations,
+   * skippable with the operator's `force_commercial` confirmation. Never set
+   * by the web flow — min-stay stays a hard rejection there.
+   */
+  allowBelowMinStay?: boolean;
+  /**
+   * § 10 dec.1: operator override of the calculated total, manual-only. When
+   * set, this — not the calculated price + pet fee — becomes the frozen
+   * `total_cents`. `pet_fee_cents` is still computed and stored for audit
+   * regardless of the override (see createReservation.ts's freeze comment).
+   */
+  overrideTotalCents?: number;
 }
 
 export interface CreateReservationResult {
@@ -68,6 +104,7 @@ export interface CreateReservationResult {
   totalCents: number;
   code: string | null;
   depositCents: number | null;
+  petFeeCents: number;
 }
 
 export async function createReservation(
@@ -136,6 +173,7 @@ export async function createReservation(
         closed: o.closed,
       })),
       roomDefaultMinStay: stayData.defaultMinStay,
+      allowBelowMinStay: input.allowBelowMinStay,
     });
 
     if (price.status === 'unavailable_closed') {
@@ -145,8 +183,16 @@ export async function createReservation(
       throw new MinStayNotMetError(price.requiredMinStay, price.requestedNights);
     }
 
+    // § 7.2b: frozen independently of `override_total_cents` so it stays
+    // auditable — see the field's doc comment on CreateReservationInput.
+    const petFeeCents = input.pets ? calculatePetFee(price.nights, input.petFeeCentsPerNight ?? 0) : 0;
+    const totalCents = input.overrideTotalCents ?? price.totalCents + petFeeCents;
+
+    // Deposit must derive from the same frozen total (pet fee + override
+    // included) — computing it from price.totalCents alone under-collects
+    // whenever a pet fee or override applies.
     const depositCents =
-      input.depositPercent !== undefined ? calculateDeposit(price.totalCents, input.depositPercent) : null;
+      input.depositPercent !== undefined ? calculateDeposit(totalCents, input.depositPercent) : null;
 
     const reservation = await trx
       .insertInto('reservations')
@@ -158,9 +204,11 @@ export async function createReservation(
         check_in: input.checkIn,
         check_out: input.checkOut,
         guests: input.guests,
-        status: 'pending_payment',
+        status: input.status ?? 'pending_payment',
+        // Manual reservations never hold/expire (§ 7.1) — callers creating
+        // them simply never pass expiresAt, so this stays null for them.
         expires_at: input.expiresAt ?? null,
-        total_cents: price.totalCents,
+        total_cents: totalCents,
         deposit_cents: depositCents,
         guest_name: input.guestName ?? null,
         guest_email: input.guestEmail ?? null,
@@ -170,9 +218,11 @@ export async function createReservation(
         children: input.children ?? 0,
         babies: input.babies ?? 0,
         children_ages: input.childrenAges ?? [],
-        // Explicit, not relying on the column default: every current
-        // creation path IS the public web flow (módulo 6A § "6A.4").
-        origin: 'web',
+        pets: input.pets ?? false,
+        pet_fee_cents: petFeeCents,
+        origin: input.origin ?? 'web',
+        created_by: input.createdBy ?? null,
+        override_total_cents: input.overrideTotalCents ?? null,
       })
       .returning(['id', 'code'])
       .executeTakeFirstOrThrow();
@@ -212,6 +262,6 @@ export async function createReservation(
     // never let a crippled reservation commit silently.
     await assertReservationNightsConsistency(trx, reservation.id);
 
-    return { id: reservation.id, totalCents: price.totalCents, code: reservation.code, depositCents };
+    return { id: reservation.id, totalCents, code: reservation.code, depositCents, petFeeCents };
   });
 }
