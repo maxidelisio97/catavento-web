@@ -62,9 +62,11 @@ export const reservationDetailResponseSchema = z.object({
     babies: z.number(),
     total: z.number(),
   }),
+  pets: z.boolean(),
   money: z.object({
     total_cents: z.number(),
     deposit_cents: z.number().nullable(),
+    pet_fee_cents: z.number(),
     paid_cents: z.number(),
     balance_cents: z.number(),
   }),

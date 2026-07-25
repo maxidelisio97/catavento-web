@@ -24,7 +24,8 @@ M7 es el **primer módulo que escribe sobre reservas desde el panel**. Todo lo a
 
 > **El panel puede saltar reglas comerciales con confirmación explícita, pero NUNCA la integridad física de una unidad-noche.**
 
-- **Reglas comerciales (salteables con confirmación):** estadía mínima (`min-stay`), `adults_only`, capacidad-del-tipo-vs-huéspedes, restricciones de mascotas. El dueño sabe lo que hace; el panel le pide confirmar y procede.
+- **Reglas comerciales (salteables con confirmación):** estadía mínima (`min-stay`), capacidad-del-tipo-vs-huéspedes. El dueño sabe lo que hace; el panel le pide confirmar y procede.
+- **Reglas duras de espacio (NO salteables, ni por el dueño):** `adults_only` (Casal no admite niños/bebés) y mascotas en Casal. Son límites físicos, no de política — no hay confirmación que valga.
 - **Integridad física (NUNCA salteable, sin escape hatch):** una `room_unit` no puede tener dos reservas la misma noche. El `UNIQUE (room_unit_id, night)` es ley absoluta. No existe "forzar overbooking" en el panel. Si el dueño quiere sobrevender a nivel *tipo de cuarto*, eso es problema del channel manager (M12), no de la asignación física.
 
 Este principio se repite en cada operación de abajo. Si al implementar surge un caso que no encaja, **parar y preguntar**, no inventar un escape hatch.
@@ -257,6 +258,22 @@ POST /panel/reservations/manual
   - `deposit_paid` → registra un `payments` `kind='deposit'`, `method` = el elegido, monto = `deposit_percent` del total.
   - `paid_full` → registra un `payments` (o dos: deposit+balance, o uno `kind='balance'` por el total — **implementar como un solo registro que cubre el total**, `kind='balance'` con monto = total, para que `balance_due` dé 0).
 
+### 7.2b Mascotas (campo + tarifa nuevos, cierra deuda de 7C) — decidido 2026-07-23
+
+7C descubrió que la regla de mascotas (§4.2.5) no era implementable: no existía en `reservations` ningún campo que indicara si la reserva trae mascota (solo `rooms.pets_allowed` del lado del cuarto). 7D agrega el campo y la tarifa.
+
+**Regla de negocio (confirmada con el dueño):**
+- **Casal:** mascotas PROHIBIDAS. Regla DURA, NO salteable ni con `force_commercial` — es límite de espacio físico, misma familia que `adults_only` (Casal ya no admite niños/bebés por la misma razón). Intentar una reserva con mascota en Casal → rechazo, sin opción de confirmar.
+- **Triplo y Cuádruple:** mascotas permitidas, sin restricción.
+- **Tarifa:** R$30 **por noche, por reserva** (no por mascota — cargo plano aunque traigan más de una). Se suma al `total_cents` como componente de tarifa (igual que el hospedaje: `noches × tarifa_mascota`), congelado al crear la reserva. NO es un extra manual (§7 dec.4) — es parte del precio, entra en el total desde la creación, lo refleja el saldo y lo exige el check-out.
+
+**Modelado:**
+- **Schema:** columna `reservations.pets` (boolean o smallint, siguiendo el molde de `children`/`babies` — no inventar uno nuevo).
+- **Tarifa configurable:** el monto de mascota vive en la tabla `settings` (donde ya están `deposit_percent` y `hold_minutes`), NO hardcodeado. Default R$30 (3000 cents). Editable desde el panel a futuro (M8), pero el parámetro se crea ahora. El valor se congela por reserva al crear, igual que el resto del precio.
+- **Formulario manual:** control "trae mascota" igual que el de niños/bebés. Al tildarlo sobre un tipo Triplo/Cuádruple, el total mostrado incluye `noches × tarifa_mascota`. Sobre Casal, el control se bloquea o el submit se rechaza (regla dura).
+
+**Cierra la deuda de 7C:** con el campo existiendo, la validación de mascotas en `moveReservation` (que 7C omitió) ahora se implementa — pero como regla DURA, no como warning salteable. Mover una reserva con mascota a un Casal se rechaza siempre (mismo trato que la ocupación física). Ojo: un move que cambie el tipo de cuarto puede alterar el cargo de mascota — si se mueve de Triplo a Casal la mascota no puede ir; de Triplo a Cuádruple el cargo se mantiene. Definir en el plan qué pasa con el `total_cents` congelado ante un move entre tipos (probablemente fuera de scope de 7C/7D si el move no recalcula precio — pero anotarlo explícitamente, no dejarlo implícito). Actualizar la nota de deuda en `server/CLAUDE.md` (de "no implementable, falta el dato" a "resuelto en 7D, regla dura").
+
 ### 7.3 Frontend
 
 - Formulario de nueva reserva manual en el panel (no en el sitio público). Selector de tipo de cuarto, rango de fechas (reusar react-day-picker del sitio si conviene, o el que use el panel), huéspedes, datos de contacto, estado de pago.
@@ -302,7 +319,7 @@ M7 usa la opción liviana. Dejar la tabla `audit_log` documentada como futura.
 ### Abiertas (menores, no bloquean — confirmar durante implementación)
 
 3. **Check-out anticipado / early departure:** fuera de scope M7. Si se saca a alguien antes, hoy es check-out normal. Confirmar que no se necesita ajuste de tarifa por noches no usadas en M7.
-4. **Extras — alcance de UI:** el `kind='extra'` y su suma al total están en schema y backend. La UI de "agregar cargo" (lavandería, late check-out, frigobar) — ¿lista libre de concepto+monto, o catálogo de conceptos predefinidos? — *Sugerencia: lista libre (concepto texto + monto) en M7; catálogo es M8/M10. Confirmar.*
+4. **Extras — alcance de UI: lista libre (decidido 2026-07-23).** La UI de "agregar cargo" es una lista libre de concepto (texto) + monto, no un catálogo de conceptos predefinidos. Un catálogo queda para M8/M10 si el volumen lo justifica. `reservation_extras` (§11) ya soporta esto tal cual (`concept text` + `amount_cents`).
 
 ---
 

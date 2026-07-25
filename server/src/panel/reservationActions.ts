@@ -16,6 +16,8 @@ import {
   type PaymentMethod as AsaasClientMethod,
 } from '../reservations/createOrReusePayment.js';
 import { assertValidTransition, InvalidReservationTransitionError, type ReservationStatus } from '../reservations/reservationStateMachine.js';
+import { releaseReservationNights } from '../availability/releaseReservationNights.js';
+import { assertReservationNightsConsistency } from '../availability/checkReservationNightsConsistency.js';
 import { todayISO } from '../shared/dateUtils.js';
 
 export type PanelPaymentMethod = 'asaas_pix' | 'asaas_card' | 'cash' | 'external' | 'pix_manual';
@@ -287,6 +289,157 @@ export async function checkOut(db: Kysely<DB>, input: CheckOutInput): Promise<vo
     if (Number(result.numUpdatedRows) === 0) {
       throw new InvalidReservationTransitionError('checked_in', 'checked_out');
     }
+  });
+}
+
+/**
+ * § 8 — cancel and no-show. Unlike registerPayment/checkIn/checkOut, these
+ * DO touch disponibilidad (they free `reservation_nights`), so — per § 8
+ * ("Hacerlo dentro del lock para no competir con una reserva entrante") —
+ * they go through the SAME `pg_advisory_xact_lock(reservationId)` pattern
+ * `moveReservation.ts` uses, not a bare `FOR UPDATE` alone: a cancel racing
+ * a concurrent move of the SAME reservation must serialize on the identical
+ * lock key, or one could release nights out from under the other's write.
+ */
+export interface CancelInput {
+  code: string;
+  reason?: string;
+  changedBy: number;
+}
+
+export async function cancelReservation(db: Kysely<DB>, input: CancelInput): Promise<void> {
+  // Unlocked pre-read to resolve code -> id (advisory lock needs a numeric
+  // key, same two-step pattern moveReservation.ts uses).
+  const found = await db.selectFrom('reservations').select('id').where('code', '=', input.code).executeTakeFirst();
+  if (!found) throw new ReservationNotFoundError();
+
+  await db.transaction().execute(async (trx) => {
+    await sql`SELECT pg_advisory_xact_lock(${found.id})`.execute(trx);
+
+    const reservation = await trx
+      .selectFrom('reservations')
+      .select(['id', 'status'])
+      .where('id', '=', found.id)
+      .executeTakeFirstOrThrow();
+
+    // § 8: valid from pending_payment or confirmed. checked_in cannot cancel
+    // (§ 3) — assertValidTransition already enforces this from the state
+    // machine's transition table, no separate check needed here.
+    assertValidTransition(reservation.status as ReservationStatus, 'cancelled');
+
+    await trx
+      .updateTable('reservations')
+      .set({
+        status: 'cancelled',
+        cancelled_at: new Date(),
+        cancelled_by: input.changedBy,
+        cancel_reason: input.reason ?? null,
+      })
+      .where('id', '=', reservation.id)
+      .execute();
+
+    // § 8: liberan las unidad-noche. No automatic refund (§ 8, § 10 dec.2) —
+    // any deposit already paid stays in `payments` as historical record.
+    await releaseReservationNights(trx, reservation.id);
+    await assertReservationNightsConsistency(trx, reservation.id);
+  });
+}
+
+export interface NoShowInput {
+  code: string;
+  reason?: string;
+  changedBy: number;
+}
+
+export async function markNoShow(db: Kysely<DB>, input: NoShowInput): Promise<void> {
+  const found = await db.selectFrom('reservations').select('id').where('code', '=', input.code).executeTakeFirst();
+  if (!found) throw new ReservationNotFoundError();
+
+  await db.transaction().execute(async (trx) => {
+    await sql`SELECT pg_advisory_xact_lock(${found.id})`.execute(trx);
+
+    const reservation = await trx
+      .selectFrom('reservations')
+      .select(['id', 'status'])
+      .where('id', '=', found.id)
+      .executeTakeFirstOrThrow();
+
+    // § 8: valid from confirmed only — assertValidTransition enforces this
+    // from the state machine (pending_payment -> no_show isn't listed).
+    assertValidTransition(reservation.status as ReservationStatus, 'no_show');
+
+    await trx
+      .updateTable('reservations')
+      .set({
+        status: 'no_show',
+        no_show_at: new Date(),
+        no_show_by: input.changedBy,
+        cancel_reason: input.reason ?? null,
+      })
+      .where('id', '=', reservation.id)
+      .execute();
+
+    await releaseReservationNights(trx, reservation.id);
+    await assertReservationNightsConsistency(trx, reservation.id);
+  });
+}
+
+/**
+ * § 7 dec.4, § 11 — free-form extra charge (concept + amount), added to a
+ * live reservation. Reuses the exact same "not payable" status set as
+ * `registerPayment`: an extra is a charge like any other, so the same
+ * reasoning applies — a `pending_payment` reservation can still lose its
+ * `reservation_nights` to the lazy sweep, and cancelled/no_show/checked_out/
+ * payment_conflict have nothing left to charge against.
+ */
+export interface AddExtraInput {
+  code: string;
+  concept: string;
+  amountCents: number;
+  changedBy: number;
+}
+
+export interface AddExtraResult {
+  extraId: number;
+  totalCents: number;
+}
+
+export async function addExtra(db: Kysely<DB>, input: AddExtraInput): Promise<AddExtraResult> {
+  return db.transaction().execute(async (trx) => {
+    // FOR UPDATE: two concurrent extras on the same reservation must not
+    // both read the same stale total_cents and race to overwrite each
+    // other's increment — same reasoning as checkOut's row lock.
+    const reservation = await trx
+      .selectFrom('reservations')
+      .select(['id', 'status', 'total_cents'])
+      .where('code', '=', input.code)
+      .forUpdate()
+      .executeTakeFirst();
+
+    if (!reservation) throw new ReservationNotFoundError();
+    if (NOT_PAYABLE_STATUSES.has(reservation.status as ReservationStatus)) {
+      throw new ReservationNotPayableError(reservation.status);
+    }
+
+    const extra = await trx
+      .insertInto('reservation_extras')
+      .values({
+        reservation_id: reservation.id,
+        concept: input.concept,
+        amount_cents: input.amountCents,
+        created_by: input.changedBy,
+      })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+
+    const newTotalCents = reservation.total_cents + input.amountCents;
+    await trx
+      .updateTable('reservations')
+      .set({ total_cents: newTotalCents })
+      .where('id', '=', reservation.id)
+      .execute();
+
+    return { extraId: extra.id, totalCents: newTotalCents };
   });
 }
 

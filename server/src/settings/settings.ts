@@ -12,6 +12,7 @@ import type { DB } from '../db/types.js';
 const settingsSchemas = {
   deposit_percent: z.coerce.number().int().min(0).max(100),
   hold_minutes: z.coerce.number().int().min(1),
+  pet_fee_cents: z.coerce.number().int().min(0),
 } as const;
 
 export type SettingKey = keyof typeof settingsSchemas;
@@ -54,6 +55,7 @@ export async function getSetting<K extends SettingKey>(
 export interface BusinessSettings {
   depositPercent: number;
   holdMinutes: number;
+  petFeeCents: number;
 }
 
 /** Reads every setting the reservation flow depends on, in one round trip. */
@@ -61,7 +63,7 @@ export async function getBusinessSettings(executor: Kysely<DB> | Transaction<DB>
   const rows = await executor
     .selectFrom('settings')
     .select(['key', 'value'])
-    .where('key', 'in', ['deposit_percent', 'hold_minutes'])
+    .where('key', 'in', ['deposit_percent', 'hold_minutes', 'pet_fee_cents'])
     .execute();
 
   const byKey = new Map(rows.map((r) => [r.key, r.value]));
@@ -81,5 +83,6 @@ export async function getBusinessSettings(executor: Kysely<DB> | Transaction<DB>
   return {
     depositPercent: parse('deposit_percent'),
     holdMinutes: parse('hold_minutes'),
+    petFeeCents: parse('pet_fee_cents'),
   };
 }

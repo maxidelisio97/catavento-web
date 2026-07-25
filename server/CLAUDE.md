@@ -184,6 +184,25 @@ Ver CLAUDE.md raíz — regla de todo el repo, no solo del backend.
   garantizar el solape — sin tocar el código de producción. Repetir
   la verificación (sacar lock → falla, restaurar lock → pasa) contra
   ESE test, no contra el `Promise.all` desnudo.
+- **Deuda: la suite completa flakea de forma no determinista, no por
+  archivo fijo.** El fix de `fileParallelism: false` (2026-07-20)
+  resolvió la carrera ENTRE archivos, pero los tests de concurrencia
+  dependen de `ArtificialRaceWindowPlugin` (delay fijo ~120ms) para
+  forzar el solape real — bajo carga de máquina variable ese delay a
+  veces no alcanza, y falla un test de concurrencia distinto en cada
+  corrida (visto: `auth.test.ts` con hook timeout en una corrida,
+  `panelManualReservation.test.ts` DETERMINISTIC race-window en otra,
+  suite limpia en una tercera — mismo código, tres resultados). No es
+  "la máquina": es un delay fijo compitiendo con velocidad de máquina
+  variable. Si aparece un rojo en un test ajeno al cambio que se está
+  haciendo, no descartarlo como ambiental sin volver a correr la suite
+  2-3 veces primero. Fix real pendiente (no trivial): reemplazar el
+  delay fijo por una barrera explícita (señal/latch que ambas
+  transacciones concurrentes deben cruzar antes de continuar) en vez
+  de una espera de tiempo fijo. **Esto es el próximo trabajo de
+  infraestructura de tests, a hacer antes de M8 — no "algún día".**
+  Una suite que flakea es una suite en la que se deja de confiar, y
+  en este repo los tests son la única red.
 
 ## Deuda conocida
 - **ConfirmationStep decide `awaitingCard` mirando solo `payment?.method`,

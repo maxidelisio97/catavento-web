@@ -67,8 +67,27 @@ export class PhysicalConflictError extends Error {
   }
 }
 
+/**
+ * § 1 (principle), § 7.2b — hard space-limit rules. Same family as
+ * `PhysicalConflictError`: NEVER skippable, `force_commercial` never reaches
+ * these checks. Originally 7C treated `adults_only` as a skippable
+ * `CommercialWarningError` (following § 4.2.5's literal text), which
+ * contradicted § 1's own principle ("adults_only... NO salteable, ni por el
+ * dueño") — a real child could be moved into Casal with a confirmation click.
+ * Hardened in 7D per project owner decision 2026-07-24, together with pets
+ * (which never had a column to check before 7D added `reservations.pets`).
+ */
+export class HardSpaceRuleViolationError extends Error {
+  constructor(
+    readonly code: 'ADULTS_ONLY_ROOM' | 'PETS_NOT_ALLOWED',
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 export interface CommercialWarning {
-  code: 'CAPACITY_EXCEEDED' | 'ADULTS_ONLY_ROOM';
+  code: 'CAPACITY_EXCEEDED';
   message: string;
 }
 
@@ -85,6 +104,7 @@ interface ReservationRow {
   guests: number;
   children: number;
   babies: number;
+  pets: boolean;
   check_in: string;
   check_out: string;
 }
@@ -98,6 +118,7 @@ async function fetchReservationByCode(db: Kysely<DB>, code: string): Promise<Res
       'guests',
       'children',
       'babies',
+      'pets',
       sql<string>`check_in::text`.as('check_in'),
       sql<string>`check_out::text`.as('check_out'),
     ])
@@ -109,7 +130,12 @@ async function fetchDestinationUnit(db: Kysely<DB>, toUnitId: number) {
   return db
     .selectFrom('room_units')
     .innerJoin('rooms', 'rooms.id', 'room_units.room_id')
-    .select(['room_units.id as id', 'rooms.capacity as capacity', 'rooms.adults_only as adults_only'])
+    .select([
+      'room_units.id as id',
+      'rooms.capacity as capacity',
+      'rooms.adults_only as adults_only',
+      'rooms.pets_allowed as pets_allowed',
+    ])
     .where('room_units.id', '=', toUnitId)
     .where('room_units.active', '=', true)
     .executeTakeFirst();
@@ -151,19 +177,31 @@ async function assertNightsFree(
   if (occupied.length > 0) throw new PhysicalConflictError(occupied);
 }
 
+/**
+ * § 1, § 7.2b — hard space-limit checks. Thrown unconditionally, BEFORE
+ * `commercialWarnings` is even consulted: no `forceCommercial` value can
+ * reach this function's callers. adults_only was hardened here in 7D
+ * (see `HardSpaceRuleViolationError`'s doc comment) alongside pets, which
+ * 7D adds for the first time.
+ */
+function assertHardSpaceRules(
+  destination: { adults_only: boolean; pets_allowed: boolean },
+  reservation: Pick<ReservationRow, 'children' | 'babies' | 'pets'>,
+): void {
+  if (destination.adults_only && (reservation.children > 0 || reservation.babies > 0)) {
+    throw new HardSpaceRuleViolationError('ADULTS_ONLY_ROOM', 'this room does not allow children or babies');
+  }
+  if (reservation.pets && !destination.pets_allowed) {
+    throw new HardSpaceRuleViolationError('PETS_NOT_ALLOWED', 'this room does not allow pets');
+  }
+}
+
 function commercialWarnings(
-  destination: { capacity: number; adults_only: boolean },
-  reservation: Pick<ReservationRow, 'guests' | 'children' | 'babies'>,
+  destination: { capacity: number },
+  reservation: Pick<ReservationRow, 'guests'>,
 ): CommercialWarning[] {
   const warnings: CommercialWarning[] = [];
 
-  // Mascotas (§ 4.2.5) deliberately omitted: no column on `reservations`
-  // records whether the stay involves a pet, so there is nothing to check
-  // against `rooms.pets_allowed`. Known model gap, not a 7C oversight —
-  // candidate for M8 or whenever the reservation form grows a pet field.
-  if (destination.adults_only && (reservation.children > 0 || reservation.babies > 0)) {
-    warnings.push({ code: 'ADULTS_ONLY_ROOM', message: 'this room does not allow children or babies' });
-  }
   if (reservation.guests > destination.capacity) {
     warnings.push({ code: 'CAPACITY_EXCEEDED', message: `guests exceeds room capacity (${destination.capacity})` });
   }
@@ -238,6 +276,8 @@ export async function moveNight(db: Kysely<DB>, input: MoveNightInput): Promise<
   const nextNight = formatDateUTC(addDaysUTC(parseDateUTC(input.night), 1));
   await assertNightsFree(db, input.toUnitId, input.night, nextNight, reservation.id);
 
+  assertHardSpaceRules(destination, reservation);
+
   const warnings = commercialWarnings(destination, reservation);
   if (warnings.length > 0 && !input.forceCommercial) throw new CommercialWarningError(warnings);
 
@@ -275,6 +315,8 @@ export async function moveStay(db: Kysely<DB>, input: MoveStayInput): Promise<vo
   const nights = nightRows.map((r) => r.night);
 
   await assertNightsFree(db, input.toUnitId, reservation.check_in, reservation.check_out, reservation.id);
+
+  assertHardSpaceRules(destination, reservation);
 
   const warnings = commercialWarnings(destination, reservation);
   if (warnings.length > 0 && !input.forceCommercial) throw new CommercialWarningError(warnings);

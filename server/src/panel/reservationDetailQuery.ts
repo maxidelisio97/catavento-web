@@ -28,9 +28,11 @@ export interface ReservationDetail {
     babies: number;
     total: number;
   };
+  pets: boolean;
   money: {
     total_cents: number;
     deposit_cents: number | null;
+    pet_fee_cents: number;
     paid_cents: number;
     balance_cents: number;
   };
@@ -54,8 +56,10 @@ export async function getReservationDetail(db: Kysely<DB>, id: number): Promise<
       'reservations.children as children',
       'reservations.children_ages as children_ages',
       'reservations.babies as babies',
+      'reservations.pets as pets',
       'reservations.total_cents as total_cents',
       'reservations.deposit_cents as deposit_cents',
+      'reservations.pet_fee_cents as pet_fee_cents',
       'reservations.origin as origin',
       'reservations.guest_name as guest_name',
       'reservations.guest_email as guest_email',
@@ -111,9 +115,11 @@ export async function getReservationDetail(db: Kysely<DB>, id: number): Promise<
       // (see plugins/reservations.ts's capacity comment).
       total: reservation.guests,
     },
+    pets: reservation.pets,
     money: {
       total_cents: totalCents,
       deposit_cents: reservation.deposit_cents,
+      pet_fee_cents: reservation.pet_fee_cents,
       paid_cents: paidCents,
       balance_cents: totalCents - paidCents,
     },
