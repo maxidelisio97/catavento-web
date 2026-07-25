@@ -20,6 +20,7 @@ import type { DB } from '../../db/types.js';
 import { registerErrorHandler } from '../../errorHandler.js';
 import { hashPassword } from '../../auth/hashPassword.js';
 import { SESSION_COOKIE_NAME } from '../../auth/cookie.js';
+import { checkIn, InvalidReservationTransitionError } from '../../panel/reservationActions.js';
 
 // Test-only Kysely plugin that inserts an artificial delay after every query
 // result comes back. Used by exactly one test to force a genuine race
@@ -625,6 +626,108 @@ describe('POST /panel/reservations/:code/check-in', () => {
 
     expect(response.statusCode).toBe(409);
     expect(response.json().error).toBe('INVALID_TRANSITION');
+  });
+
+  // DETERMINISTIC: proves check-in shares the SAME lock key as
+  // cancel/no-show/move, by holding that exact lock on a raw connection and
+  // asserting checkIn genuinely blocks on it — not a uniform-delay race that
+  // hopes for a particular interleaving.
+  //
+  // A uniform-delay approach (the ArtificialRaceWindowPlugin technique used
+  // elsewhere in this file) does NOT work for this pair: checkIn is
+  // structurally the SHORTER transaction (2 round trips) vs cancel's longer
+  // one (lock + read + update + release nights + consistency check, 5+ round
+  // trips), so under a uniform per-query delay checkIn always finishes and
+  // commits well before cancel even reads status — cancel's own fresh read
+  // then correctly sees 'checked_in' and rejects itself with 409. That's a
+  // real, valid outcome, but it never exercises the actual danger: checkIn
+  // reading a STALE 'confirmed' and blindly writing 'checked_in' AFTER a
+  // cancel has already committed and released the nights. Verified by hand:
+  // that version of this test passed 4/4 runs even with checkIn's lock
+  // removed entirely — it wasn't proving anything.
+  //
+  // So instead of racing two HTTP requests, this holds the advisory lock
+  // directly on a second raw connection (simulating cancel being mid-flight,
+  // already holding the lock, not yet committed), calls the real `checkIn`
+  // service function concurrently, and asserts it blocks until the lock is
+  // released — then, seeing the post-cancel status under its own fresh
+  // locked read, rejects instead of resurrecting.
+  it('DETERMINISTIC: checkIn blocks on the SAME advisory-lock key a concurrent cancel holds, and rejects once unblocked — never resurrects', async () => {
+    const roomId = await insertRoom();
+    const unitId = await insertUnit(roomId);
+    const reservation = await insertReservation({ roomId, status: 'confirmed' });
+    await insertNights(reservation.id, unitId, '2026-09-01', '2026-09-03');
+    const user = await testDb
+      .insertInto('users')
+      .values({ email: 'operator@catavento.test', name: 'Operator', password_hash: await hashPassword('whatever') })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+
+    // Warm the pool with two genuinely concurrent queries first, so it holds
+    // at least 2 idle physical connections before the race starts. Without
+    // this, the FIRST query on a cold connection (TCP + auth handshake) on
+    // this machine costs ~300-400ms on its own — on the same order as the
+    // window below, which made an earlier version of this test look like it
+    // was "blocked on the lock" when it was actually just paying that
+    // one-time connection cost. Verified by hand: same false "blocked"
+    // reading appeared even routed through a brand-new, totally unrelated
+    // pool, which proved it had nothing to do with holder's lock at all.
+    await Promise.all([
+      testDb.selectFrom('reservations').select('id').limit(1).execute(),
+      testDb.selectFrom('reservations').select('id').limit(1).execute(),
+    ]);
+
+    // Raw connection holding the SAME lock key cancelReservation would use,
+    // simulating a cancel that's mid-transaction (lock acquired, not yet
+    // committed).
+    const holder = await testPool.connect();
+    await holder.query('BEGIN');
+    await holder.query('SELECT pg_advisory_xact_lock($1)', [reservation.id]);
+
+    let checkInSettled = false;
+    const checkInPromise = checkIn(testDb, { code: reservation.code, changedBy: user.id }).then(
+      () => {
+        checkInSettled = true;
+      },
+      (err: unknown) => {
+        checkInSettled = true;
+        throw err;
+      },
+    );
+
+    // checkIn must still be blocked on the lock — give it a window it would
+    // easily clear if it weren't actually waiting.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(checkInSettled).toBe(false);
+
+    try {
+      // Finish what a real cancel does, still holding the lock: transition
+      // to cancelled and release the nights.
+      await holder.query(`UPDATE reservations SET status = 'cancelled' WHERE id = $1`, [reservation.id]);
+      await holder.query(`DELETE FROM reservation_nights WHERE reservation_id = $1`, [reservation.id]);
+      await holder.query('COMMIT');
+    } finally {
+      holder.release();
+    }
+
+    // Now unblocked: checkIn's fresh locked read sees 'cancelled', which
+    // isn't a valid predecessor of 'checked_in' — it must reject, never
+    // silently resurrect the reservation.
+    await expect(checkInPromise).rejects.toThrow(InvalidReservationTransitionError);
+
+    const row = await testDb
+      .selectFrom('reservations')
+      .select('status')
+      .where('id', '=', reservation.id)
+      .executeTakeFirstOrThrow();
+    expect(row.status).toBe('cancelled'); // never resurrected to checked_in
+
+    const nights = await testDb
+      .selectFrom('reservation_nights')
+      .selectAll()
+      .where('reservation_id', '=', reservation.id)
+      .execute();
+    expect(nights).toHaveLength(0);
   });
 });
 

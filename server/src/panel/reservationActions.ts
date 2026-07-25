@@ -2,10 +2,14 @@
  * Write actions for M7 panel reservations: register a payment, check-in,
  * check-out. Per SPEC-modulo-7-gestion-operativa.md § 5.4, § 6.
  *
- * None of these touch `reservation_nights` or disponibilidad, so — unlike
- * move/manual-creation (§ 4, § 7) — they don't need the advisory lock that
- * guards physical-unit integrity (§ 1's "NUNCA salteable" is about the
- * unit-night, not about money or status).
+ * registerPayment/checkOut don't touch `reservation_nights` or
+ * disponibilidad, so they don't need the advisory lock that guards
+ * physical-unit integrity (§ 1's "NUNCA salteable" is about the unit-night,
+ * not about money or status). checkIn is the exception: it DOES take that
+ * same `pg_advisory_xact_lock(reservationId)` — not for disponibilidad, but
+ * to serialize against cancel/no-show/move on the SAME reservation (see
+ * checkIn's own comment below for why a bare status read without the lock
+ * can resurrect an already-cancelled reservation).
  */
 import { sql, type Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
@@ -207,23 +211,38 @@ export interface CheckInInput {
 }
 
 export async function checkIn(db: Kysely<DB>, input: CheckInInput): Promise<void> {
-  const reservation = await db
-    .selectFrom('reservations')
-    .select(['id', 'status'])
-    .where('code', '=', input.code)
-    .executeTakeFirst();
+  // Unlocked pre-read to resolve code -> id, same two-step pattern
+  // cancelReservation/markNoShow use (advisory lock needs a numeric key).
+  const found = await db.selectFrom('reservations').select('id').where('code', '=', input.code).executeTakeFirst();
+  if (!found) throw new ReservationNotFoundError();
 
-  if (!reservation) throw new ReservationNotFoundError();
+  await db.transaction().execute(async (trx) => {
+    // pg_advisory_xact_lock, NOT a bare FOR UPDATE: cancel/no-show/move all
+    // serialize on this same lock key, and a row lock alone would NOT block
+    // them (they're independent locking mechanisms in Postgres — FOR UPDATE
+    // and pg_advisory_xact_lock don't see each other). Without sharing the
+    // identical lock key, a concurrent cancel could land between our read
+    // and write and this checkIn would blindly stomp status back to
+    // 'checked_in' on an already-cancelled reservation — resurrecting it
+    // into an active state with its reservation_nights already released.
+    await sql`SELECT pg_advisory_xact_lock(${found.id})`.execute(trx);
 
-  // Throws InvalidReservationTransitionError (-> 409) for anything other
-  // than 'confirmed' -> 'checked_in', per § 6.1's precondition.
-  assertValidTransition(reservation.status as ReservationStatus, 'checked_in');
+    const reservation = await trx
+      .selectFrom('reservations')
+      .select(['id', 'status'])
+      .where('id', '=', found.id)
+      .executeTakeFirstOrThrow();
 
-  await db
-    .updateTable('reservations')
-    .set({ status: 'checked_in', checked_in_at: new Date(), checked_in_by: input.changedBy })
-    .where('id', '=', reservation.id)
-    .execute();
+    // Throws InvalidReservationTransitionError (-> 409) for anything other
+    // than 'confirmed' -> 'checked_in', per § 6.1's precondition.
+    assertValidTransition(reservation.status as ReservationStatus, 'checked_in');
+
+    await trx
+      .updateTable('reservations')
+      .set({ status: 'checked_in', checked_in_at: new Date(), checked_in_by: input.changedBy })
+      .where('id', '=', reservation.id)
+      .execute();
+  });
 }
 
 export class BalanceDueError extends Error {
