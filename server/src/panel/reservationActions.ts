@@ -20,6 +20,7 @@ import {
   type PaymentMethod as AsaasClientMethod,
 } from '../reservations/createOrReusePayment.js';
 import { assertValidTransition, InvalidReservationTransitionError, type ReservationStatus } from '../reservations/reservationStateMachine.js';
+import { assertNotOverpaying, assertNotOverpayingWithPendingAsaas } from '../reservations/overpaymentGuard.js';
 import { releaseReservationNights } from '../availability/releaseReservationNights.js';
 import { assertReservationNightsConsistency } from '../availability/checkReservationNightsConsistency.js';
 import { todayISO } from '../shared/dateUtils.js';
@@ -142,6 +143,13 @@ export async function registerPayment(db: Kysely<DB>, input: RegisterPaymentInpu
     throw new ReservationNotPayableError(reservation.status);
   }
 
+  // Early guard against the obvious mistake (typo'd amount), before touching
+  // Asaas or opening a transaction. Cash/external/pix_manual and asaas_*
+  // both get a race-safe re-check under the advisory lock further down
+  // (assertNotOverpayingWithPendingAsaas) — this outer check alone only
+  // catches the single-request case against RECEIVED money.
+  await assertNotOverpaying(db, reservation.id, input.amountCents);
+
   if (ASAAS_METHODS.has(input.method)) {
     if (!input.cpfCnpj) throw new MissingCpfCnpjError();
 
@@ -186,6 +194,12 @@ export async function registerPayment(db: Kysely<DB>, input: RegisterPaymentInpu
       if (!sameIntent) throw new IdempotencyKeyReusedError();
       return { method, paymentId: existing.id, status: 'received' as const, replayed: true };
     }
+
+    // Re-check under the lock, right before the insert: this is what
+    // actually closes the race between two concurrent/near-simultaneous
+    // payments (cash or Asaas) — the outer assertNotOverpaying above only
+    // catches the single-request case.
+    await assertNotOverpayingWithPendingAsaas(trx, reservation.id, input.amountCents);
 
     const row = await trx
       .insertInto('payments')

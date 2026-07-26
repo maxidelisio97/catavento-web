@@ -85,6 +85,20 @@ hallazgo puede esperar.
 - Fin de semana = noches de viernes y sábado.
 - El precio de una reserva se congela al crearla.
 
+## Constraints de DB no visibles en el código
+- `idx_payments_one_pending_per_reservation` (migración 1784587500000):
+  UNIQUE en `payments.reservation_id` WHERE status='pending', sin
+  particionar por `kind` — como máximo un pago `pending` por reserva EN
+  TOTAL, sin importar el kind. Un segundo INSERT pending para la misma
+  reserva (aunque sea de otro kind) revienta con un unique-violation
+  crudo si no se maneja explícitamente. Encontrado recién al auditar
+  `fix-asaas-overpayment-webhook`: la auditoría de riesgo que originó ese
+  fix construyó un ejemplo de sobre-pago (dos cargos Asaas pending de
+  distinto kind) que este índice ya bloqueaba —mal (500 sin manejar),
+  pero bloqueaba. El agujero real era el caso mixto: un pago `cash`
+  entra directo como `received`, nunca pasa por `pending`, así que este
+  índice no lo ve.
+
 ## Módulo 7A — schema real y máquina de estados
 
 ### Schema real (nombres — no asumir de memoria)
@@ -256,6 +270,19 @@ Ver CLAUDE.md raíz — regla de todo el repo, no solo del backend.
   preexistente de M4/7A), pero por tocar plata de cara al huésped en
   producción no esperó a que 7B terminara: se sacó a su propia rama,
   con su propia mini risk-review, antes de retomar 7B.
+
+- **No hay barrido periódico que reconcilie pendings Asaas viejos contra
+  Asaas — solo se reconcilian de forma perezosa, dentro de
+  `overpaymentGuard.ts`, y solo en el momento en que alguien intenta
+  cobrar de nuevo sobre esa misma reserva.** Si el webhook de un pago se
+  pierde (Asaas cobró, la notificación nunca llegó y nadie vuelve a
+  intentar cobrarle a esa reserva), la fila queda `pending` para siempre
+  — nadie la barre. Mismo patrón de fondo que el sobre-pago
+  (`fix-asaas-overpayment-webhook`): plata que se descuadra en silencio,
+  acá por omisión en vez de por doble cobro. No es parte de ese fix; es
+  trabajo propio pendiente — un barrido periódico (cron o job) que
+  reconcilie proactivamente los pendings Asaas viejos, no solo cuando
+  alguien va a cobrar.
 
 - `npm run codegen` (kysely-codegen) apunta a producción por default vía
   `.env`/`DATABASE_URL`, no a `catavento_db_test`. Si se corre después de

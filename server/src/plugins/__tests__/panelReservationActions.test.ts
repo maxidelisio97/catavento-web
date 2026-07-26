@@ -567,6 +567,460 @@ describe('POST /panel/reservations/:code/payment', () => {
     expect(row.status).toBe('pending');
     expect(row.method).toBe('asaas_pix');
   });
+
+  // --- Overpayment guard (overpaymentGuard.ts) ---
+
+  it('cash: 422 OVERPAYMENT when amount_cents exceeds balance_due_cents by even one cent, nothing inserted', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId, totalCents: 20000 });
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'balance', method: 'cash', amount_cents: 20001, idempotency_key: randomUUID() },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json().error).toBe('OVERPAYMENT');
+
+    const row = await testDb
+      .selectFrom('payments')
+      .selectAll()
+      .where('reservation_id', '=', reservation.id)
+      .executeTakeFirst();
+    expect(row).toBeUndefined();
+  });
+
+  it('cash: paying exactly the remaining balance_due_cents is allowed (closes it to zero, not rejected as overpaying)', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId, totalCents: 20000 });
+    await insertPayment(reservation.id, 12000, 'received'); // balance_due_cents == 8000
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'balance', method: 'cash', amount_cents: 8000, idempotency_key: randomUUID() },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toEqual({ method: 'cash', payment_id: expect.any(Number), status: 'received' });
+  });
+
+  it('asaas_pix: 422 OVERPAYMENT when the requested amount exceeds balance_due_cents, never calls Asaas (cheap pre-check, before the lock/transaction)', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId, totalCents: 20000 });
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'balance', method: 'asaas_pix', amount_cents: 20001, cpf_cnpj: '12345678900' },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json().error).toBe('OVERPAYMENT');
+    expect(createCustomer).not.toHaveBeenCalled();
+    expect(createPayment).not.toHaveBeenCalled();
+  });
+
+  // DETERMINISTIC: two concurrent NEW cash payments, each individually within
+  // the balance but together exceeding it — the outer assertNotOverpaying
+  // check alone (before the transaction opens) can't catch this; only the
+  // re-check under the SAME pg_advisory_xact_lock the idempotency dedupe
+  // already uses closes the race. Same 120ms-delay technique as the
+  // idempotency race test above. Verified by hand: removing the
+  // assertNotOverpayingWithPendingAsaas call from registerPayment's cash
+  // branch makes this test fail (both 201, three rows never happens because
+  // amount_cents=15000 x2 = 30000 > 20000 total, but WITHOUT the locked
+  // re-check both inserts succeed regardless).
+  it('DETERMINISTIC: two concurrent cash payments that individually fit but together overpay — the second is rejected, never both inserted', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId, totalCents: 20000 });
+    const delayedDb = new Kysely<DB>({
+      dialect: new PostgresDialect({ pool: testPool }),
+      plugins: [new ArtificialRaceWindowPlugin()],
+    });
+    const app = buildApp(delayedDb);
+
+    const [first, second] = await Promise.all([
+      app.inject({
+        method: 'POST',
+        url: `/panel/reservations/${reservation.code}/payment`,
+        cookies: { [SESSION_COOKIE_NAME]: token },
+        payload: { kind: 'balance', method: 'cash', amount_cents: 15000, idempotency_key: randomUUID() },
+      }),
+      app.inject({
+        method: 'POST',
+        url: `/panel/reservations/${reservation.code}/payment`,
+        cookies: { [SESSION_COOKIE_NAME]: token },
+        payload: { kind: 'balance', method: 'cash', amount_cents: 15000, idempotency_key: randomUUID() },
+      }),
+    ]);
+
+    const statusCodes = [first.statusCode, second.statusCode].sort();
+    expect(statusCodes).toEqual([201, 422]);
+
+    const rows = await testDb
+      .selectFrom('payments')
+      .selectAll()
+      .where('reservation_id', '=', reservation.id)
+      .execute();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.amount_cents).toBe(15000);
+  });
+
+  // Two SEQUENTIAL requests of DIFFERENT kind, each individually within
+  // balance_due_cents at the moment it's checked (neither is `received` yet
+  // — both sit `pending` until their own webhook lands), together exceed the
+  // total. No thread race involved.
+  //
+  // IMPORTANT NUANCE (found while doing the mandatory "remove the guard,
+  // confirm it fails" check): `idx_payments_one_pending_per_reservation`
+  // (migration 1784587500000) is a DB-level unique index on
+  // `reservation_id WHERE status='pending'` — NOT scoped by kind, so it
+  // already forbids two simultaneously-pending payments of ANY kind for the
+  // same reservation. Verified by hand: commenting out
+  // assertNotOverpayingWithPendingAsaas in createOrReusePayment.ts does NOT
+  // make this test's second request succeed with 201 — it makes it fail
+  // with a raw 500 (unhandled unique-constraint violation) instead of a
+  // clean 422. So for this SPECIFIC pure-Asaas-vs-Asaas shape, the money was
+  // already safe before this fix; what the fix adds here is turning an
+  // unhandled 500 into an intentional, well-typed 422 — real robustness,
+  // not decoration. The index does NOT protect the mixed cash+Asaas case
+  // below, though (cash inserts straight to 'received', never 'pending', so
+  // the index never sees it) — that's the case that was genuinely open.
+  it('asaas: two sequential charges of DIFFERENT kind that individually fit but together exceed the balance — clean 422, not the DB unique-index 500', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId, totalCents: 20000 });
+    createCustomer.mockResolvedValue({ id: 'cus_1' });
+    createPayment.mockResolvedValue({ id: 'pay_deposit', status: 'PENDING', invoiceUrl: 'https://asaas.test/inv/deposit' });
+    const app = buildApp();
+
+    const first = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'deposit', method: 'asaas_card', amount_cents: 20000, cpf_cnpj: '12345678900' },
+    });
+    expect(first.statusCode).toBe(201);
+
+    const second = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'balance', method: 'asaas_card', amount_cents: 20000, cpf_cnpj: '12345678900' },
+    });
+
+    expect(second.statusCode).toBe(422);
+    expect(second.json().error).toBe('OVERPAYMENT');
+    expect(createPayment).toHaveBeenCalledTimes(1); // never created the second Asaas charge
+
+    const rows = await testDb
+      .selectFrom('payments')
+      .selectAll()
+      .where('reservation_id', '=', reservation.id)
+      .execute();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.kind).toBe('deposit');
+  });
+
+  // The genuinely open gap, unlike the pure-Asaas-vs-Asaas case above:
+  // idx_payments_one_pending_per_reservation only restricts `pending` rows.
+  // Cash inserts straight to `received` — the index never sees it, so it
+  // never blocks a cash payment from landing alongside an already-pending
+  // Asaas charge. Order 1: Asaas charge created first (still pending, no
+  // conflict), THEN a cash payment for the rest of the balance. Verified by
+  // hand: this is the one that actually needs assertNotOverpayingWithPendingAsaas
+  // in registerPayment's cash branch — commenting it out makes THIS test
+  // fail (cash succeeds with 201 instead of 422); it does NOT depend on the
+  // check inside createOrReuseAsaasPayment at all (disabling that one alone
+  // leaves this test passing).
+  it('mixed order 1 — Asaas pending charge created first, then a cash payment that would push the total over: cash is rejected', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId, totalCents: 20000 });
+    createCustomer.mockResolvedValue({ id: 'cus_1' });
+    createPayment.mockResolvedValue({ id: 'pay_deposit', status: 'PENDING', invoiceUrl: 'https://asaas.test/inv/deposit' });
+    const app = buildApp();
+
+    const asaasResponse = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'deposit', method: 'asaas_card', amount_cents: 20000, cpf_cnpj: '12345678900' },
+    });
+    expect(asaasResponse.statusCode).toBe(201);
+
+    const cashResponse = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'balance', method: 'cash', amount_cents: 20000, idempotency_key: randomUUID() },
+    });
+
+    expect(cashResponse.statusCode).toBe(422);
+    expect(cashResponse.json().error).toBe('OVERPAYMENT');
+
+    const rows = await testDb
+      .selectFrom('payments')
+      .selectAll()
+      .where('reservation_id', '=', reservation.id)
+      .execute();
+    expect(rows).toHaveLength(1); // only the Asaas pending charge, cash never inserted
+    expect(rows[0]!.method).toBe('asaas_card');
+  });
+
+  // Order 2: cash lands first (goes straight to `received`, no `pending` row
+  // involved at all, so the DB unique index has nothing to check against),
+  // THEN an Asaas charge is requested for the rest of the balance.
+  //
+  // NUANCE (found the same way as the pure-Asaas-vs-Asaas one above, by
+  // actually verifying instead of assuming): this direction was ALREADY
+  // safe before this fix. The outer assertNotOverpaying (received-only, ran
+  // unconditionally before the ASAAS_METHODS branch even in the original
+  // code) already sees the cash payment as `received` the instant it lands
+  // — so it rejects the second request before ever reaching
+  // createOrReuseAsaasPayment. Verified by hand: commenting out
+  // assertNotOverpayingWithPendingAsaas inside createOrReusePayment.ts does
+  // NOT make this test fail. Kept anyway as an explicit regression guard for
+  // this direction (the user asked for both orders covered, and "already
+  // safe" is exactly the kind of fact that's cheap to lock down and easy to
+  // accidentally break later), but it is not proof of the NEW mechanism —
+  // order 1 above is.
+  it('mixed order 2 — cash payment received first, then an Asaas charge request that would push the total over: Asaas charge is rejected, never calls Asaas', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId, totalCents: 20000 });
+    const app = buildApp();
+
+    const cashResponse = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'deposit', method: 'cash', amount_cents: 20000, idempotency_key: randomUUID() },
+    });
+    expect(cashResponse.statusCode).toBe(201);
+
+    const asaasResponse = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'balance', method: 'asaas_card', amount_cents: 20000, cpf_cnpj: '12345678900' },
+    });
+
+    expect(asaasResponse.statusCode).toBe(422);
+    expect(asaasResponse.json().error).toBe('OVERPAYMENT');
+    expect(createCustomer).not.toHaveBeenCalled();
+    expect(createPayment).not.toHaveBeenCalled();
+
+    const rows = await testDb
+      .selectFrom('payments')
+      .selectAll()
+      .where('reservation_id', '=', reservation.id)
+      .execute();
+    expect(rows).toHaveLength(1); // only the cash payment, Asaas charge never created
+    expect(rows[0]!.method).toBe('cash');
+  });
+
+  it('reconciles a stale pending Asaas payment Asaas no longer has as pending — marks it failed locally instead of blocking a legitimate new charge of a different kind', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId, totalCents: 20000 });
+
+    // A pending deposit charge old enough to be a reconciliation candidate
+    // (created_at < current_date). Without reconciliation, this alone would
+    // block the balance charge below (20000 pending + 20000 new > 20000 total).
+    await testDb
+      .insertInto('payments')
+      .values({
+        reservation_id: reservation.id,
+        asaas_payment_id: 'pay_stale',
+        method: 'asaas_pix',
+        kind: 'deposit',
+        amount_cents: 20000,
+        status: 'pending',
+        created_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+      })
+      .execute();
+
+    getPayment.mockResolvedValue({ id: 'pay_stale', status: 'OVERDUE', invoiceUrl: 'https://asaas.test/inv/stale' });
+    createCustomer.mockResolvedValue({ id: 'cus_1' });
+    createPayment.mockResolvedValue({ id: 'pay_new', status: 'PENDING', invoiceUrl: 'https://asaas.test/inv/new' });
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'balance', method: 'asaas_card', amount_cents: 20000, cpf_cnpj: '12345678900' },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(getPayment).toHaveBeenCalledWith('pay_stale');
+
+    const staleRow = await testDb
+      .selectFrom('payments')
+      .select('status')
+      .where('asaas_payment_id', '=', 'pay_stale')
+      .executeTakeFirstOrThrow();
+    expect(staleRow.status).toBe('failed');
+
+    const newRow = await testDb
+      .selectFrom('payments')
+      .select(['status', 'kind'])
+      .where('asaas_payment_id', '=', 'pay_new')
+      .executeTakeFirstOrThrow();
+    expect(newRow.status).toBe('pending');
+    expect(newRow.kind).toBe('balance');
+  });
+
+  it('a pending Asaas payment created TODAY is never reconciled (never calls Asaas for it) and still correctly counts against the balance', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId, totalCents: 20000 });
+
+    await testDb
+      .insertInto('payments')
+      .values({
+        reservation_id: reservation.id,
+        asaas_payment_id: 'pay_today',
+        method: 'asaas_pix',
+        kind: 'deposit',
+        amount_cents: 20000,
+        status: 'pending',
+        // created_at defaults to now() — today, not backdated.
+      })
+      .execute();
+
+    createCustomer.mockResolvedValue({ id: 'cus_1' });
+    createPayment.mockResolvedValue({ id: 'pay_new', status: 'PENDING', invoiceUrl: 'https://asaas.test/inv/new' });
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'balance', method: 'asaas_card', amount_cents: 20000, cpf_cnpj: '12345678900' },
+    });
+
+    // getPayment is never called for the today's-date pending row: it's
+    // trusted as still legitimately outstanding, not reconciled — and it
+    // correctly blocks this second charge from being created.
+    expect(getPayment).not.toHaveBeenCalled();
+    expect(response.statusCode).toBe(422);
+    expect(response.json().error).toBe('OVERPAYMENT');
+    expect(createPayment).not.toHaveBeenCalled();
+  });
+
+  // DETERMINISTIC: two concurrent Asaas charges of DIFFERENT kind — proves the
+  // pg_advisory_xact_lock createOrReuseAsaasPayment already holds (for its
+  // OWN dedupe lookup) also closes the overpayment race once
+  // assertNotOverpayingWithPendingAsaas runs inside it, not just sequential
+  // ordering (the test above). Verified by hand: commenting out the
+  // assertNotOverpayingWithPendingAsaas call added to createOrReusePayment.ts
+  // makes this fail — both requests return 201 and two payment rows land,
+  // 40000 cents against a 20000 total.
+  it('DETERMINISTIC: two concurrent Asaas charges of DIFFERENT kind that individually fit but together overpay — the lock closes the race, not just sequential ordering', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId, totalCents: 20000 });
+    createCustomer.mockResolvedValue({ id: 'cus_1' });
+    createPayment.mockImplementation(async () => ({
+      id: `pay_${randomUUID()}`,
+      status: 'PENDING',
+      invoiceUrl: 'https://asaas.test/inv/race',
+    }));
+    const delayedDb = new Kysely<DB>({
+      dialect: new PostgresDialect({ pool: testPool }),
+      plugins: [new ArtificialRaceWindowPlugin()],
+    });
+    const app = buildApp(delayedDb);
+
+    const [first, second] = await Promise.all([
+      app.inject({
+        method: 'POST',
+        url: `/panel/reservations/${reservation.code}/payment`,
+        cookies: { [SESSION_COOKIE_NAME]: token },
+        payload: { kind: 'deposit', method: 'asaas_card', amount_cents: 20000, cpf_cnpj: '12345678900' },
+      }),
+      app.inject({
+        method: 'POST',
+        url: `/panel/reservations/${reservation.code}/payment`,
+        cookies: { [SESSION_COOKIE_NAME]: token },
+        payload: { kind: 'balance', method: 'asaas_card', amount_cents: 20000, cpf_cnpj: '12345678900' },
+      }),
+    ]);
+
+    const statusCodes = [first.statusCode, second.statusCode].sort();
+    expect(statusCodes).toEqual([201, 422]);
+
+    const rows = await testDb
+      .selectFrom('payments')
+      .selectAll()
+      .where('reservation_id', '=', reservation.id)
+      .execute();
+    expect(rows).toHaveLength(1);
+  });
+
+  // Risk-review finding: assertNotOverpayingWithPendingAsaas only guards the
+  // MONEY side of a same-day different-kind double-pending attempt. When the
+  // combined amount still fits under balance_due_cents (unlike the "clean
+  // 422" test above, where the second amount alone exhausts the balance),
+  // the guard lets the second INSERT through — and idx_payments_one_pending_per_reservation
+  // (not kind-scoped) rejects it anyway. Before isPendingPaymentUniqueViolation
+  // handling, this surfaced as a raw 500. Verified by hand: reverting
+  // createOrReusePayment.ts's insert to a bare (un-try/caught) call makes
+  // this test fail with a 500 instead of 422.
+  it('asaas: two sequential charges of DIFFERENT kind that BOTH fit under the balance still collide on idx_payments_one_pending_per_reservation — clean 422, not a raw 500', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId, totalCents: 20000 });
+    createCustomer.mockResolvedValue({ id: 'cus_1' });
+    createPayment
+      .mockResolvedValueOnce({ id: 'pay_deposit', status: 'PENDING', invoiceUrl: 'https://asaas.test/inv/deposit' })
+      .mockResolvedValueOnce({ id: 'pay_balance', status: 'PENDING', invoiceUrl: 'https://asaas.test/inv/balance' });
+    const app = buildApp();
+
+    const first = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'deposit', method: 'asaas_card', amount_cents: 5000, cpf_cnpj: '12345678900' },
+    });
+    expect(first.statusCode).toBe(201);
+
+    // 15000 alone still fits under the remaining 15000 (20000 - 5000
+    // deposit still pending) — assertNotOverpayingWithPendingAsaas does NOT
+    // reject this. The unique index does, because the deposit charge above
+    // is still `pending`.
+    const second = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'balance', method: 'asaas_card', amount_cents: 15000, cpf_cnpj: '12345678900' },
+    });
+
+    expect(second.statusCode).toBe(422);
+    expect(second.json().error).toBe('OVERPAYMENT');
+
+    const rows = await testDb
+      .selectFrom('payments')
+      .selectAll()
+      .where('reservation_id', '=', reservation.id)
+      .execute();
+    expect(rows).toHaveLength(1); // the failed insert never lands
+    expect(rows[0]!.kind).toBe('deposit');
+  });
 });
 
 describe('POST /panel/reservations/:code/check-in', () => {

@@ -7,6 +7,7 @@ import { db as prodDb } from '../db/client.js';
 import { requireAuth } from '../auth/requireAuth.js';
 import { AsaasApiError } from '../asaasClient.js';
 import { PaymentAlreadyReceivedError } from '../reservations/createOrReusePayment.js';
+import { OverpaymentError } from '../reservations/overpaymentGuard.js';
 import {
   registerPayment,
   checkIn,
@@ -145,6 +146,7 @@ const panelReservationActionsPlugin: FastifyPluginAsync<PanelReservationActionsP
           if (err instanceof MissingCpfCnpjError) throw httpError(400, 'CPF_CNPJ_REQUIRED');
           if (err instanceof MissingIdempotencyKeyError) throw httpError(400, 'IDEMPOTENCY_KEY_REQUIRED');
           if (err instanceof IdempotencyKeyReusedError) throw httpError(409, 'IDEMPOTENCY_KEY_REUSED');
+          if (err instanceof OverpaymentError) throw httpError(422, 'OVERPAYMENT');
           if (err instanceof PaymentAlreadyReceivedError) throw httpError(409, 'PAYMENT_ALREADY_RECEIVED');
           if (err instanceof AsaasApiError) {
             // Keep the real Asaas error out of the client response (it can

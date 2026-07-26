@@ -57,6 +57,16 @@ const webhooksPlugin: FastifyPluginAsync<WebhooksPluginOptions> = async (fastify
       );
     }
 
+    if (
+      (outcome.kind === 'confirmed' || outcome.kind === 'payment_conflict' || outcome.kind === 'payment_marked_received_only') &&
+      outcome.overpaymentFlagged
+    ) {
+      fastify.log.error(
+        { paymentId: payment.id, reservationId: outcome.reservationId },
+        'payment received pushed balance_due_cents negative — flagged on the payment row, refund is manual',
+      );
+    }
+
     return reply.status(200).send({ received: true });
   });
 };
