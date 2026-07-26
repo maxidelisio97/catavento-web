@@ -23,6 +23,8 @@ import {
   getPixQrCode,
   type AsaasPaymentResponse,
 } from '../asaasClient.js';
+import { assertNotOverpayingWithPendingAsaas, OverpaymentError } from './overpaymentGuard.js';
+import { isPendingPaymentUniqueViolation } from './isPendingPaymentUniqueViolation.js';
 import { config } from '../config.js';
 
 export type PaymentMethod = 'pix' | 'card';
@@ -172,6 +174,15 @@ export async function createOrReuseAsaasPayment(
       }
     }
 
+    // Re-check under the SAME lock, all kinds summed, right before creating
+    // the Asaas charge — closes the gap the outer per-request check in
+    // registerPayment can't: two charges of DIFFERENT kind (e.g. deposit +
+    // balance), each individually within balance_due_cents while both are
+    // still `pending`, would otherwise both get created and both get paid.
+    // No thread race needed for the vulnerability, but this lock closes the
+    // truly-concurrent variant too (see overpaymentGuard.ts).
+    await assertNotOverpayingWithPendingAsaas(trx, input.reservationId, input.amountCents);
+
     const customer = await createCustomer({
       name: input.guestName,
       cpfCnpj: input.cpfCnpj,
@@ -192,17 +203,33 @@ export async function createOrReuseAsaasPayment(
       },
     });
 
-    await trx
-      .insertInto('payments')
-      .values({
-        reservation_id: input.reservationId,
-        asaas_payment_id: payment.id,
-        kind: input.kind,
-        method: DB_METHOD[input.method],
-        amount_cents: input.amountCents,
-        status: 'pending',
-      })
-      .execute();
+    try {
+      await trx
+        .insertInto('payments')
+        .values({
+          reservation_id: input.reservationId,
+          asaas_payment_id: payment.id,
+          kind: input.kind,
+          method: DB_METHOD[input.method],
+          amount_cents: input.amountCents,
+          status: 'pending',
+        })
+        .execute();
+    } catch (err) {
+      // Risk-review finding: idx_payments_one_pending_per_reservation isn't
+      // kind-scoped, so a second pending charge of a DIFFERENT kind can pass
+      // assertNotOverpayingWithPendingAsaas above (the combined amount still
+      // fits under balance_due_cents) and still collide with this index —
+      // the money guard and the DB constraint protect overlapping but not
+      // identical things. Without this, that collision surfaced as a raw
+      // unhandled 500. balanceDueCents is unknown at this point (the index
+      // doesn't expose it) — 0 signals "no room left for a new pending
+      // charge", which is what the constraint is actually saying.
+      if (isPendingPaymentUniqueViolation(err)) {
+        throw new OverpaymentError(0, input.amountCents);
+      }
+      throw err;
+    }
 
     return buildDetails(input.method, payment);
   });

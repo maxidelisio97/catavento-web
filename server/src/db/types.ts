@@ -30,6 +30,9 @@ export interface Payments {
   asaas_payment_id: string | null;
   changed_by: number | null;
   created_at: Generated<Timestamp>;
+  flagged_overpayment: Generated<boolean>;
+  flagged_overpayment_at: Timestamp | null;
+  flagged_overpayment_excess_cents: number | null;
   id: Generated<number>;
   idempotency_key: string | null;
   kind: Generated<string>;

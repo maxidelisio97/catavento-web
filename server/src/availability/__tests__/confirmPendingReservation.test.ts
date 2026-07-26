@@ -120,7 +120,7 @@ describe('processPaymentReceived', () => {
       rawEvent: { event: 'PAYMENT_RECEIVED' },
     });
 
-    expect(outcome).toEqual({ kind: 'confirmed', reservationId });
+    expect(outcome).toEqual({ kind: 'confirmed', reservationId, overpaymentFlagged: false });
 
     const reservation = await testDb
       .selectFrom('reservations')
@@ -152,7 +152,7 @@ describe('processPaymentReceived', () => {
       rawEvent: { event: 'PAYMENT_RECEIVED' },
     });
 
-    expect(first).toEqual({ kind: 'confirmed', reservationId });
+    expect(first).toEqual({ kind: 'confirmed', reservationId, overpaymentFlagged: false });
     expect(second).toEqual({ kind: 'noop_idempotent' });
 
     const reservation = await testDb
@@ -173,7 +173,7 @@ describe('processPaymentReceived', () => {
       rawEvent: { event: 'PAYMENT_RECEIVED' },
     });
 
-    expect(outcome).toEqual({ kind: 'confirmed', reservationId });
+    expect(outcome).toEqual({ kind: 'confirmed', reservationId, overpaymentFlagged: false });
   });
 
   it('moves to payment_conflict when the room is no longer available after expiry (caso límite, sin disponibilidad), and never double-books the unit', async () => {
@@ -204,7 +204,7 @@ describe('processPaymentReceived', () => {
       rawEvent: { event: 'PAYMENT_RECEIVED' },
     });
 
-    expect(outcome).toEqual({ kind: 'payment_conflict', reservationId: staleReservationId });
+    expect(outcome).toEqual({ kind: 'payment_conflict', reservationId: staleReservationId, overpaymentFlagged: false });
 
     const reservation = await testDb
       .selectFrom('reservations')
@@ -275,7 +275,7 @@ describe('processPaymentReceived', () => {
       rawEvent: { event: 'PAYMENT_RECEIVED' },
     });
 
-    expect(outcome).toEqual({ kind: 'payment_conflict', reservationId: stale.id });
+    expect(outcome).toEqual({ kind: 'payment_conflict', reservationId: stale.id, overpaymentFlagged: false });
 
     const staleReservation = await testDb
       .selectFrom('reservations')
@@ -316,6 +316,7 @@ describe('processPaymentReceived', () => {
       kind: 'payment_marked_received_only',
       reservationId,
       reservationStatus: 'cancelled',
+      overpaymentFlagged: false,
     });
 
     const payment = await testDb
@@ -353,6 +354,7 @@ describe('processPaymentReceived', () => {
       kind: 'payment_marked_received_only',
       reservationId,
       reservationStatus: 'confirmed',
+      overpaymentFlagged: false,
     });
 
     const payment = await testDb
@@ -399,7 +401,73 @@ describe('processPaymentReceived', () => {
       kind: 'payment_marked_received_only',
       reservationId,
       reservationStatus: 'confirmed',
+      overpaymentFlagged: false,
     });
     expect(second).toEqual({ kind: 'noop_idempotent' });
+  });
+
+  // Risk-review finding on fix-checkin-lock-and-overpayment: by the time
+  // this webhook fires, Asaas already captured the money — there's no
+  // refund endpoint to undo it, so the handler can only flag, not reject.
+  // Real prevention lives at charge-creation time (overpaymentGuard.ts);
+  // this is the last-resort net for whatever slips past it (e.g. a charge
+  // created before that guard existed, or a future bug in it).
+  it('flags overpayment (marks received, never rejects) when confirming this payment pushes balance_due_cents negative', async () => {
+    const roomId = await insertTestRoom({ totalUnits: 1 });
+    const reservationId = await insertReservation({ roomId, status: 'confirmed' });
+
+    // total_cents is 20000 (insertReservation's fixture default) — already
+    // fully covered by a RECEIVED deposit.
+    await testDb
+      .insertInto('payments')
+      .values({
+        reservation_id: reservationId,
+        asaas_payment_id: 'pay_deposit_full',
+        method: 'asaas_pix',
+        kind: 'deposit',
+        amount_cents: 20000,
+        status: 'received',
+      })
+      .execute();
+
+    // A second charge (balance) that never should have been created against
+    // an already-fully-paid reservation — simulates the creation-time guard
+    // having been bypassed somehow. Still pending when its own webhook fires.
+    await insertPayment(reservationId, 'pay_over', 'pending', 'balance');
+
+    const outcome = await processPaymentReceived(testDb, {
+      asaasPaymentId: 'pay_over',
+      rawEvent: { event: 'PAYMENT_RECEIVED' },
+    });
+
+    expect(outcome).toEqual({
+      kind: 'payment_marked_received_only',
+      reservationId,
+      reservationStatus: 'confirmed',
+      overpaymentFlagged: true,
+    });
+
+    const payment = await testDb
+      .selectFrom('payments')
+      .select(['status', 'flagged_overpayment', 'flagged_overpayment_at', 'flagged_overpayment_excess_cents'])
+      .where('asaas_payment_id', '=', 'pay_over')
+      .executeTakeFirstOrThrow();
+
+    // Marked received, not rejected — the money is already with Asaas.
+    expect(payment.status).toBe('received');
+    expect(payment.flagged_overpayment).toBe(true);
+    expect(payment.flagged_overpayment_at).not.toBeNull();
+    // 10000 (this payment) is how far balance_due_cents went negative:
+    // 20000 total - (20000 deposit + 10000 balance) received = -10000.
+    expect(payment.flagged_overpayment_excess_cents).toBe(10000);
+
+    // The OTHER payment (the deposit) is untouched by the flag — it's the
+    // payment that tipped the balance over that gets flagged, not every row.
+    const depositPayment = await testDb
+      .selectFrom('payments')
+      .select('flagged_overpayment')
+      .where('asaas_payment_id', '=', 'pay_deposit_full')
+      .executeTakeFirstOrThrow();
+    expect(depositPayment.flagged_overpayment).toBe(false);
   });
 });
