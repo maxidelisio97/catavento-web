@@ -9,9 +9,15 @@ import type { Kysely, Transaction } from 'kysely';
 import { z } from 'zod';
 import type { DB } from '../db/types.js';
 
-const settingsSchemas = {
+// Exported so callers that write settings (e.g. panelSettings.ts) validate
+// against the exact same per-key rules used to read them, instead of
+// redefining the ranges in a second place.
+export const settingsSchemas = {
   deposit_percent: z.coerce.number().int().min(0).max(100),
-  hold_minutes: z.coerce.number().int().min(1),
+  // Floor of 15 (not the DB's bare "positive"): a hold shorter than that
+  // doesn't leave enough time to complete an Asaas payment (business
+  // decision, SPEC-modulo-8-configuracion.md § 4.2).
+  hold_minutes: z.coerce.number().int().min(15),
   pet_fee_cents: z.coerce.number().int().min(0),
 } as const;
 
@@ -85,4 +91,26 @@ export async function getBusinessSettings(executor: Kysely<DB> | Transaction<DB>
     holdMinutes: parse('hold_minutes'),
     petFeeCents: parse('pet_fee_cents'),
   };
+}
+
+export type SettingsPatch = Partial<{ [K in SettingKey]: number }>;
+
+/**
+ * Validates and writes a partial set of settings. Rows for all three keys
+ * are guaranteed to exist (seeded by migration), so this is a plain UPDATE —
+ * no upsert needed. No in-memory cache exists anywhere in this codebase
+ * (getBusinessSettings reads the table directly), so there's nothing to
+ * invalidate after this write.
+ */
+export async function updateSettings(executor: Kysely<DB> | Transaction<DB>, patch: SettingsPatch): Promise<void> {
+  const entries = Object.entries(patch) as [SettingKey, number][];
+
+  for (const [key, rawValue] of entries) {
+    const parsed = settingsSchemas[key].safeParse(rawValue);
+    if (!parsed.success) {
+      throw new InvalidSettingError(key, String(rawValue));
+    }
+
+    await executor.updateTable('settings').set({ value: String(parsed.data) }).where('key', '=', key).execute();
+  }
 }

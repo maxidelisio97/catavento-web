@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { PanelUser } from "../api/auth";
 import TapeChartPage from "./TapeChartPage";
+import SettingsPage from "./SettingsPage";
 
 interface PanelLayoutProps {
   user: PanelUser;
@@ -8,8 +9,11 @@ interface PanelLayoutProps {
   onLogoutAll: () => Promise<void>;
 }
 
+type PanelSection = "tape-chart" | "settings";
+
 export default function PanelLayout({ user, onLogout, onLogoutAll }: PanelLayoutProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [section, setSection] = useState<PanelSection>("tape-chart");
 
   async function handleLogoutAll() {
     setMenuOpen(false);
@@ -24,7 +28,30 @@ export default function PanelLayout({ user, onLogout, onLogoutAll }: PanelLayout
   return (
     <div className="min-h-dvh bg-panel-50">
       <header className="h-14 border-b border-panel-200 bg-white flex items-center justify-between px-4">
-        <span className="font-semibold text-panel-900 tracking-wide">CATAVENTO PAINEL</span>
+        <div className="flex items-center gap-6">
+          <span className="font-semibold text-panel-900 tracking-wide">CATAVENTO PAINEL</span>
+
+          <nav className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setSection("tape-chart")}
+              className={`text-sm font-medium px-3 py-1.5 rounded ${
+                section === "tape-chart" ? "bg-panel-100 text-panel-900" : "text-panel-500 hover:text-panel-900"
+              }`}
+            >
+              Mapa
+            </button>
+            <button
+              type="button"
+              onClick={() => setSection("settings")}
+              className={`text-sm font-medium px-3 py-1.5 rounded ${
+                section === "settings" ? "bg-panel-100 text-panel-900" : "text-panel-500 hover:text-panel-900"
+              }`}
+            >
+              Configuração
+            </button>
+          </nav>
+        </div>
 
         <div className="relative">
           <button
@@ -61,7 +88,7 @@ export default function PanelLayout({ user, onLogout, onLogoutAll }: PanelLayout
       </header>
 
       <main className="p-6">
-        <TapeChartPage />
+        {section === "tape-chart" ? <TapeChartPage /> : <SettingsPage />}
       </main>
     </div>
   );
