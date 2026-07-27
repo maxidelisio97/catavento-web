@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getSettings, updateSettings, type BusinessSettings } from "../api/settings";
 import { ApiError } from "../api/client";
+import RoomRatesTable from "../components/settings/RoomRatesTable";
 
 // Human-facing units: R$ (not cents) and a plain integer percent — converted
 // to the API's cents/integer shape only at submit time (SPEC-modulo-8-configuracion.md § 4.3).
@@ -14,7 +15,7 @@ function toFormState(settings: BusinessSettings): FormState {
   };
 }
 
-export default function SettingsPage() {
+function GeneralSettingsTab() {
   const [form, setForm] = useState<FormState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -67,8 +68,6 @@ export default function SettingsPage() {
 
   return (
     <div className="max-w-md">
-      <h1 className="text-lg font-semibold text-panel-900 mb-4">Configuração</h1>
-
       <form
         onSubmit={handleSubmit}
         className="bg-white border border-panel-200 rounded-lg p-6 flex flex-col gap-4"
@@ -135,6 +134,44 @@ export default function SettingsPage() {
           {saving ? "Salvando..." : "Salvar"}
         </button>
       </form>
+    </div>
+  );
+}
+
+// Tabs (not top-level nav) so 8C's calendar can slot in as a third tab here
+// without growing PanelLayout's header nav again — all three are
+// "Configuração" per SPEC-modulo-8-configuracion.md § 3.
+type ConfigTab = "geral" | "precos";
+
+export default function SettingsPage() {
+  const [tab, setTab] = useState<ConfigTab>("geral");
+
+  return (
+    <div>
+      <h1 className="text-lg font-semibold text-panel-900 mb-4">Configuração</h1>
+
+      <div className="flex items-center gap-1 mb-4 border-b border-panel-200">
+        <button
+          type="button"
+          onClick={() => setTab("geral")}
+          className={`text-sm font-medium px-3 py-2 border-b-2 -mb-px ${
+            tab === "geral" ? "border-panel-900 text-panel-900" : "border-transparent text-panel-500 hover:text-panel-900"
+          }`}
+        >
+          Geral
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab("precos")}
+          className={`text-sm font-medium px-3 py-2 border-b-2 -mb-px ${
+            tab === "precos" ? "border-panel-900 text-panel-900" : "border-transparent text-panel-500 hover:text-panel-900"
+          }`}
+        >
+          Preços
+        </button>
+      </div>
+
+      {tab === "geral" ? <GeneralSettingsTab /> : <RoomRatesTable />}
     </div>
   );
 }
