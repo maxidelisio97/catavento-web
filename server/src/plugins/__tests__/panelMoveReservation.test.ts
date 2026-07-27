@@ -5,14 +5,7 @@
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from '@fastify/type-provider-zod';
 import cookiePlugin from '@fastify/cookie';
-import {
-  Kysely,
-  PostgresDialect,
-  sql,
-  type KyselyPlugin,
-  type PluginTransformQueryArgs,
-  type PluginTransformResultArgs,
-} from 'kysely';
+import { Kysely, PostgresDialect, sql } from 'kysely';
 import { createHash, randomBytes } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { testDb, testPool } from '../../db/testClient.js';
@@ -22,20 +15,8 @@ import panelMoveReservationPlugin from '../panelMoveReservation.js';
 import { hashPassword } from '../../auth/hashPassword.js';
 import { SESSION_COOKIE_NAME } from '../../auth/cookie.js';
 import { eachNightUTC } from '../../shared/dateUtils.js';
-
-// Same test-only plugin as panelReservationActions.test.ts's concurrency
-// test: widens the window between a query's result and the caller receiving
-// it, so two genuinely concurrent requests are forced to interleave instead
-// of "accidentally" serializing on fast localhost Postgres.
-class ArtificialRaceWindowPlugin implements KyselyPlugin {
-  transformQuery(args: PluginTransformQueryArgs) {
-    return args.node;
-  }
-  async transformResult(args: PluginTransformResultArgs) {
-    await new Promise((resolve) => setTimeout(resolve, 120));
-    return args.result;
-  }
-}
+import { createQueryBarrierPlugin, createQueryStartSignal, rawSqlContains, selectReferencesTable } from '../../test-support/queryBarrier.js';
+import { moveNight } from '../../panel/moveReservation.js';
 
 function buildApp(db: Kysely<DB> = testDb) {
   const app = Fastify().withTypeProvider<ZodTypeProvider>();
@@ -587,9 +568,16 @@ describe('concurrency: two DIFFERENT reservations moving into the same free unit
 
   // DETERMINISTIC version, through the REAL moveNight code path. Forces the
   // exact interleaving (both requests pass the pre-write assertNightsFree
-  // check before either has committed its insert) by widening the window
-  // with an artificial delay after every query result — same technique as
-  // panelReservationActions.test.ts's ArtificialRaceWindowPlugin.
+  // check before either has committed its insert) with a rendezvous
+  // barrier targeted at that exact query, instead of a fixed delay after
+  // every query (the old ArtificialRaceWindowPlugin technique) — see
+  // server/src/test-support/queryBarrier.ts's doc comment for why. The
+  // barrier's `match` fingerprints assertNightsFree's SELECT specifically
+  // (the only SELECT in moveNight's path that joins reservation_nights AND
+  // reservations — fetchReservationByCode and the post-lock status re-read
+  // both select from reservations alone, fetchDestinationUnit joins
+  // room_units+rooms, and nightsOf() in this file runs on the plain testDb,
+  // never through this plugin at all).
   //
   // Verification per server/CLAUDE.md's concurrency-test rule (checked by
   // hand, not left as a claim): with `isUnitNightUniqueViolation` handling
@@ -600,7 +588,7 @@ describe('concurrency: two DIFFERENT reservations moving into the same free unit
   // not the advisory lock (which only serializes moves of the SAME
   // reservation, not these two DIFFERENT ones — see moveReservation.ts's
   // module doc comment).
-  it('DETERMINISTIC: with the race window artificially widened, still exactly one 200 and one 409, never a raw 500', async () => {
+  it('DETERMINISTIC: with a rendezvous barrier on the pre-write check, still exactly one 200 and one 409, never a raw 500', async () => {
     const token = await insertSessionCookie();
     const roomId = await insertRoom('Casal');
     const sourceA = await insertUnit(roomId, 'K1');
@@ -618,11 +606,25 @@ describe('concurrency: two DIFFERENT reservations moving into the same free unit
       checkOut: '2026-09-02',
       nightUnitIds: [sourceB],
     });
-    const delayedDb = new Kysely<DB>({
+    // Recorded, not just trusted: proves the barrier fired exactly twice —
+    // once per request — on the intended query, and never on a neighbor
+    // (fetchReservationByCode/fetchDestinationUnit/the post-lock status
+    // re-read don't join both tables, so they never push here).
+    const barrierHits: number[] = [];
+    const barrieredDb = new Kysely<DB>({
       dialect: new PostgresDialect({ pool: testPool }),
-      plugins: [new ArtificialRaceWindowPlugin()],
+      plugins: [
+        createQueryBarrierPlugin({
+          arity: 2,
+          match: (node) => {
+            const isTarget = selectReferencesTable(node, 'reservation_nights') && selectReferencesTable(node, 'reservations');
+            if (isTarget) barrierHits.push(Date.now());
+            return isTarget;
+          },
+        }),
+      ],
     });
-    const app = buildApp(delayedDb);
+    const app = buildApp(barrieredDb);
 
     const [first, second] = await Promise.all([
       app.inject({
@@ -639,6 +641,11 @@ describe('concurrency: two DIFFERENT reservations moving into the same free unit
       }),
     ]);
 
+    // Both requests reached assertNightsFree's SELECT — the exact
+    // pre-write check the barrier targets, and the only query in moveNight's
+    // path that joins reservation_nights with reservations.
+    expect(barrierHits).toHaveLength(2);
+
     const statusCodes = [first.statusCode, second.statusCode].sort();
     expect(statusCodes).toEqual([200, 409]);
 
@@ -650,17 +657,127 @@ describe('concurrency: two DIFFERENT reservations moving into the same free unit
       .execute();
     expect(rows).toHaveLength(1);
   }, 15000);
-  // Explicit timeout: a single moveNight call through delayedDb pays the
-  // 120ms artificial delay on ~9 sequential queries (3 pre-lock reads +
-  // lock + status recheck + delete + insert + 2 consistency-check reads),
-  // ~1.1s of pure artificial delay alone before real round-trip time or any
-  // lock-wait for the losing request's blocked insert. That is close enough
-  // to Vitest's 5000ms default that real machine load (this suite run
-  // repeatedly, back-to-back, for over 40 minutes during the investigation
-  // that added this comment) pushed it over — confirmed by the failure being
-  // a bare "Test timed out in 5000ms", not a DB error, and by a parallel
-  // pg_stat_activity/pool diagnostic showing no leaked connection or
-  // idle-in-transaction session at fault. 7B's equivalent test
-  // (panelReservationActions.test.ts) only pays that delay on ~2 queries and
-  // never needed this — this one legitimately does more work per call.
+});
+
+describe('concurrency: two moves of the SAME reservation share the SAME advisory-lock key', () => {
+  // DETERMINISTIC, same technique as panelReservationActions.test.ts's
+  // checkIn-vs-cancel test: holds the exact advisory-lock key moveNight uses
+  // on a raw connection (simulating a first move already in flight, lock
+  // acquired, not yet committed) and calls the REAL moveNight service
+  // function concurrently, asserting it genuinely blocks — not a uniform
+  // delay that hopes for an interleaving.
+  //
+  // Why this scenario specifically (not just "any two concurrent moves"):
+  // moving the SAME night to two DIFFERENT destination units on the SAME
+  // reservation is the one case the (room_unit_id, night) UNIQUE constraint
+  // (reservation_nights_unit_night_unique) does NOT catch — unitB and unitC
+  // are different keys there. Verified by hand (see the guard-removal check
+  // below): WITHOUT the lock, the second move's INSERT instead collides with
+  // a DIFFERENT, narrower constraint — reservation_nights_reservation_night_unique,
+  // UNIQUE(reservation_id, night) — because the first move's row for this
+  // reservation+night hasn't been deleted yet from the second move's point of
+  // view. insertNightOrThrowConflict only recognizes the unit_night
+  // violation (isUnitNightUniqueViolation matches on the constraint name
+  // containing "unit_night"), so this one propagates as a raw, unhandled
+  // 23505 instead of a clean result. The lock prevents this by forcing full
+  // serialization: the second move's DELETE removes the first move's
+  // just-committed row before inserting its own, so the insert never
+  // collides with anything — last write wins, cleanly, never a raw error.
+  it('DETERMINISTIC: moveNight blocks on the SAME advisory-lock key a concurrent move of the SAME reservation holds, and leaves exactly one row for the night — never both destinations', async () => {
+    const roomId = await insertRoom('Casal');
+    const unitA = await insertUnit(roomId, 'M1');
+    const unitB = await insertUnit(roomId, 'M2');
+    const unitC = await insertUnit(roomId, 'M3');
+    const reservation = await insertReservation({
+      roomId,
+      checkIn: '2026-09-01',
+      checkOut: '2026-09-02',
+      nightUnitIds: [unitA],
+    });
+
+    // Warm the pool with two genuinely concurrent queries first — same
+    // rationale as panelReservationActions.test.ts's checkIn test: on a cold
+    // connection the first query's TCP+auth handshake alone can cost
+    // 300-400ms on this machine, which would look like "blocked on the lock"
+    // even with no lock involved at all.
+    await Promise.all([
+      testDb.selectFrom('reservations').select('id').limit(1).execute(),
+      testDb.selectFrom('reservations').select('id').limit(1).execute(),
+    ]);
+
+    // Raw connection holding the SAME lock key moveNight would use for this
+    // reservation, simulating a first move (night -> unitB) that has
+    // acquired the lock but not yet committed. ENTIRE lifecycle in
+    // try/finally — not just the final commit — so a failure acquiring the
+    // lock itself can never leak the connection while still holding it.
+    // Found necessary from a real full-suite run: a fixed-margin version of
+    // this pattern, with only the commit protected, produced a catastrophic
+    // cascade (68/227 tests) under sustained load, consistent with an
+    // orphaned advisory lock on a low reservation id (ids restart at 1 every
+    // test) blocking most of the rest of the suite — see
+    // server/CLAUDE.md's concurrency-test lesson on this.
+    const holder = await testPool.connect();
+    const { plugin: startSignalPlugin, started } = createQueryStartSignal({
+      match: (node) => rawSqlContains(node, 'pg_advisory_xact_lock'),
+    });
+    const measuredDb = new Kysely<DB>({ dialect: new PostgresDialect({ pool: testPool }), plugins: [startSignalPlugin] });
+
+    let movePromise!: Promise<void>;
+    try {
+      await holder.query('BEGIN');
+      await holder.query('SELECT pg_advisory_xact_lock($1)', [reservation.id]);
+
+      movePromise = moveNight(measuredDb, { code: reservation.code, night: '2026-09-01', toUnitId: unitC });
+      // Never let this leak as an unhandled rejection if the holder's own
+      // setup below throws before we reach the real `await movePromise` —
+      // otherwise it stays orphaned against a lock the holder never
+      // released, and rejects later, attributed to whatever test happens to
+      // be running at that point (found via a real full-suite cascade).
+      movePromise.catch(() => {});
+
+      // Event-based, not a guessed setTimeout margin: waits for moveNight
+      // to actually SEND its own lock-acquisition query. A fixed ms guess
+      // here was found fragile under load in the payment lock tests (2/5
+      // full-suite runs failed on the equivalent assertion) — see
+      // server/CLAUDE.md's concurrency-test lesson on this.
+      await started;
+
+      // Finish what the first move does, still holding the lock: swap the
+      // night from unitA to unitB.
+      await holder.query(
+        `DELETE FROM reservation_nights WHERE reservation_id = $1 AND night = '2026-09-01'::date`,
+        [reservation.id],
+      );
+      await holder.query(
+        `INSERT INTO reservation_nights (reservation_id, night, room_unit_id) VALUES ($1, '2026-09-01'::date, $2)`,
+        [reservation.id, unitB],
+      );
+      await holder.query('COMMIT');
+    } catch (err) {
+      // pg_advisory_xact_lock is transaction-scoped: without an explicit
+      // ROLLBACK here, a failure between BEGIN and COMMIT leaves the
+      // transaction (and the lock inside it) open when release() below
+      // returns the connection to the pool — verified by hand: the next
+      // checkout of that same connection inherits an aborted transaction
+      // (25P02) and the lock is never actually free. release() alone does
+      // NOT roll back an open transaction.
+      await holder.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      holder.release();
+    }
+
+    // Now unblocked: the second move re-reads fresh state under its own
+    // lock, deletes unitB's row (the first move's, now committed) and
+    // inserts its own — never seeing a stale pre-lock snapshot.
+    await expect(movePromise).resolves.toBeUndefined();
+
+    const rows = await testDb
+      .selectFrom('reservation_nights')
+      .selectAll()
+      .where('reservation_id', '=', reservation.id)
+      .execute();
+    expect(rows).toHaveLength(1); // never both unitB and unitC at once
+    expect(rows[0]!.room_unit_id).toBe(unitC); // last write wins
+  });
 });

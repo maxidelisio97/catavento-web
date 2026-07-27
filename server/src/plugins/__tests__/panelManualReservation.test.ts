@@ -5,14 +5,7 @@
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from '@fastify/type-provider-zod';
 import cookiePlugin from '@fastify/cookie';
-import {
-  Kysely,
-  PostgresDialect,
-  sql,
-  type KyselyPlugin,
-  type PluginTransformQueryArgs,
-  type PluginTransformResultArgs,
-} from 'kysely';
+import { Kysely, PostgresDialect, sql, type RootOperationNode } from 'kysely';
 import { createHash, randomBytes } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { testDb, testPool } from '../../db/testClient.js';
@@ -21,19 +14,8 @@ import { registerErrorHandler } from '../../errorHandler.js';
 import panelManualReservationPlugin from '../panelManualReservation.js';
 import { hashPassword } from '../../auth/hashPassword.js';
 import { SESSION_COOKIE_NAME } from '../../auth/cookie.js';
-
-// Forces two truly concurrent requests to interleave instead of "accidentally"
-// serializing on fast localhost Postgres — same plugin used by the other M7
-// concurrency tests (panelMoveReservation.test.ts, panelReservationActions.test.ts).
-class ArtificialRaceWindowPlugin implements KyselyPlugin {
-  transformQuery(args: PluginTransformQueryArgs) {
-    return args.node;
-  }
-  async transformResult(args: PluginTransformResultArgs) {
-    await new Promise((resolve) => setTimeout(resolve, 120));
-    return args.result;
-  }
-}
+import { createReservation, NoAvailabilityError } from '../../availability/createReservation.js';
+import { createQueryTimingPlugin, selectReferencesTable, waitForLockWait } from '../../test-support/queryBarrier.js';
 
 function buildApp(db: Kysely<DB> = testDb) {
   const app = Fastify().withTypeProvider<ZodTypeProvider>();
@@ -503,46 +485,147 @@ describe('POST /panel/reservations/manual', () => {
       expect(rows).toHaveLength(2);
     });
 
-    // DETERMINISTIC version, same rationale as the other M7 concurrency
-    // tests: a bare Promise.all over HTTP tends to fully serialize "by luck"
-    // on fast localhost Postgres. This widens the window between the
-    // availability read and the reservation_nights insert so both requests
-    // are guaranteed to interleave, proving the room-row FOR UPDATE lock
-    // (not luck) is what prevents a double-booking here.
-    it('DETERMINISTIC: with the race window artificially widened, still never two 201s for the same unit', async () => {
-      const token = await insertSessionCookie();
-      const roomId = await insertRoom('Casal', { capacity: 2 });
-      await insertUnit(roomId, 'C1');
-      const delayedDb = new Kysely<DB>({
-        dialect: new PostgresDialect({ pool: testPool }),
-        plugins: [new ArtificialRaceWindowPlugin()],
-      });
-      const app = buildApp(delayedDb);
+    // Identifies createReservation's OWN `.selectFrom('rooms')...forUpdate()`
+    // query specifically (id 116-121 in createReservation.ts) — NOT
+    // fetchRoomStayData's separate, later `.selectFrom('rooms')` read (repository.ts,
+    // selects 4 columns, no lock). Both are plain selects from 'rooms' with
+    // no joins, so they're only distinguishable by their column list: this
+    // one selects exactly `id`.
+    function isRoomsForUpdateQuery(node: RootOperationNode): boolean {
+      if (!selectReferencesTable(node, 'rooms')) return false;
+      const selections = (node as { selections?: { selection?: { column?: { column?: { name?: string } } } }[] })
+        .selections;
+      return (selections?.length ?? 0) === 1 && selections![0]!.selection?.column?.column?.name === 'id';
+    }
 
-      const [first, second] = await Promise.all([
-        app.inject({
-          method: 'POST',
-          url: '/panel/reservations/manual',
-          cookies: { [SESSION_COOKIE_NAME]: token },
-          payload: { ...basePayload, room_id: roomId },
-        }),
-        app.inject({
-          method: 'POST',
-          url: '/panel/reservations/manual',
-          cookies: { [SESSION_COOKIE_NAME]: token },
-          payload: { ...basePayload, room_id: roomId },
-        }),
+    // DETERMINISTIC, same technique as panelReservationActions.test.ts's
+    // checkIn-vs-cancel test and panelMoveReservation.test.ts's same-reservation
+    // move test: holds the EXACT room-row FOR UPDATE lock createReservation
+    // takes, on a raw connection (simulating a first create already in
+    // flight, lock acquired, not yet committed), and calls the REAL
+    // createReservation service function concurrently.
+    //
+    // Does NOT use an outer "still not settled after N ms" boolean, unlike
+    // the other M7 hand-lock tests — verified by hand that it's unsound
+    // HERE specifically: `reservations.room_id` has a FK to `rooms.id`, so
+    // even with the production `.forUpdate()` removed, createReservation's
+    // later `INSERT INTO reservations` still blocks on the SAME row the raw
+    // holder locked (Postgres takes an implicit FK-reference lock on
+    // insert) — the outer promise stays unsettled for roughly the same
+    // window either way, so a boolean check alone can't tell "blocked in
+    // the read, by the real guard" from "blocked in the write, by FK
+    // coincidence" (confirmed: with `.forUpdate()` removed, the promise
+    // still took 2200ms+ to settle).
+    //
+    // Also does NOT use `createQueryStartSignal` (the event-based release
+    // signal used by the advisory-lock hand-lock tests) — verified by hand
+    // that it ALSO produces a false pass here, for a different reason: an
+    // advisory lock's OWN query never gets sent at all when the guard is
+    // removed, but a `FOR UPDATE` row lock is a MODIFIER on a query that
+    // gets sent identically either way — "the query was sent" proves
+    // nothing about whether Postgres is actually making it wait. Instead,
+    // this polls `pg_stat_activity` for the ONE thing that's true
+    // regardless: is some connection genuinely parked in `wait_event_type =
+    // 'Lock'` right now. See server/CLAUDE.md's concurrency-test lesson for
+    // both failure modes.
+    it('DETERMINISTIC: createReservation blocks on the SAME room-row FOR UPDATE lock a concurrent create holds, and never wins the last unit twice', async () => {
+      const roomId = await insertRoom('Casal', { capacity: 2 });
+      const unitId = await insertUnit(roomId, 'C1');
+
+      // Warm the pool with two genuinely concurrent queries first — same
+      // rationale as the other M7 hand-lock tests: a cold connection's first
+      // query (TCP + auth handshake) can cost 300-400ms on its own.
+      await Promise.all([
+        testDb.selectFrom('reservations').select('id').limit(1).execute(),
+        testDb.selectFrom('reservations').select('id').limit(1).execute(),
       ]);
 
-      const statusCodes = [first.statusCode, second.statusCode].sort();
-      expect(statusCodes).toEqual([201, 409]);
+      // Raw connection holding the SAME room-row lock createReservation
+      // would take, simulating a first create that has acquired it but not
+      // yet committed. ENTIRE lifecycle in try/finally — not just the final
+      // commit — so a failure acquiring the lock itself can never leak the
+      // connection while still holding it. Found necessary from a real
+      // full-suite run: a version of this pattern with only the commit
+      // protected produced a catastrophic cascade (68/227 tests) under
+      // sustained load, consistent with an orphaned lock blocking most of
+      // the rest of the suite — see server/CLAUDE.md's concurrency-test
+      // lesson on this.
+      const holder = await testPool.connect();
+      const { plugin: timingPlugin, timings } = createQueryTimingPlugin({ match: isRoomsForUpdateQuery });
+      const measuredDb = new Kysely<DB>({ dialect: new PostgresDialect({ pool: testPool }), plugins: [timingPlugin] });
 
-      // createReservation inserts `reservations` and `reservation_nights` in
-      // the SAME transaction — the loser's reservation_nights insert hits
-      // the unique constraint and rolls back its reservations row too, so
-      // only the winner's reservation persists.
+      let firstReservationId!: number;
+      let createPromise!: ReturnType<typeof createReservation>;
+      let sawGenuineLockWait = false;
+      try {
+        await holder.query('BEGIN');
+        await holder.query('SELECT id FROM rooms WHERE id = $1 FOR UPDATE', [roomId]);
+
+        createPromise = createReservation(measuredDb, {
+          roomId,
+          checkIn: basePayload.check_in,
+          checkOut: basePayload.check_out,
+          guests: 2,
+        });
+        // Never let this leak as an unhandled rejection if the holder's own
+        // setup below throws before we reach the real `await createPromise` —
+        // otherwise it stays orphaned against a lock the holder never
+        // released, and rejects later, attributed to whatever test happens
+        // to be running at that point (found via a real full-suite cascade).
+        createPromise.catch(() => {});
+
+        sawGenuineLockWait = await waitForLockWait(testPool, {
+          excludePids: [holder.processID!],
+          queryContains: 'rooms',
+        });
+
+        // Finish what a real createReservation does, still holding the
+        // lock: insert the reservation and take the only unit for both
+        // nights.
+        const inserted = await holder.query<{ id: number }>(
+          `INSERT INTO reservations (room_id, room_unit_id, check_in, check_out, guests, status, total_cents)
+           VALUES ($1, $2, $3::date, $4::date, 2, 'confirmed', 20000) RETURNING id`,
+          [roomId, unitId, basePayload.check_in, basePayload.check_out],
+        );
+        firstReservationId = inserted.rows[0]!.id;
+        await holder.query(
+          `INSERT INTO reservation_nights (reservation_id, night, room_unit_id)
+           VALUES ($1, '2026-10-05'::date, $2), ($1, '2026-10-06'::date, $2)`,
+          [firstReservationId, unitId],
+        );
+        await holder.query('COMMIT');
+      } catch (err) {
+        // FOR UPDATE is also transaction-scoped: without an explicit
+        // ROLLBACK here, a failure between BEGIN and COMMIT leaves the
+        // transaction (and the row lock inside it) open when release()
+        // below returns the connection to the pool — verified by hand (with
+        // pg_advisory_xact_lock, same mechanism) that the next checkout of
+        // that same connection inherits an aborted transaction (25P02) and
+        // the lock is never actually free. release() alone does NOT roll
+        // back an open transaction.
+        await holder.query('ROLLBACK').catch(() => {});
+        throw err;
+      } finally {
+        holder.release();
+      }
+
+      // The proof: some connection was genuinely observed parked in
+      // Postgres's own lock-wait state — not inferred from an outer
+      // promise's timing.
+      expect(sawGenuineLockWait).toBe(true);
+
+      // Now unblocked: the second create re-reads fresh availability under
+      // its own lock, sees the unit taken, and rejects — never a raw error,
+      // never a second winner.
+      await expect(createPromise).rejects.toThrow(NoAvailabilityError);
+
+      // Confirms the wait was on the SPECIFIC FOR UPDATE query, not some
+      // other point in the call.
+      expect(timings).toHaveLength(1);
+
       const rows = await testDb.selectFrom('reservations').selectAll().execute();
-      expect(rows).toHaveLength(1);
-    });
+      expect(rows).toHaveLength(1); // only the holder's — the blocked create never committed
+      expect(rows[0]!.id).toBe(firstReservationId);
+    }, 15000);
   });
 });
