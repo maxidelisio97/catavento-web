@@ -179,6 +179,20 @@ Ver CLAUDE.md raíz — regla de todo el repo, no solo del backend.
   Migraciones y seed de datos reales van SIEMPRE contra `catavento_db`.
   Ningún test debe conectarse a `catavento_db`.
 
+### Verificación manual (navegador, scripts puntuales) contra la base de test
+- El `.env` de desarrollo expone `TEST_DATABASE_URL` además de `DATABASE_URL`.
+  Para cualquier prueba manual que necesite estado real corriendo —panel en
+  el navegador, crear/mover/cancelar reservas a mano, probar una
+  configuración nueva, correr un script puntual— levantar el proceso con
+  `DATABASE_URL` sobrescrita al valor de `TEST_DATABASE_URL` (ej.
+  `DATABASE_URL="$TEST_DATABASE_URL" npx tsx watch src/index.ts`), nunca
+  editando el `.env` a mano — el override es de ese proceso, no persiste.
+  Esto separa cualquier prueba manual de `catavento_db` real sin excepción.
+- Existe un usuario de panel permanente en `catavento_db_test` para esto:
+  `settings-check@catavento.test` / `testpassword123` (creado con
+  `create-user.ts` apuntando a esa base). No usar en producción; recrearlo
+  si `migrate:up:test` alguna vez resetea la base.
+
 ### Tests de concurrencia
 - Todo fix de concurrencia (lock, FOR UPDATE, idempotencia) necesita un
   test que corra las operaciones en paralelo real (Promise.all), no

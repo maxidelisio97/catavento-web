@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { testDb } from '../../db/testClient.js';
-import { getSetting, getBusinessSettings, MissingSettingError, InvalidSettingError } from '../settings.js';
+import { getSetting, getBusinessSettings, updateSettings, MissingSettingError, InvalidSettingError } from '../settings.js';
 
 const KEYS = ['deposit_percent', 'hold_minutes', 'pet_fee_cents'] as const;
 
@@ -76,5 +76,58 @@ describe('getBusinessSettings', () => {
       .execute();
 
     await expect(getBusinessSettings(testDb)).rejects.toBeInstanceOf(MissingSettingError);
+  });
+});
+
+describe('updateSettings', () => {
+  it('writes only the keys present in the patch', async () => {
+    await clearKeys();
+    await testDb
+      .insertInto('settings')
+      .values([
+        { key: 'deposit_percent', value: '50' },
+        { key: 'hold_minutes', value: '30' },
+        { key: 'pet_fee_cents', value: '3000' },
+      ])
+      .execute();
+
+    await updateSettings(testDb, { hold_minutes: 45 });
+
+    const settings = await getBusinessSettings(testDb);
+    expect(settings).toEqual({ depositPercent: 50, holdMinutes: 45, petFeeCents: 3000 });
+  });
+
+  it('rejects hold_minutes below the 15-minute floor and writes nothing', async () => {
+    await clearKeys();
+    await testDb
+      .insertInto('settings')
+      .values([
+        { key: 'deposit_percent', value: '50' },
+        { key: 'hold_minutes', value: '30' },
+        { key: 'pet_fee_cents', value: '3000' },
+      ])
+      .execute();
+
+    await expect(updateSettings(testDb, { hold_minutes: 10 })).rejects.toBeInstanceOf(InvalidSettingError);
+
+    const settings = await getBusinessSettings(testDb);
+    expect(settings.holdMinutes).toBe(30);
+  });
+
+  it('accepts pet_fee_cents of 0', async () => {
+    await clearKeys();
+    await testDb
+      .insertInto('settings')
+      .values([
+        { key: 'deposit_percent', value: '50' },
+        { key: 'hold_minutes', value: '30' },
+        { key: 'pet_fee_cents', value: '3000' },
+      ])
+      .execute();
+
+    await updateSettings(testDb, { pet_fee_cents: 0 });
+
+    const settings = await getBusinessSettings(testDb);
+    expect(settings.petFeeCents).toBe(0);
   });
 });
