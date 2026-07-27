@@ -217,6 +217,50 @@ Ver CLAUDE.md raíz — regla de todo el repo, no solo del backend.
   infraestructura de tests, a hacer antes de M8 — no "algún día".**
   Una suite que flakea es una suite en la que se deja de confiar, y
   en este repo los tests son la única red.
+  **RESUELTO (2026-07, rama `test-infra-concurrency-barrier`):** el
+  delay fijo se reemplazó por `createQueryBarrierPlugin`/
+  `createQueryStartSignal`/`waitForLockWait` (`test-support/queryBarrier.ts`).
+  5 corridas completas seguidas en verde (227/227) confirmaron el fix —
+  ver también la lección de `testTimeout`/`lock_timeout` más abajo, que
+  fue necesaria para llegar a esas 5 corridas limpias.
+- **`testTimeout` de vitest NO cancela la transacción real en Postgres
+  al abortar un test — deja al SIGUIENTE test deadlockeado.** Cuando un
+  test tarda más que el timeout, vitest abandona la promesa pero la
+  query/transacción sigue corriendo del lado del servidor, sosteniendo
+  locks reales. El test SIGUIENTE arranca su `beforeEach` (TRUNCATE),
+  choca con esos locks colgados, y sale `deadlock detected` — pareciendo
+  un flake ajeno y aleatorio, distinto en cada corrida. Mitigado con dos
+  cosas: `lock_timeout=5000` como parámetro de arranque de la conexión
+  de test (`testClient.ts` — así una query que no puede tomar su lock
+  falla limpio y rápido en vez de deadlockear o colgarse) y un
+  `testTimeout` (`vitest.config.ts`) con margen MEDIDO sobre el peor
+  caso real bajo carga completa (no un número adivinado — medí el test
+  más pesado de la suite bajo los 22 archivos, no aislado). Además:
+  todos los tests de hand-lock (`testPool.connect()` crudo, incluido el
+  patrón preexistente de `checkIn`/`cancelReservation`) necesitan
+  `ROLLBACK` explícito en su `catch`, no solo `finally { holder.release() }`
+  — `release()` NO hace rollback de una transacción abierta; verificado
+  con conteos de pool (no inferido de que las corridas pasaban): sin el
+  `ROLLBACK`, una query del holder que falla bajo contención real deja
+  la conexión envenenada (transacción abortada) y el lock vivo dentro
+  del pool compartido — la próxima vez que el pool entrega esa misma
+  conexión, hereda el error 25P02 y el lock nunca se libera.
+- **Un test de lock puede pasar por un lock implícito de FK/constraint en
+  vez del guard que dice probar — un booleano genérico ("¿sigue sin
+  resolver a los N ms?") no lo distingue.** Encontrado migrando el test
+  de concurrencia de `createReservation` (FOR UPDATE sobre `rooms`) al
+  patrón de lock-a-mano: con el `.forUpdate()` sacado del código real, el
+  test seguía "bloqueado" casi el mismo tiempo — no por el guard, sino
+  porque `reservations.room_id` tiene FK hacia `rooms.id` y el `INSERT
+  INTO reservations` posterior toma un lock implícito sobre la misma fila
+  que el holder a mano ya tenía tomada. El booleano de afuera no podía
+  distinguir "bloqueado en la lectura, por el guard real" de "bloqueado
+  más tarde en la escritura, por casualidad de un FK". Verificación
+  correcta: sacar el guard explícito tiene que hacer fallar el test
+  midiendo la duración de la query ESPECÍFICA que el guard protege (no
+  un booleano de la promesa completa). Si esa query sigue siendo rápida
+  pero el test "pasa" igual, es un lock implícito tapándolo, no el guard
+  real — y hay que rediseñar la medición, no confiar en el resultado.
 
 ## Deuda conocida
 - **ConfirmationStep decide `awaitingCard` mirando solo `payment?.method`,
@@ -293,6 +337,27 @@ Ver CLAUDE.md raíz — regla de todo el repo, no solo del backend.
   `catavento_db_test` pero no en producción todavía — pasó en 7B. Para
   regenerar tipos durante desarrollo, usar explícitamente:
   `npx kysely-codegen --url 'env(TEST_DATABASE_URL)' --out-file src/db/types.ts`.
+
+- **`reservation_nights_reservation_night_unique` (UNIQUE sobre
+  `(reservation_id, night)`) revienta con un 500 crudo cuando se viola —
+  ningún caller lo reconoce.** `insertNightOrThrowConflict` en
+  `moveReservation.ts` solo maneja `isUnitNightUniqueViolation`
+  (constraint `unit_night`, sobre `(room_unit_id, night)`); este otro
+  constraint, distinto, no tiene ningún handler propio. Un usuario puede
+  dispararlo (confirmado por accidente al escribir el test de
+  concurrencia de `moveNight` sobre la misma reserva en
+  `panelMoveReservation.test.ts`: sin el `pg_advisory_xact_lock` que
+  serializa dos moves de la misma reserva, el segundo INSERT choca
+  contra ESTE constraint, no el otro, y sale como error de servidor en
+  vez de un 409 limpio). Mismo patrón de fondo ya arreglado dos veces
+  antes (el índice `idx_payments_one_pending_per_reservation` en
+  `fix-asaas-overpayment-webhook`, y el propio constraint `unit_night` en
+  6A/7C): un constraint de integridad real protegiendo los datos, pero
+  sin traducción a un error de aplicación manejado. No arreglar en este
+  cambio — es deuda de producción, no parte de la migración de tests de
+  concurrencia que lo encontró. Fix pendiente: reconocer también este
+  constraint en `insertNightOrThrowConflict` (o en el catch que
+  corresponda) y traducirlo a un 409 limpio.
 
 ## Plan de módulos (orden; se puede parar en cualquier punto)
 1. Cuartos y tarifas (spec: SPEC-modulo-1-cuartos-y-tarifas.md)

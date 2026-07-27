@@ -5,14 +5,7 @@
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from '@fastify/type-provider-zod';
 import cookiePlugin from '@fastify/cookie';
-import {
-  Kysely,
-  PostgresDialect,
-  sql,
-  type KyselyPlugin,
-  type PluginTransformQueryArgs,
-  type PluginTransformResultArgs,
-} from 'kysely';
+import { Kysely, PostgresDialect, sql, type RootOperationNode } from 'kysely';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { testDb, testPool } from '../../db/testClient.js';
@@ -20,21 +13,10 @@ import type { DB } from '../../db/types.js';
 import { registerErrorHandler } from '../../errorHandler.js';
 import { hashPassword } from '../../auth/hashPassword.js';
 import { SESSION_COOKIE_NAME } from '../../auth/cookie.js';
-import { checkIn, InvalidReservationTransitionError } from '../../panel/reservationActions.js';
-
-// Test-only Kysely plugin that inserts an artificial delay after every query
-// result comes back. Used by exactly one test to force a genuine race
-// between two concurrent requests' SELECT+INSERT round trips — see that
-// test's comment for why a bare Promise.all isn't reliable enough on its own.
-class ArtificialRaceWindowPlugin implements KyselyPlugin {
-  transformQuery(args: PluginTransformQueryArgs) {
-    return args.node;
-  }
-  async transformResult(args: PluginTransformResultArgs) {
-    await new Promise((resolve) => setTimeout(resolve, 120));
-    return args.result;
-  }
-}
+import { checkIn, registerPayment, InvalidReservationTransitionError } from '../../panel/reservationActions.js';
+import { OverpaymentError } from '../../reservations/overpaymentGuard.js';
+import { createOrReuseAsaasPayment } from '../../reservations/createOrReusePayment.js';
+import { createQueryStartSignal, createQueryTimingPlugin, rawSqlContains } from '../../test-support/queryBarrier.js';
 
 const createCustomer = vi.fn();
 const createPayment = vi.fn();
@@ -338,58 +320,126 @@ describe('POST /panel/reservations/:code/payment', () => {
     expect(rows[0]!.amount_cents).toBe(5000);
   });
 
-  // DETERMINISTIC version of the race above, through the REAL registerPayment
-  // code path (not a hand-rolled reimplementation of it). A plain Promise.all
-  // over HTTP is a coin flip on fast localhost Postgres — both requests'
-  // SELECT+INSERT round trips tend to complete fully serialized "by luck"
-  // before the interleaving the lock guards against ever occurs (verified: 8
-  // consecutive runs of the test above, with the lock removed, all passed).
-  // To force the actual race deterministically, this test runs the request
-  // through a second app instance whose db client has an artificial delay
-  // injected after every query result — wide enough (120ms) that two
-  // concurrent requests are guaranteed to both pass the dedupe SELECT before
-  // either has committed its INSERT, every single run. This still goes
-  // through the real HTTP handler and the real registerPayment function —
-  // only the timing is forced, not the logic.
-  it('DETERMINISTIC: with the dedupe window artificially widened, two concurrent requests with the SAME key still never both insert', async () => {
-    const token = await insertSessionCookie();
+  // Identifies the advisory-lock query ITSELF (`SELECT
+  // pg_advisory_xact_lock(...)`), not the dedupe SELECT that runs after
+  // it. First attempt at this test measured the dedupe SELECT's duration
+  // instead and got a false negative (65ms, test failed even WITH the
+  // production lock in place): the wait happens on the lock query — the
+  // dedupe SELECT never starts until the lock is already held, so by the
+  // time it runs it's always fast. Timing the wrong query in the same
+  // transaction is its own way of proving nothing — see
+  // server/CLAUDE.md's concurrency-test lesson on this.
+  function isAdvisoryLockQuery(node: RootOperationNode): boolean {
+    return rawSqlContains(node, 'pg_advisory_xact_lock');
+  }
+
+  // DETERMINISTIC, same technique as panelMoveReservation.test.ts's
+  // same-reservation move test and panelManualReservation.test.ts's
+  // FOR UPDATE test: holds the EXACT advisory-lock key registerPayment
+  // uses, on a raw connection (simulating a first cash payment already in
+  // flight with the SAME idempotency_key, lock acquired, not yet
+  // committed), and calls the REAL registerPayment service function
+  // concurrently.
+  it('DETERMINISTIC: registerPayment (cash) blocks on the SAME advisory-lock key a concurrent request with the SAME idempotency_key holds, and replays instead of double-inserting', async () => {
     const roomId = await insertRoom();
     const reservation = await insertReservation({ roomId });
-    const delayedDb = new Kysely<DB>({
-      dialect: new PostgresDialect({ pool: testPool }),
-      plugins: [new ArtificialRaceWindowPlugin()],
-    });
-    const app = buildApp(delayedDb);
+    const user = await testDb
+      .insertInto('users')
+      .values({ email: 'operator@catavento.test', name: 'Operator', password_hash: await hashPassword('whatever') })
+      .returning('id')
+      .executeTakeFirstOrThrow();
     const idempotencyKey = randomUUID();
-    const payload = { kind: 'balance' as const, method: 'cash' as const, amount_cents: 5000, idempotency_key: idempotencyKey };
 
-    const [first, second] = await Promise.all([
-      app.inject({
-        method: 'POST',
-        url: `/panel/reservations/${reservation.code}/payment`,
-        cookies: { [SESSION_COOKIE_NAME]: token },
-        payload,
-      }),
-      app.inject({
-        method: 'POST',
-        url: `/panel/reservations/${reservation.code}/payment`,
-        cookies: { [SESSION_COOKIE_NAME]: token },
-        payload,
-      }),
+    await Promise.all([
+      testDb.selectFrom('reservations').select('id').limit(1).execute(),
+      testDb.selectFrom('reservations').select('id').limit(1).execute(),
     ]);
 
-    // Both requests must resolve gracefully (200 replay + 201 original) —
-    // never a raw 500 from an unhandled unique-constraint violation, and
-    // never two 201s.
-    const statusCodes = [first.statusCode, second.statusCode].sort();
-    expect(statusCodes).toEqual([200, 201]);
+    // ENTIRE holder lifecycle (connect -> release) in try/finally — not
+    // just the final commit — so a failure acquiring the lock itself can
+    // never leak the connection while still holding it (see the checkIn
+    // test's comment earlier in this file for why this matters: a
+    // full-suite run under load found exactly this leak pattern).
+    const holder = await testPool.connect();
+    const { plugin: timingPlugin, timings } = createQueryTimingPlugin({ match: isAdvisoryLockQuery });
+    const { plugin: startSignalPlugin, started } = createQueryStartSignal({ match: isAdvisoryLockQuery });
+    const measuredDb = new Kysely<DB>({
+      dialect: new PostgresDialect({ pool: testPool }),
+      plugins: [timingPlugin, startSignalPlugin],
+    });
 
-    const rows = await testDb
-      .selectFrom('payments')
-      .selectAll()
-      .where('reservation_id', '=', reservation.id)
-      .execute();
-    expect(rows).toHaveLength(1);
+    let firstPaymentId!: number;
+    let paymentPromise!: ReturnType<typeof registerPayment>;
+    try {
+      await holder.query('BEGIN');
+      await holder.query('SELECT pg_advisory_xact_lock($1)', [reservation.id]);
+
+      paymentPromise = registerPayment(measuredDb, {
+        code: reservation.code,
+        kind: 'balance',
+        method: 'cash',
+        amountCents: 5000,
+        idempotencyKey,
+        changedBy: user.id,
+      });
+      // Never let this leak as an unhandled rejection if the holder's own
+      // setup below throws before we reach the real `await paymentPromise` —
+      // otherwise it stays orphaned against a lock the holder never
+      // released, and rejects later, attributed to whatever test happens to
+      // be running at that point (found via a real full-suite cascade).
+      paymentPromise.catch(() => {});
+
+      // Wait for registerPayment to actually REACH its own lock
+      // acquisition attempt — an event, not a guessed setTimeout margin.
+      // registerPayment does a SELECT + assertNotOverpaying before this
+      // point, so a fixed-ms guess here was fragile under load: the
+      // ORIGINAL version of this test (200-350ms setTimeout) passed 3/3
+      // isolated runs and most full-suite runs, but failed 2 out of 5
+      // consecutive full-suite runs on this exact assertion once the
+      // machine was under sustained load — the margin was real, just not
+      // reliably big enough. Waiting for the real event has no margin to
+      // get wrong.
+      await started;
+
+      // Finish what a real first cash payment does, still holding the
+      // lock: insert with the SAME idempotency_key/kind/method/amount.
+      const inserted = await holder.query<{ id: number }>(
+        `INSERT INTO payments (reservation_id, kind, method, amount_cents, status, changed_by, idempotency_key)
+         VALUES ($1, 'balance', 'cash', 5000, 'received', $2, $3) RETURNING id`,
+        [reservation.id, user.id, idempotencyKey],
+      );
+      firstPaymentId = inserted.rows[0]!.id;
+      await holder.query('COMMIT');
+    } catch (err) {
+      // pg_advisory_xact_lock is transaction-scoped: without an explicit
+      // ROLLBACK here, a failure between BEGIN and COMMIT leaves the
+      // transaction (and the lock inside it) open when release() below
+      // returns the connection to the pool — verified by hand: the next
+      // checkout of that same connection inherits an aborted transaction
+      // (25P02) and the lock is never actually free. release() alone does
+      // NOT roll back an open transaction.
+      await holder.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      holder.release();
+    }
+
+    // Now unblocked: the second call re-reads under its own lock, sees the
+    // same idempotency_key already used with a matching intent, and
+    // replays instead of inserting a second row.
+    const result = await paymentPromise;
+    expect(result).toEqual({ method: 'cash', paymentId: firstPaymentId, status: 'received', replayed: true });
+
+    // The proof: registerPayment's OWN advisory-lock acquisition itself is
+    // what ran — not some other, unrelated point in the call. (No minimum
+    // duration asserted: with `started` as the release signal, the wait
+    // window is only as long as the holder's own insert+commit take, which
+    // proves ordering, not timing — the correct final result above is what
+    // proves the lock actually serialized the two calls.)
+    expect(timings).toHaveLength(1);
+
+    const rows = await testDb.selectFrom('payments').selectAll().where('reservation_id', '=', reservation.id).execute();
+    expect(rows).toHaveLength(1); // only the holder's — never a second insert
   });
 
   it('cash: replaying the same idempotency_key with the SAME kind/method/amount_cents returns the existing payment (200)', async () => {
@@ -631,50 +681,91 @@ describe('POST /panel/reservations/:code/payment', () => {
     expect(createPayment).not.toHaveBeenCalled();
   });
 
-  // DETERMINISTIC: two concurrent NEW cash payments, each individually within
-  // the balance but together exceeding it — the outer assertNotOverpaying
-  // check alone (before the transaction opens) can't catch this; only the
-  // re-check under the SAME pg_advisory_xact_lock the idempotency dedupe
-  // already uses closes the race. Same 120ms-delay technique as the
-  // idempotency race test above. Verified by hand: removing the
-  // assertNotOverpayingWithPendingAsaas call from registerPayment's cash
-  // branch makes this test fail (both 201, three rows never happens because
-  // amount_cents=15000 x2 = 30000 > 20000 total, but WITHOUT the locked
-  // re-check both inserts succeed regardless).
-  it('DETERMINISTIC: two concurrent cash payments that individually fit but together overpay — the second is rejected, never both inserted', async () => {
-    const token = await insertSessionCookie();
+  // DETERMINISTIC, same technique as the idempotency lock test above: holds
+  // the SAME advisory-lock key on a raw connection (simulating a first cash
+  // payment of 15000 already in flight, lock acquired, not yet committed)
+  // and calls the REAL registerPayment concurrently with a DIFFERENT
+  // idempotency_key (forcing the overpayment path, not the dedupe path —
+  // that's a different guard, covered by the test above). Individually each
+  // 15000 payment fits under the 20000 total; together they don't — only
+  // the re-check under the lock (assertNotOverpayingWithPendingAsaas,
+  // called AFTER the dedupe SELECT) catches it. Measures the advisory-lock
+  // query itself, not the SELECT that follows it — see the idempotency
+  // test's comment for why that distinction matters.
+  it('DETERMINISTIC: registerPayment (cash) blocks on the SAME advisory-lock key a concurrent cash payment holds, and rejects the overpaying second payment', async () => {
     const roomId = await insertRoom();
     const reservation = await insertReservation({ roomId, totalCents: 20000 });
-    const delayedDb = new Kysely<DB>({
-      dialect: new PostgresDialect({ pool: testPool }),
-      plugins: [new ArtificialRaceWindowPlugin()],
-    });
-    const app = buildApp(delayedDb);
+    const user = await testDb
+      .insertInto('users')
+      .values({ email: 'operator2@catavento.test', name: 'Operator', password_hash: await hashPassword('whatever') })
+      .returning('id')
+      .executeTakeFirstOrThrow();
 
-    const [first, second] = await Promise.all([
-      app.inject({
-        method: 'POST',
-        url: `/panel/reservations/${reservation.code}/payment`,
-        cookies: { [SESSION_COOKIE_NAME]: token },
-        payload: { kind: 'balance', method: 'cash', amount_cents: 15000, idempotency_key: randomUUID() },
-      }),
-      app.inject({
-        method: 'POST',
-        url: `/panel/reservations/${reservation.code}/payment`,
-        cookies: { [SESSION_COOKIE_NAME]: token },
-        payload: { kind: 'balance', method: 'cash', amount_cents: 15000, idempotency_key: randomUUID() },
-      }),
+    await Promise.all([
+      testDb.selectFrom('reservations').select('id').limit(1).execute(),
+      testDb.selectFrom('reservations').select('id').limit(1).execute(),
     ]);
 
-    const statusCodes = [first.statusCode, second.statusCode].sort();
-    expect(statusCodes).toEqual([201, 422]);
+    // ENTIRE holder lifecycle in try/finally — see the idempotency test's
+    // comment above for why.
+    const holder = await testPool.connect();
+    const { plugin: timingPlugin, timings } = createQueryTimingPlugin({ match: isAdvisoryLockQuery });
+    const { plugin: startSignalPlugin, started } = createQueryStartSignal({ match: isAdvisoryLockQuery });
+    const measuredDb = new Kysely<DB>({
+      dialect: new PostgresDialect({ pool: testPool }),
+      plugins: [timingPlugin, startSignalPlugin],
+    });
 
-    const rows = await testDb
-      .selectFrom('payments')
-      .selectAll()
-      .where('reservation_id', '=', reservation.id)
-      .execute();
-    expect(rows).toHaveLength(1);
+    let firstPaymentId!: number;
+    let paymentPromise!: ReturnType<typeof registerPayment>;
+    try {
+      await holder.query('BEGIN');
+      await holder.query('SELECT pg_advisory_xact_lock($1)', [reservation.id]);
+
+      paymentPromise = registerPayment(measuredDb, {
+        code: reservation.code,
+        kind: 'balance',
+        method: 'cash',
+        amountCents: 15000,
+        idempotencyKey: randomUUID(), // different key: forces the overpayment path, not dedupe
+        changedBy: user.id,
+      });
+      // See the idempotency test's comment above — never let this leak as an
+      // unhandled rejection if the holder's setup below throws first.
+      paymentPromise.catch(() => {});
+
+      // Event-based, not a guessed setTimeout margin — see the idempotency
+      // test's comment above for why.
+      await started;
+
+      // Finish what a real first cash payment does, still holding the lock.
+      const inserted = await holder.query<{ id: number }>(
+        `INSERT INTO payments (reservation_id, kind, method, amount_cents, status, changed_by, idempotency_key)
+         VALUES ($1, 'balance', 'cash', 15000, 'received', $2, $3) RETURNING id`,
+        [reservation.id, user.id, randomUUID()],
+      );
+      firstPaymentId = inserted.rows[0]!.id;
+      await holder.query('COMMIT');
+    } catch (err) {
+      // See the idempotency test's comment above — release() alone does NOT
+      // roll back an open transaction, and the advisory lock inside it stays
+      // held (verified by hand) until an explicit ROLLBACK runs.
+      await holder.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      holder.release();
+    }
+
+    // Now unblocked: the second payment re-checks balance_due_cents under
+    // its own lock, sees only 5000 left (20000 - 15000 already committed),
+    // and rejects the 15000 request instead of overpaying.
+    await expect(paymentPromise).rejects.toThrow(OverpaymentError);
+
+    expect(timings).toHaveLength(1);
+
+    const rows = await testDb.selectFrom('payments').selectAll().where('reservation_id', '=', reservation.id).execute();
+    expect(rows).toHaveLength(1); // only the holder's
+    expect(rows[0]!.id).toBe(firstPaymentId);
     expect(rows[0]!.amount_cents).toBe(15000);
   });
 
@@ -922,16 +1013,19 @@ describe('POST /panel/reservations/:code/payment', () => {
     expect(createPayment).not.toHaveBeenCalled();
   });
 
-  // DETERMINISTIC: two concurrent Asaas charges of DIFFERENT kind — proves the
-  // pg_advisory_xact_lock createOrReuseAsaasPayment already holds (for its
-  // OWN dedupe lookup) also closes the overpayment race once
-  // assertNotOverpayingWithPendingAsaas runs inside it, not just sequential
-  // ordering (the test above). Verified by hand: commenting out the
-  // assertNotOverpayingWithPendingAsaas call added to createOrReusePayment.ts
-  // makes this fail — both requests return 201 and two payment rows land,
-  // 40000 cents against a 20000 total.
-  it('DETERMINISTIC: two concurrent Asaas charges of DIFFERENT kind that individually fit but together overpay — the lock closes the race, not just sequential ordering', async () => {
-    const token = await insertSessionCookie();
+  // DETERMINISTIC, same technique as the two cash lock tests above: holds
+  // the SAME advisory-lock key createOrReuseAsaasPayment uses, on a raw
+  // connection (simulating a first Asaas charge of kind 'deposit' already
+  // pending, lock acquired, not yet committed), and calls
+  // createOrReuseAsaasPayment directly for a SECOND charge of a DIFFERENT
+  // kind ('balance') concurrently. Individually each 20000 fits the 20000
+  // total; together they don't — only assertNotOverpayingWithPendingAsaas,
+  // called AFTER the dedupe SELECT inside the SAME lock, catches it (proven
+  // by the sequential version above, which shows the money is exposed
+  // without a thread race at all — this test proves the lock closes the
+  // genuinely concurrent variant too). Measures the advisory-lock query
+  // itself, same reasoning as the cash tests.
+  it('DETERMINISTIC: createOrReuseAsaasPayment blocks on the SAME advisory-lock key a concurrent Asaas charge holds, and rejects the overpaying second charge of a DIFFERENT kind', async () => {
     const roomId = await insertRoom();
     const reservation = await insertReservation({ roomId, totalCents: 20000 });
     createCustomer.mockResolvedValue({ id: 'cus_1' });
@@ -940,36 +1034,79 @@ describe('POST /panel/reservations/:code/payment', () => {
       status: 'PENDING',
       invoiceUrl: 'https://asaas.test/inv/race',
     }));
-    const delayedDb = new Kysely<DB>({
-      dialect: new PostgresDialect({ pool: testPool }),
-      plugins: [new ArtificialRaceWindowPlugin()],
-    });
-    const app = buildApp(delayedDb);
 
-    const [first, second] = await Promise.all([
-      app.inject({
-        method: 'POST',
-        url: `/panel/reservations/${reservation.code}/payment`,
-        cookies: { [SESSION_COOKIE_NAME]: token },
-        payload: { kind: 'deposit', method: 'asaas_card', amount_cents: 20000, cpf_cnpj: '12345678900' },
-      }),
-      app.inject({
-        method: 'POST',
-        url: `/panel/reservations/${reservation.code}/payment`,
-        cookies: { [SESSION_COOKIE_NAME]: token },
-        payload: { kind: 'balance', method: 'asaas_card', amount_cents: 20000, cpf_cnpj: '12345678900' },
-      }),
+    await Promise.all([
+      testDb.selectFrom('reservations').select('id').limit(1).execute(),
+      testDb.selectFrom('reservations').select('id').limit(1).execute(),
     ]);
 
-    const statusCodes = [first.statusCode, second.statusCode].sort();
-    expect(statusCodes).toEqual([201, 422]);
+    // ENTIRE holder lifecycle in try/finally — see the idempotency test's
+    // comment above for why.
+    const holder = await testPool.connect();
+    const { plugin: timingPlugin, timings } = createQueryTimingPlugin({ match: isAdvisoryLockQuery });
+    const { plugin: startSignalPlugin, started } = createQueryStartSignal({ match: isAdvisoryLockQuery });
+    const measuredDb = new Kysely<DB>({
+      dialect: new PostgresDialect({ pool: testPool }),
+      plugins: [timingPlugin, startSignalPlugin],
+    });
 
-    const rows = await testDb
-      .selectFrom('payments')
-      .selectAll()
-      .where('reservation_id', '=', reservation.id)
-      .execute();
-    expect(rows).toHaveLength(1);
+    let firstPaymentId!: number;
+    let paymentPromise!: ReturnType<typeof createOrReuseAsaasPayment>;
+    try {
+      await holder.query('BEGIN');
+      await holder.query('SELECT pg_advisory_xact_lock($1)', [reservation.id]);
+
+      paymentPromise = createOrReuseAsaasPayment(measuredDb, {
+        reservationId: reservation.id,
+        code: reservation.code,
+        kind: 'balance',
+        method: 'card',
+        amountCents: 20000,
+        dueDate: '2026-09-05',
+        guestName: 'Maria Silva',
+        guestEmail: 'maria@example.com',
+        guestPhone: '11999998888',
+        cpfCnpj: '12345678900',
+      });
+      // See the idempotency test's comment above — never let this leak as an
+      // unhandled rejection if the holder's setup below throws first.
+      paymentPromise.catch(() => {});
+
+      // Event-based, not a guessed setTimeout margin — see the idempotency
+      // test's comment above for why.
+      await started;
+
+      // Finish what a real first Asaas deposit charge does, still holding
+      // the lock: insert the pending payment row.
+      const inserted = await holder.query<{ id: number }>(
+        `INSERT INTO payments (reservation_id, asaas_payment_id, kind, method, amount_cents, status)
+         VALUES ($1, $2, 'deposit', 'asaas_card', 20000, 'pending') RETURNING id`,
+        [reservation.id, `pay_${randomUUID()}`],
+      );
+      firstPaymentId = inserted.rows[0]!.id;
+      await holder.query('COMMIT');
+    } catch (err) {
+      // See the idempotency test's comment above — release() alone does NOT
+      // roll back an open transaction, and the advisory lock inside it stays
+      // held (verified by hand) until an explicit ROLLBACK runs.
+      await holder.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      holder.release();
+    }
+
+    // Now unblocked: the second charge re-checks balance_due_cents under
+    // its own lock, sees the deposit already committed leaves 0 room, and
+    // rejects instead of creating a second Asaas charge.
+    await expect(paymentPromise).rejects.toThrow(OverpaymentError);
+
+    expect(timings).toHaveLength(1);
+    expect(createPayment).not.toHaveBeenCalled(); // never even reached Asaas for the second charge
+
+    const rows = await testDb.selectFrom('payments').selectAll().where('reservation_id', '=', reservation.id).execute();
+    expect(rows).toHaveLength(1); // only the holder's
+    expect(rows[0]!.id).toBe(firstPaymentId);
+    expect(rows[0]!.kind).toBe('deposit');
   });
 
   // Risk-review finding: assertNotOverpayingWithPendingAsaas only guards the
@@ -1133,33 +1270,54 @@ describe('POST /panel/reservations/:code/check-in', () => {
 
     // Raw connection holding the SAME lock key cancelReservation would use,
     // simulating a cancel that's mid-transaction (lock acquired, not yet
-    // committed).
+    // committed). The ENTIRE lifecycle from connect() to release() is
+    // wrapped in try/finally — not just the final commit — so a failure
+    // acquiring the lock itself (BEGIN or pg_advisory_xact_lock, under real
+    // load) can never leak the connection while still holding the lock.
+    // Found the hard way: a fixed-margin version of this pattern (used here
+    // and copied 5x elsewhere) left the BEGIN/lock acquisition unprotected,
+    // and a full-suite run under sustained load produced a catastrophic
+    // cascade (68/227 tests failing) consistent with exactly this — an
+    // orphaned advisory lock on a low reservation id (ids restart at 1 every
+    // test via TRUNCATE ... RESTART IDENTITY) blocking most of the rest of
+    // the suite. See server/CLAUDE.md's concurrency-test lesson on this.
     const holder = await testPool.connect();
-    await holder.query('BEGIN');
-    await holder.query('SELECT pg_advisory_xact_lock($1)', [reservation.id]);
-
     let checkInSettled = false;
-    const checkInPromise = checkIn(testDb, { code: reservation.code, changedBy: user.id }).then(
-      () => {
-        checkInSettled = true;
-      },
-      (err: unknown) => {
-        checkInSettled = true;
-        throw err;
-      },
-    );
-
-    // checkIn must still be blocked on the lock — give it a window it would
-    // easily clear if it weren't actually waiting.
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    expect(checkInSettled).toBe(false);
-
+    let checkInPromise!: Promise<void>;
     try {
+      await holder.query('BEGIN');
+      await holder.query('SELECT pg_advisory_xact_lock($1)', [reservation.id]);
+
+      checkInPromise = checkIn(testDb, { code: reservation.code, changedBy: user.id }).then(
+        () => {
+          checkInSettled = true;
+        },
+        (err: unknown) => {
+          checkInSettled = true;
+          throw err;
+        },
+      );
+
+      // checkIn must still be blocked on the lock — give it a window it
+      // would easily clear if it weren't actually waiting.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(checkInSettled).toBe(false);
+
       // Finish what a real cancel does, still holding the lock: transition
       // to cancelled and release the nights.
       await holder.query(`UPDATE reservations SET status = 'cancelled' WHERE id = $1`, [reservation.id]);
       await holder.query(`DELETE FROM reservation_nights WHERE reservation_id = $1`, [reservation.id]);
       await holder.query('COMMIT');
+    } catch (err) {
+      // pg_advisory_xact_lock is transaction-scoped: without an explicit
+      // ROLLBACK here, a failure between BEGIN and COMMIT leaves the
+      // transaction (and the lock inside it) open when release() below
+      // returns the connection to the pool — verified by hand: the next
+      // checkout of that same connection inherits an aborted transaction
+      // (25P02) and the lock is never actually free. release() alone does
+      // NOT roll back an open transaction.
+      await holder.query('ROLLBACK').catch(() => {});
+      throw err;
     } finally {
       holder.release();
     }
