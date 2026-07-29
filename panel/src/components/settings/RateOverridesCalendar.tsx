@@ -22,6 +22,7 @@ import {
   todayISO,
 } from "../../lib/dateUtils";
 import { ClosedIcon, ReducedUnitsIcon } from "./icons";
+import DatePicker from "../ui/DatePicker";
 
 // SPEC-modulo-8-configuracion.md § 6.6: "grilla mensual, por cuarto (o
 // todos)". The calendar isn't guest-count-scoped, so — same fallback
@@ -55,12 +56,12 @@ function DayCell({ date, month, today, override, baseCents, onSelect }: DayCellP
       disabled={!inMonth}
       onClick={() => onSelect(date)}
       className={[
-        "flex flex-col gap-0.5 h-20 p-1.5 text-left border border-panel-100 rounded transition-colors",
-        inMonth ? "bg-white hover:bg-panel-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-1" : "bg-panel-50/60 cursor-default",
+        "flex flex-col gap-0.5 h-20 p-1.5 text-left border border-panel-100 rounded-panel-sm transition-colors",
+        inMonth ? "bg-white hover:bg-panel-50 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-accent-100" : "bg-panel-50/60 cursor-default",
       ].join(" ")}
     >
       <div className="flex items-start justify-between">
-        <span className={date === today ? "text-xs font-semibold text-accent-600" : inMonth ? "text-xs text-panel-500" : "text-xs text-panel-300"}>
+        <span className={date === today ? "text-xs font-semibold text-accent-700" : inMonth ? "text-xs text-panel-500" : "text-xs text-panel-300"}>
           {dayOfMonth(date)}
         </span>
         {hasOverride && inMonth && <span className="w-1.5 h-1.5 rounded-full bg-accent-500 mt-0.5" aria-hidden="true" />}
@@ -144,8 +145,13 @@ function DayEditDrawer({ roomId, date, override, onClose, onSaved }: DayEditDraw
         ].join(" ")}
       >
         <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold text-panel-900">{formatDateDisplay(date)}</h2>
-          <button type="button" onClick={onClose} aria-label="Fechar" className="text-panel-500 hover:text-panel-900 text-xl leading-none px-1">
+          <h2 className="text-[15px] font-semibold text-panel-900">{formatDateDisplay(date)}</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Fechar"
+            className="text-panel-500 hover:text-panel-900 hover:bg-panel-100 text-xl leading-none rounded-panel-sm px-2 py-1 transition-colors"
+          >
             ×
           </button>
         </div>
@@ -163,7 +169,7 @@ function DayEditDrawer({ roomId, date, override, onClose, onSaved }: DayEditDraw
               placeholder="Preço base"
               value={priceReais}
               onChange={(e) => setPriceReais(e.target.value)}
-              className="flex-1 border border-panel-300 rounded px-3 py-2 text-sm text-panel-900 focus:outline-none focus:ring-2 focus:ring-accent-500"
+              className="flex-1 border border-panel-300 rounded-panel-sm px-3 py-2 text-sm text-panel-900 focus:outline-none focus:ring-3 focus:ring-accent-100 focus:border-accent-500"
             />
             {priceReais !== "" && (
               <button type="button" onClick={() => setPriceReais("")} className="text-xs text-panel-500 hover:text-panel-900 whitespace-nowrap">
@@ -185,7 +191,7 @@ function DayEditDrawer({ roomId, date, override, onClose, onSaved }: DayEditDraw
               placeholder="Padrão do quarto"
               value={minStay}
               onChange={(e) => setMinStay(e.target.value)}
-              className="flex-1 border border-panel-300 rounded px-3 py-2 text-sm text-panel-900 focus:outline-none focus:ring-2 focus:ring-accent-500"
+              className="flex-1 border border-panel-300 rounded-panel-sm px-3 py-2 text-sm text-panel-900 focus:outline-none focus:ring-3 focus:ring-accent-100 focus:border-accent-500"
             />
             {minStay !== "" && (
               <button type="button" onClick={() => setMinStay("")} className="text-xs text-panel-500 hover:text-panel-900 whitespace-nowrap">
@@ -212,7 +218,7 @@ function DayEditDrawer({ roomId, date, override, onClose, onSaved }: DayEditDraw
               placeholder="Total do quarto"
               value={unitsAvailable}
               onChange={(e) => setUnitsAvailable(e.target.value)}
-              className="flex-1 border border-panel-300 rounded px-3 py-2 text-sm text-panel-900 focus:outline-none focus:ring-2 focus:ring-accent-500"
+              className="flex-1 border border-panel-300 rounded-panel-sm px-3 py-2 text-sm text-panel-900 focus:outline-none focus:ring-3 focus:ring-accent-100 focus:border-accent-500"
             />
             {unitsAvailable !== "" && (
               <button type="button" onClick={() => setUnitsAvailable("")} className="text-xs text-panel-500 hover:text-panel-900 whitespace-nowrap">
@@ -224,7 +230,7 @@ function DayEditDrawer({ roomId, date, override, onClose, onSaved }: DayEditDraw
         </div>
 
         {error && (
-          <p role="alert" className="text-sm text-red-600">
+          <p role="alert" className="text-sm text-danger-500">
             {error}
           </p>
         )}
@@ -233,7 +239,7 @@ function DayEditDrawer({ roomId, date, override, onClose, onSaved }: DayEditDraw
           type="button"
           onClick={() => void handleSave()}
           disabled={saving}
-          className="mt-auto bg-panel-900 text-white text-sm font-medium rounded py-2 hover:bg-panel-700 disabled:opacity-60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+          className="mt-auto bg-accent-500 text-white text-sm font-medium rounded-panel-sm py-2 hover:bg-accent-600 disabled:opacity-45 transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-accent-100"
         >
           {saving ? "Salvando..." : "Salvar"}
         </button>
@@ -288,20 +294,20 @@ function RangeApplyForm({ roomId, onApplied }: { roomId: number; onApplied: () =
   }
 
   return (
-    <div className="bg-white border border-panel-200 rounded-lg p-6">
-      <h3 className="text-sm font-semibold text-panel-900 mb-1">Aplicar em um período</h3>
+    <div className="bg-white border border-panel-200 rounded-panel-md p-6">
+      <h3 className="text-[15px] font-semibold text-panel-900 mb-1">Aplicar em um período</h3>
       <p className="text-xs text-panel-500 mb-4">Ex.: subir o preço de todo janeiro, fechar do 20 ao 25, ou definir mínimo de 3 noites.</p>
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-4 max-w-md">
         <div className="flex items-center gap-3">
-          <label className="flex flex-col gap-1 text-sm text-panel-700 flex-1">
-            De
-            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} required className="border border-panel-300 rounded px-3 py-2 text-sm text-panel-900 focus:outline-none focus:ring-2 focus:ring-accent-500" />
-          </label>
-          <label className="flex flex-col gap-1 text-sm text-panel-700 flex-1">
-            Até
-            <input type="date" value={to} onChange={(e) => setTo(e.target.value)} required className="border border-panel-300 rounded px-3 py-2 text-sm text-panel-900 focus:outline-none focus:ring-2 focus:ring-accent-500" />
-          </label>
+          <div className="flex flex-col gap-1 text-sm text-panel-700 flex-1">
+            <span>De</span>
+            <DatePicker value={from} onChange={setFrom} label="De" />
+          </div>
+          <div className="flex flex-col gap-1 text-sm text-panel-700 flex-1">
+            <span>Até</span>
+            <DatePicker value={to} onChange={setTo} label="Até" />
+          </div>
         </div>
 
         <div className="flex flex-col gap-2 border-t border-panel-100 pt-3">
@@ -317,7 +323,7 @@ function RangeApplyForm({ roomId, onApplied }: { roomId: number; onApplied: () =
               placeholder="Preço (R$) — vazio volta ao preço base"
               value={priceField.value}
               onChange={(e) => setPriceField({ ...priceField, value: e.target.value })}
-              className="ml-6 border border-panel-300 rounded px-3 py-2 text-sm text-panel-900 focus:outline-none focus:ring-2 focus:ring-accent-500"
+              className="ml-6 border border-panel-300 rounded-panel-sm px-3 py-2 text-sm text-panel-900 focus:outline-none focus:ring-3 focus:ring-accent-100 focus:border-accent-500"
             />
           )}
         </div>
@@ -334,7 +340,7 @@ function RangeApplyForm({ roomId, onApplied }: { roomId: number; onApplied: () =
               placeholder="Mínimo de noites — vazio volta ao padrão"
               value={minStayField.value}
               onChange={(e) => setMinStayField({ ...minStayField, value: e.target.value })}
-              className="ml-6 border border-panel-300 rounded px-3 py-2 text-sm text-panel-900 focus:outline-none focus:ring-2 focus:ring-accent-500"
+              className="ml-6 border border-panel-300 rounded-panel-sm px-3 py-2 text-sm text-panel-900 focus:outline-none focus:ring-3 focus:ring-accent-100 focus:border-accent-500"
             />
           )}
         </div>
@@ -364,13 +370,13 @@ function RangeApplyForm({ roomId, onApplied }: { roomId: number; onApplied: () =
               placeholder="Cupo — vazio volta ao total do quarto"
               value={unitsField.value}
               onChange={(e) => setUnitsField({ ...unitsField, value: e.target.value })}
-              className="ml-6 border border-panel-300 rounded px-3 py-2 text-sm text-panel-900 focus:outline-none focus:ring-2 focus:ring-accent-500"
+              className="ml-6 border border-panel-300 rounded-panel-sm px-3 py-2 text-sm text-panel-900 focus:outline-none focus:ring-3 focus:ring-accent-100 focus:border-accent-500"
             />
           )}
         </div>
 
         {error && (
-          <p role="alert" className="text-sm text-red-600">
+          <p role="alert" className="text-sm text-danger-500">
             {error}
           </p>
         )}
@@ -378,7 +384,7 @@ function RangeApplyForm({ roomId, onApplied }: { roomId: number; onApplied: () =
         <button
           type="submit"
           disabled={submitting || !hasAnyField}
-          className="bg-panel-900 text-white text-sm font-medium rounded py-2 hover:bg-panel-700 disabled:opacity-60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+          className="bg-accent-500 text-white text-sm font-medium rounded-panel-sm py-2 hover:bg-accent-600 disabled:opacity-45 transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-accent-100"
         >
           {submitting ? "Aplicando..." : "Aplicar ao período"}
         </button>
@@ -396,7 +402,7 @@ function RangeApplyForm({ roomId, onApplied }: { roomId: number; onApplied: () =
           )}
           {result.units_available && result.units_available.failures.length > 0 && (
             <div className="mt-2">
-              <p className="text-red-700 font-medium">Não foi possível ajustar o cupo em {result.units_available.failures.length} noite(s):</p>
+              <p className="text-danger-700 font-medium">Não foi possível ajustar o cupo em {result.units_available.failures.length} noite(s):</p>
               <ul className="mt-1 list-disc list-inside text-panel-700">
                 {result.units_available.failures.map((failure) => (
                   <li key={failure.date}>
@@ -459,7 +465,7 @@ export default function RateOverridesCalendar() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRoomId, gridFrom, gridTo, refreshKey]);
 
-  if (roomsError) return <p className="text-sm text-red-600">{roomsError}</p>;
+  if (roomsError) return <p className="text-sm text-danger-500">{roomsError}</p>;
   if (!rooms) return <p className="text-sm text-panel-500">Carregando...</p>;
 
   const selectedGroup = rooms.find((r) => r.room_id === selectedRoomId);
@@ -468,7 +474,7 @@ export default function RateOverridesCalendar() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="bg-white border border-panel-200 rounded-lg p-4">
+      <div className="bg-white border border-panel-200 rounded-panel-md p-4">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <div className="flex items-center gap-3">
             <label htmlFor="calendar_room" className="text-sm font-medium text-panel-700">
@@ -478,7 +484,7 @@ export default function RateOverridesCalendar() {
               id="calendar_room"
               value={selectedRoomId ?? ""}
               onChange={(e) => setSelectedRoomId(Number(e.target.value))}
-              className="border border-panel-300 rounded px-3 py-2 text-sm text-panel-900 focus:outline-none focus:ring-2 focus:ring-accent-500"
+              className="border border-panel-300 rounded-panel-sm px-3 py-2 text-sm text-panel-900 focus:outline-none focus:ring-3 focus:ring-accent-100 focus:border-accent-500"
             >
               {rooms.map((room) => (
                 <option key={room.room_id} value={room.room_id}>
@@ -489,14 +495,14 @@ export default function RateOverridesCalendar() {
           </div>
 
           <div className="flex items-center gap-2 text-sm">
-            <button type="button" onClick={() => setMonth((m) => addMonthsUTC(m, -1))} aria-label="Mês anterior" className="px-2 py-1 border border-panel-300 rounded hover:bg-panel-100 text-panel-700">
+            <button type="button" onClick={() => setMonth((m) => addMonthsUTC(m, -1))} aria-label="Mês anterior" className="px-2 py-1 border border-panel-300 rounded-panel-sm hover:bg-panel-100 text-panel-700">
               ←
             </button>
             <span className="min-w-36 text-center font-medium text-panel-900">{monthLabel(month)}</span>
-            <button type="button" onClick={() => setMonth((m) => addMonthsUTC(m, 1))} aria-label="Próximo mês" className="px-2 py-1 border border-panel-300 rounded hover:bg-panel-100 text-panel-700">
+            <button type="button" onClick={() => setMonth((m) => addMonthsUTC(m, 1))} aria-label="Próximo mês" className="px-2 py-1 border border-panel-300 rounded-panel-sm hover:bg-panel-100 text-panel-700">
               →
             </button>
-            <button type="button" onClick={() => setMonth(today.slice(0, 7))} className="px-3 py-1 border border-panel-300 rounded hover:bg-panel-100 text-panel-700 font-medium">
+            <button type="button" onClick={() => setMonth(today.slice(0, 7))} className="px-3 py-1 border border-panel-300 rounded-panel-sm hover:bg-panel-100 text-panel-700 font-medium">
               Hoje
             </button>
             <input
@@ -504,13 +510,13 @@ export default function RateOverridesCalendar() {
               value={month}
               onChange={(e) => e.target.value && setMonth(e.target.value)}
               aria-label="Ir para mês"
-              className="border border-panel-300 rounded px-2 py-1 text-panel-900"
+              className="border border-panel-300 rounded-panel-sm px-2 py-1 text-panel-900"
             />
           </div>
         </div>
 
         {overridesError && (
-          <p role="alert" className="text-sm text-red-600 mb-3">
+          <p role="alert" className="text-sm text-danger-500 mb-3">
             {overridesError}
           </p>
         )}
