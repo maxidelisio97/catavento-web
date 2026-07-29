@@ -58,3 +58,38 @@ export function formatDateDisplay(date: string): string {
 export function formatMoneyCents(cents: number): string {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(cents / 100);
 }
+
+/** `monthISO` is always 'YYYY-MM' (matches `<input type="month">`'s value format). */
+export function addMonthsUTC(monthISO: string, delta: number): string {
+  const [year, month] = monthISO.split("-").map(Number);
+  const total = year * 12 + (month - 1) + delta;
+  const nextYear = Math.floor(total / 12);
+  const nextMonth = (total % 12) + 1;
+  return `${nextYear}-${String(nextMonth).padStart(2, "0")}`;
+}
+
+const MONTH_LABELS = [
+  "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+  "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+];
+
+export function monthLabel(monthISO: string): string {
+  const [year, month] = monthISO.split("-").map(Number);
+  const name = MONTH_LABELS[month - 1]!;
+  return `${name[0]!.toUpperCase()}${name.slice(1)} de ${year}`;
+}
+
+/**
+ * 42-day grid (6 weeks, Sunday-first) covering `monthISO`, padded with
+ * adjacent-month dates for layout continuity — a fixed 6 rows avoids the
+ * grid's height jumping between 4-and 5-week months.
+ */
+export function buildMonthGrid(monthISO: string): string[] {
+  const first = parseDateUTC(`${monthISO}-01`);
+  const gridStart = addDaysUTC(first, -first.getUTCDay());
+  return Array.from({ length: 42 }, (_, i) => formatDateUTC(addDaysUTC(gridStart, i)));
+}
+
+export function isInMonth(date: string, monthISO: string): boolean {
+  return date.startsWith(monthISO);
+}

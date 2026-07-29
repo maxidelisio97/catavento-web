@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { getSettings, updateSettings, type BusinessSettings } from "../api/settings";
 import { ApiError } from "../api/client";
 import RoomRatesTable from "../components/settings/RoomRatesTable";
+import RateOverridesCalendar from "../components/settings/RateOverridesCalendar";
 
 // Human-facing units: R$ (not cents) and a plain integer percent — converted
 // to the API's cents/integer shape only at submit time (SPEC-modulo-8-configuracion.md § 4.3).
@@ -138,10 +139,10 @@ function GeneralSettingsTab() {
   );
 }
 
-// Tabs (not top-level nav) so 8C's calendar can slot in as a third tab here
+// Tabs (not top-level nav) so 8C's calendar slots in as a third tab here
 // without growing PanelLayout's header nav again — all three are
 // "Configuração" per SPEC-modulo-8-configuracion.md § 3.
-type ConfigTab = "geral" | "precos";
+type ConfigTab = "geral" | "precos" | "calendario";
 
 export default function SettingsPage() {
   const [tab, setTab] = useState<ConfigTab>("geral");
@@ -169,9 +170,18 @@ export default function SettingsPage() {
         >
           Preços
         </button>
+        <button
+          type="button"
+          onClick={() => setTab("calendario")}
+          className={`text-sm font-medium px-3 py-2 border-b-2 -mb-px ${
+            tab === "calendario" ? "border-panel-900 text-panel-900" : "border-transparent text-panel-500 hover:text-panel-900"
+          }`}
+        >
+          Calendário
+        </button>
       </div>
 
-      {tab === "geral" ? <GeneralSettingsTab /> : <RoomRatesTable />}
+      {tab === "geral" ? <GeneralSettingsTab /> : tab === "precos" ? <RoomRatesTable /> : <RateOverridesCalendar />}
     </div>
   );
 }
