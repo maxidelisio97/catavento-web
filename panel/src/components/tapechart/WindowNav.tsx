@@ -1,3 +1,6 @@
+import Button from "../ui/Button";
+import DatePicker from "../ui/DatePicker";
+
 interface WindowNavProps {
   from: string;
   onPrev: () => void;
@@ -12,38 +15,18 @@ interface WindowNavProps {
 export default function WindowNav({ from, onPrev, onNext, onToday, onJump }: WindowNavProps) {
   return (
     <div className="flex items-center gap-2 text-sm">
-      <button
-        type="button"
-        onClick={onPrev}
-        aria-label="Semana anterior"
-        className="px-2 py-1 border border-panel-300 rounded hover:bg-panel-100 text-panel-700"
-      >
+      <Button size="sm" onClick={onPrev} aria-label="Semana anterior">
         ←
-      </button>
-      <button
-        type="button"
-        onClick={onNext}
-        aria-label="Próxima semana"
-        className="px-2 py-1 border border-panel-300 rounded hover:bg-panel-100 text-panel-700"
-      >
+      </Button>
+      <Button size="sm" onClick={onNext} aria-label="Próxima semana">
         →
-      </button>
-      <button
-        type="button"
-        onClick={onToday}
-        className="px-3 py-1 border border-panel-300 rounded hover:bg-panel-100 text-panel-700 font-medium"
-      >
+      </Button>
+      <Button size="sm" onClick={onToday}>
         Hoje
-      </button>
-      <label className="flex items-center gap-1 text-panel-500 ml-2">
-        <span className="sr-only">Ir para data</span>
-        <input
-          type="date"
-          value={from}
-          onChange={(e) => e.target.value && onJump(e.target.value)}
-          className="border border-panel-300 rounded px-2 py-1 text-panel-900"
-        />
-      </label>
+      </Button>
+      <span className="ml-2">
+        <DatePicker value={from} onChange={onJump} label="Ir para data" />
+      </span>
     </div>
   );
 }

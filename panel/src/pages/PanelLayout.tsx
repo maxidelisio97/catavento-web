@@ -1,7 +1,9 @@
 import { useState } from "react";
 import type { PanelUser } from "../api/auth";
 import TapeChartPage from "./TapeChartPage";
-import SettingsPage from "./SettingsPage";
+import GeneralSettingsPage from "./GeneralSettingsPage";
+import RoomRatesTable from "../components/settings/RoomRatesTable";
+import RateOverridesCalendar from "../components/settings/RateOverridesCalendar";
 
 interface PanelLayoutProps {
   user: PanelUser;
@@ -9,7 +11,44 @@ interface PanelLayoutProps {
   onLogoutAll: () => Promise<void>;
 }
 
-type PanelSection = "tape-chart" | "settings";
+type PanelSection = "tape-chart" | "geral" | "precos" | "calendario";
+
+// Flat items for now, grouped only by a visual divider — once there are
+// enough sections under "Configuração" to earn a real submenu, promote this
+// to one, but a submenu component for 3 items would be pure ceremony today.
+const CONFIG_SECTIONS: { key: PanelSection; label: string }[] = [
+  { key: "geral", label: "Geral" },
+  { key: "precos", label: "Preços" },
+  { key: "calendario", label: "Calendário" },
+];
+
+const SECTION_TITLES: Record<Exclude<PanelSection, "tape-chart">, string> = {
+  geral: "Geral",
+  precos: "Preços",
+  calendario: "Calendário",
+};
+
+function NavButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`text-[13.5px] font-medium px-3 py-1.5 rounded-panel-sm transition-colors ${
+        active ? "bg-panel-100 text-panel-900" : "text-panel-500 hover:text-panel-900 hover:bg-panel-100"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
 
 export default function PanelLayout({ user, onLogout, onLogoutAll }: PanelLayoutProps) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -29,27 +68,23 @@ export default function PanelLayout({ user, onLogout, onLogoutAll }: PanelLayout
     <div className="min-h-dvh bg-panel-50">
       <header className="h-14 border-b border-panel-200 bg-white flex items-center justify-between px-4">
         <div className="flex items-center gap-6">
-          <span className="font-semibold text-panel-900 tracking-wide">CATAVENTO PAINEL</span>
+          <span className="flex items-center gap-2 text-[13px] font-bold text-panel-900 tracking-wide">
+            <span className="h-4.5 w-4.5 rounded-[5px] bg-accent-500" aria-hidden="true" />
+            CATAVENTO PAINEL
+          </span>
 
           <nav className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => setSection("tape-chart")}
-              className={`text-sm font-medium px-3 py-1.5 rounded ${
-                section === "tape-chart" ? "bg-panel-100 text-panel-900" : "text-panel-500 hover:text-panel-900"
-              }`}
-            >
+            <NavButton active={section === "tape-chart"} onClick={() => setSection("tape-chart")}>
               Mapa
-            </button>
-            <button
-              type="button"
-              onClick={() => setSection("settings")}
-              className={`text-sm font-medium px-3 py-1.5 rounded ${
-                section === "settings" ? "bg-panel-100 text-panel-900" : "text-panel-500 hover:text-panel-900"
-              }`}
-            >
-              Configuração
-            </button>
+            </NavButton>
+
+            <span className="w-px h-5 bg-panel-200 mx-1" aria-hidden="true" />
+
+            {CONFIG_SECTIONS.map(({ key, label }) => (
+              <NavButton key={key} active={section === key} onClick={() => setSection(key)}>
+                {label}
+              </NavButton>
+            ))}
           </nav>
         </div>
 
@@ -58,27 +93,27 @@ export default function PanelLayout({ user, onLogout, onLogoutAll }: PanelLayout
             type="button"
             onClick={() => setMenuOpen((open) => !open)}
             aria-expanded={menuOpen}
-            className="text-sm font-medium text-panel-700 hover:text-panel-900 px-3 py-1.5 rounded"
+            className="text-[13.5px] font-medium text-panel-700 hover:text-panel-900 hover:bg-panel-100 px-3 py-1.5 rounded-panel-sm transition-colors"
           >
             {user.name}
           </button>
 
           {menuOpen && (
-            <div className="absolute right-0 mt-1 w-56 bg-white border border-panel-200 rounded-md shadow-lg py-1 text-sm">
+            <div className="absolute right-0 mt-1 w-56 bg-white border border-panel-200 rounded-panel-md shadow-panel-sm py-1 text-[13.5px]">
               <button
                 type="button"
                 onClick={() => {
                   setMenuOpen(false);
                   void onLogout();
                 }}
-                className="w-full text-left px-3 py-2 text-panel-700 hover:bg-panel-100"
+                className="w-full text-left px-3 py-2 text-panel-700 hover:bg-panel-100 transition-colors"
               >
                 Sair
               </button>
               <button
                 type="button"
                 onClick={() => void handleLogoutAll()}
-                className="w-full text-left px-3 py-2 text-panel-700 hover:bg-panel-100"
+                className="w-full text-left px-3 py-2 text-panel-700 hover:bg-panel-100 transition-colors"
               >
                 Sair de todos os dispositivos
               </button>
@@ -88,7 +123,17 @@ export default function PanelLayout({ user, onLogout, onLogoutAll }: PanelLayout
       </header>
 
       <main className="p-6">
-        {section === "tape-chart" ? <TapeChartPage /> : <SettingsPage />}
+        {section === "tape-chart" && <TapeChartPage />}
+        {section !== "tape-chart" && (
+          <div>
+            <h1 className="text-[22px] font-semibold tracking-tight text-panel-900 mb-4">
+              {SECTION_TITLES[section]}
+            </h1>
+            {section === "geral" && <GeneralSettingsPage />}
+            {section === "precos" && <RoomRatesTable />}
+            {section === "calendario" && <RateOverridesCalendar />}
+          </div>
+        )}
       </main>
     </div>
   );

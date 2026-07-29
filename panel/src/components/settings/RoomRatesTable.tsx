@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getRoomRates, updateRoomRate, type RoomRatesGroup } from "../../api/roomRates";
 import { ApiError } from "../../api/client";
+import Button from "../ui/Button";
 
 // Human-facing R$ strings per row, keyed by room_rates.id — converted to
 // cents only at submit time, same pattern as SettingsPage's form
@@ -80,7 +81,7 @@ export default function RoomRatesTable() {
   }
 
   if (loadError) {
-    return <p className="text-sm text-red-600">{loadError}</p>;
+    return <p className="text-sm text-danger-500">{loadError}</p>;
   }
 
   if (!groups) {
@@ -88,15 +89,15 @@ export default function RoomRatesTable() {
   }
 
   return (
-    <div className="bg-white border border-panel-200 rounded-lg overflow-hidden">
-      <table className="w-full text-sm">
+    <div className="bg-white border border-panel-200 rounded-panel-md overflow-hidden">
+      <table className="w-full text-[13px]">
         <thead>
           <tr className="bg-panel-50 border-b border-panel-200 text-left text-panel-500">
-            <th className="px-4 py-2 font-medium">Quarto</th>
-            <th className="px-4 py-2 font-medium">Ocupação</th>
-            <th className="px-4 py-2 font-medium">Diária semana (R$)</th>
-            <th className="px-4 py-2 font-medium">Diária fim de semana (R$)</th>
-            <th className="px-4 py-2 font-medium"></th>
+            <th className="px-4 py-2.5 font-semibold text-[11.5px] uppercase tracking-wide">Quarto</th>
+            <th className="px-4 py-2.5 font-semibold text-[11.5px] uppercase tracking-wide">Ocupação</th>
+            <th className="px-4 py-2.5 font-semibold text-[11.5px] uppercase tracking-wide">Diária semana (R$)</th>
+            <th className="px-4 py-2.5 font-semibold text-[11.5px] uppercase tracking-wide">Diária fim de semana (R$)</th>
+            <th className="px-4 py-2.5 font-semibold text-[11.5px] uppercase tracking-wide"></th>
           </tr>
         </thead>
         <tbody>
@@ -107,42 +108,37 @@ export default function RoomRatesTable() {
               if (!form) return null;
 
               return (
-                <tr key={rate.id} className="border-b border-panel-100 last:border-b-0">
-                  <td className="px-4 py-2 text-panel-900 font-medium">
+                <tr key={rate.id} className="border-b border-panel-150 last:border-b-0 hover:bg-panel-50">
+                  <td className="px-4 py-2.5 text-panel-900 font-medium">
                     {index === 0 ? group.room_name : ""}
                   </td>
-                  <td className="px-4 py-2 text-panel-700">{rate.occupancy}</td>
-                  <td className="px-4 py-2">
+                  <td className="px-4 py-2.5 text-panel-600">{rate.occupancy}</td>
+                  <td className="px-4 py-2.5">
                     <input
                       type="number"
                       min={0}
                       step="0.01"
                       value={form.weekday_reais}
                       onChange={(e) => setRowForm(rate.id, { weekday_reais: e.target.value })}
-                      className="w-28 border border-panel-300 rounded px-2 py-1 text-sm text-panel-900 focus:outline-none focus:ring-2 focus:ring-accent-500"
+                      className="w-28 border border-panel-300 rounded-panel-sm px-2 py-1 text-[13px] text-panel-900 tabular-nums focus:outline-none focus:ring-3 focus:ring-accent-100 focus:border-accent-500"
                     />
                   </td>
-                  <td className="px-4 py-2">
+                  <td className="px-4 py-2.5">
                     <input
                       type="number"
                       min={0}
                       step="0.01"
                       value={form.weekend_reais}
                       onChange={(e) => setRowForm(rate.id, { weekend_reais: e.target.value })}
-                      className="w-28 border border-panel-300 rounded px-2 py-1 text-sm text-panel-900 focus:outline-none focus:ring-2 focus:ring-accent-500"
+                      className="w-28 border border-panel-300 rounded-panel-sm px-2 py-1 text-[13px] text-panel-900 tabular-nums focus:outline-none focus:ring-3 focus:ring-accent-100 focus:border-accent-500"
                     />
                   </td>
-                  <td className="px-4 py-2">
-                    <button
-                      type="button"
-                      onClick={() => void handleSaveRow(rate.id)}
-                      disabled={status?.saving}
-                      className="bg-panel-900 text-white text-sm font-medium rounded px-3 py-1 hover:bg-panel-700 disabled:opacity-60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
-                    >
+                  <td className="px-4 py-2.5">
+                    <Button size="sm" variant="primary" onClick={() => void handleSaveRow(rate.id)} disabled={status?.saving}>
                       {status?.saving ? "Salvando..." : "Salvar"}
-                    </button>
-                    {status?.error && <p className="text-xs text-red-600 mt-1">{status.error}</p>}
-                    {status?.saved && !status.error && <p className="text-xs text-green-700 mt-1">Salvo.</p>}
+                    </Button>
+                    {status?.error && <p className="text-xs text-danger-500 mt-1">{status.error}</p>}
+                    {status?.saved && !status.error && <p className="text-xs text-success-700 mt-1">Salvo.</p>}
                   </td>
                 </tr>
               );

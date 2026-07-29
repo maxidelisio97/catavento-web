@@ -11,7 +11,7 @@ export default function SummaryBar({ summary }: SummaryBarProps) {
   const occupancyPercent = summary && summary.total_units > 0 ? Math.round((summary.occupied_today / summary.total_units) * 100) : null;
 
   return (
-    <div className="bg-white border border-panel-200 rounded-lg px-4 py-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+    <div className="bg-white border border-panel-200 rounded-panel-md px-4 py-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
       <span className="text-panel-500">Hoje, {formatDateDisplay(todayISO())}</span>
       <span className="text-panel-900">
         <span className="font-semibold">{summary?.arrivals_today ?? "–"}</span> chegam hoje

@@ -1,32 +1,148 @@
 @import "tailwindcss";
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/inter/700.css";
 
 /*
- * Paleta neutra propia del panel — deliberadamente SIN los tokens sand/
- * coral/warm del sitio público (ver server/SPEC-modulo-6-panel-base.md
- * § 6B.4: el panel no hereda la identidad visual del sitio de cara al
- * huésped). Back office: prioriza densidad y legibilidad. El único acento
- * de color es para foco/estados interactivos, no para "atmósfera".
+ * Sistema de diseño del panel — deliberadamente SIN los tokens sand/coral/
+ * warm del sitio público (ver server/SPEC-modulo-6-panel-base.md § 6B.4: el
+ * panel no hereda la identidad visual del sitio de cara al huésped).
+ * Back office: neutro de base, un solo acento para acciones primarias,
+ * color semántico reservado EXCLUSIVAMENTE para estado (nunca decorativo).
+ * Propuesta aprobada — ver artifact "Sistema de diseño — Painel Catavento".
  */
 @theme {
-  --color-panel-950: oklch(18% 0.01 260);
-  --color-panel-900: oklch(24% 0.012 260);
-  --color-panel-700: oklch(38% 0.012 260);
-  --color-panel-500: oklch(55% 0.01 260);
-  --color-panel-300: oklch(75% 0.008 260);
-  --color-panel-200: oklch(88% 0.006 260);
-  --color-panel-100: oklch(94% 0.004 260);
-  --color-panel-50: oklch(98% 0.002 260);
+  --color-panel-50: #f7f8fa;
+  --color-panel-100: #eef1f4;
+  --color-panel-150: #e4e7ec;
+  --color-panel-200: #dfe3e9;
+  --color-panel-300: #c7cdd6;
+  --color-panel-400: #9aa3b2;
+  --color-panel-500: #717a8c;
+  --color-panel-600: #545c6d;
+  --color-panel-700: #3b4150;
+  --color-panel-800: #262b36;
+  --color-panel-900: #14171f;
 
-  --color-accent-600: oklch(52% 0.15 250);
-  --color-accent-500: oklch(60% 0.15 250);
+  --color-accent-50: #eef0fe;
+  --color-accent-100: #dce1fd;
+  --color-accent-200: #b9c3fb;
+  --color-accent-500: #4f5de3;
+  --color-accent-600: #3f4bcb;
+  --color-accent-700: #333ea8;
+
+  --color-success-50: #e9f7ef;
+  --color-success-500: #1e9350;
+  --color-success-700: #146b3a;
+
+  --color-warning-50: #fef6e7;
+  --color-warning-500: #b9790f;
+  --color-warning-700: #8a5a0b;
+
+  --color-danger-50: #fcebec;
+  --color-danger-500: #d0272f;
+  --color-danger-700: #a31e24;
+
+  --radius-panel-sm: 6px;
+  --radius-panel-md: 10px;
+
+  --shadow-panel-xs: 0 1px 2px rgba(20, 23, 31, 0.04);
+  --shadow-panel-sm: 0 1px 3px rgba(20, 23, 31, 0.08), 0 1px 2px rgba(20, 23, 31, 0.04);
+  --shadow-panel-md: 0 8px 24px rgba(20, 23, 31, 0.14);
 }
 
 body {
-  font-family:
-    system-ui,
-    -apple-system,
-    "Segoe UI",
-    Roboto,
-    Arial,
-    sans-serif;
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+}
+
+/* Native <button> defaults to cursor: default, unlike <a> — every clickable
+   control in the panel is a <button>, so without this every one of them
+   reads as inert until you actually click it. */
+button:not(:disabled) {
+  cursor: pointer;
+}
+
+/* Date picker popover (react-day-picker), WindowNav's "ir para data" — same
+   convention the public site uses (src/index.css): styled with plain CSS
+   against the .rdp-root classes, NEVER via the component's `classNames`
+   prop. That prop REPLACES each part's default class instead of appending to
+   it, so overriding e.g. "day_button" silently drops "rdp-day_button" from
+   the element and breaks selected/today state, which depend on that base
+   class being present. Scoped under .panel-daypicker so this never collides
+   with the public site's .booking-daypicker — two separate Vite apps, but
+   cheap insurance. */
+.rdp-root.panel-daypicker {
+  --rdp-accent-color: var(--color-accent-500);
+  --rdp-accent-background-color: var(--color-accent-50);
+  --rdp-today-color: var(--color-accent-700);
+  --rdp-day-width: 2.125rem;
+  --rdp-day-height: 2.125rem;
+  --rdp-day_button-width: 1.875rem;
+  --rdp-day_button-height: 1.875rem;
+  --rdp-selected-border: none;
+  --rdp-disabled-opacity: 1;
+  --rdp-outside-opacity: 1;
+  --rdp-nav-height: 2rem;
+  font-family: inherit;
+  font-size: 12.5px;
+}
+
+.panel-daypicker .rdp-month_caption {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-panel-900);
+}
+
+.panel-daypicker .rdp-weekday {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-panel-500);
+}
+
+.panel-daypicker .rdp-day_button {
+  border-radius: var(--radius-panel-sm);
+  color: var(--color-panel-800);
+}
+
+.panel-daypicker .rdp-day_button:hover:not([disabled]) {
+  background-color: var(--color-panel-100);
+}
+
+.panel-daypicker .rdp-selected .rdp-day_button {
+  background-color: var(--color-accent-500);
+  color: #fff;
+  font-weight: 600;
+}
+
+.panel-daypicker .rdp-today:not(.rdp-selected) .rdp-day_button {
+  font-weight: 700;
+}
+
+.panel-daypicker .rdp-outside .rdp-day_button {
+  color: var(--color-panel-400);
+}
+
+.panel-daypicker .rdp-disabled .rdp-day_button {
+  color: var(--color-panel-300);
+  cursor: not-allowed;
+}
+
+.panel-daypicker .rdp-button_previous,
+.panel-daypicker .rdp-button_next {
+  color: var(--color-panel-500);
+  border-radius: var(--radius-panel-sm);
+}
+
+.panel-daypicker .rdp-button_previous:hover:not([disabled]),
+.panel-daypicker .rdp-button_next:hover:not([disabled]) {
+  background-color: var(--color-panel-100);
+  color: var(--color-panel-900);
+}
+
+.panel-daypicker .rdp-chevron {
+  fill: currentColor;
 }

@@ -10,6 +10,10 @@ import {
 } from "../../api/reservationActions";
 import { ApiError } from "../../api/client";
 import { formatDateDisplay, formatMoneyCents } from "../../lib/dateUtils";
+import Button from "../ui/Button";
+import Card from "../ui/Card";
+import StatusBadge from "../ui/StatusBadge";
+import { SelectField, TextField } from "../ui/Field";
 
 interface ReservationDrawerProps {
   reservationId: number;
@@ -19,15 +23,6 @@ interface ReservationDrawerProps {
 }
 
 const ORIGIN_LABELS: Record<string, string> = { web: "Site", manual: "Manual", ota: "OTA" };
-const STATUS_LABELS: Record<string, string> = {
-  pending_payment: "Pagamento pendente",
-  confirmed: "Confirmada",
-  cancelled: "Cancelada",
-  payment_conflict: "Conflito de pagamento",
-  checked_in: "Check-in feito",
-  checked_out: "Check-out feito",
-  no_show: "No-show",
-};
 
 // SPEC-modulo-7-gestion-operativa.md § 5 — states with no outgoing
 // transition that could ever need a new payment (mirrors the backend's
@@ -202,25 +197,28 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged }:
         ].join(" ")}
       >
         <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold text-panel-900">Detalhe da reserva</h2>
+          <h2 className="text-[15px] font-semibold text-panel-900">Detalhe da reserva</h2>
           <button
             type="button"
             onClick={onClose}
             aria-label="Fechar"
-            className="text-panel-500 hover:text-panel-900 text-xl leading-none px-1"
+            className="text-panel-500 hover:text-panel-900 hover:bg-panel-100 text-xl leading-none rounded-panel-sm px-2 py-1 transition-colors"
           >
             ×
           </button>
         </div>
 
-        {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+        {error && <p role="alert" className="text-sm text-danger-500">{error}</p>}
 
         {!detail && !error && <p className="text-sm text-panel-500">Carregando...</p>}
 
         {detail && (
           <>
-            <div>
-              <p className="text-lg font-semibold text-panel-900">{detail.contact.name ?? "—"}</p>
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2">
+                <p className="text-[17px] font-semibold text-panel-900">{detail.contact.name ?? "—"}</p>
+                <StatusBadge status={detail.status} />
+              </div>
               {detail.code && (
                 <button
                   type="button"
@@ -276,7 +274,7 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged }:
                 <dt className="text-panel-500">Pago</dt>
                 <dd>{formatMoneyCents(detail.money.paid_cents)}</dd>
                 <dt className="text-panel-500">Saldo</dt>
-                <dd className={detail.money.balance_cents > 0 ? "font-semibold text-amber-700" : ""}>
+                <dd className={detail.money.balance_cents > 0 ? "font-semibold text-warning-700" : ""}>
                   {formatMoneyCents(detail.money.balance_cents)}
                 </dd>
               </dl>
@@ -286,26 +284,21 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged }:
               <p className="text-panel-500">Ações</p>
 
               {actionError && (
-                <p role="alert" className="text-xs text-red-600">
+                <p role="alert" className="text-xs text-danger-500">
                   {actionError}
                 </p>
               )}
 
               <div className="flex flex-wrap gap-2">
                 {detail.status === "confirmed" && (
-                  <button
-                    type="button"
-                    onClick={handleCheckIn}
-                    disabled={actionBusy}
-                    className="rounded border border-panel-300 px-3 py-1.5 text-xs font-medium text-panel-900 hover:bg-panel-100 disabled:opacity-50"
-                  >
+                  <Button size="sm" onClick={handleCheckIn} disabled={actionBusy}>
                     Check-in
-                  </button>
+                  </Button>
                 )}
 
                 {detail.status === "checked_in" && (
-                  <button
-                    type="button"
+                  <Button
+                    size="sm"
                     onClick={handleCheckOut}
                     disabled={actionBusy || detail.money.balance_cents > 0}
                     title={
@@ -313,30 +306,25 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged }:
                         ? `Falta cobrar ${formatMoneyCents(detail.money.balance_cents)} — registre o pagamento para poder fechar`
                         : undefined
                     }
-                    className="rounded border border-panel-300 px-3 py-1.5 text-xs font-medium text-panel-900 hover:bg-panel-100 disabled:opacity-50"
                   >
                     Check-out
-                  </button>
+                  </Button>
                 )}
                 {detail.status === "checked_in" && detail.money.balance_cents > 0 && (
-                  <p className="w-full text-xs text-amber-700">
+                  <p className="w-full text-xs text-warning-700">
                     Falta cobrar {formatMoneyCents(detail.money.balance_cents)} para poder fechar o check-out.
                   </p>
                 )}
 
                 {!NOT_PAYABLE_STATUSES.has(detail.status) && (
-                  <button
-                    type="button"
-                    onClick={() => (showPaymentForm ? closePaymentForm() : openPaymentForm())}
-                    className="rounded border border-panel-300 px-3 py-1.5 text-xs font-medium text-panel-900 hover:bg-panel-100"
-                  >
+                  <Button size="sm" onClick={() => (showPaymentForm ? closePaymentForm() : openPaymentForm())}>
                     Registrar pagamento
-                  </button>
+                  </Button>
                 )}
               </div>
 
               {showPaymentForm && (
-                <div className="rounded border border-panel-200 p-3 flex flex-col gap-2">
+                <Card className="p-3 flex flex-col gap-2">
                   {paymentResult ? (
                     <div className="flex flex-col gap-2 text-xs">
                       {paymentResult.method === "pix" && (
@@ -349,7 +337,7 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged }:
                           <button
                             type="button"
                             onClick={() => navigator.clipboard.writeText(paymentResult.qr_code.payload)}
-                            className="text-accent-600 hover:underline text-left"
+                            className="text-accent-700 hover:underline text-left"
                           >
                             Copiar código PIX
                           </button>
@@ -360,7 +348,7 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged }:
                           href={paymentResult.invoice_url}
                           target="_blank"
                           rel="noreferrer"
-                          className="text-accent-600 hover:underline"
+                          className="text-accent-700 hover:underline"
                         >
                           Abrir link de pagamento
                         </a>
@@ -370,83 +358,63 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged }:
                         paymentResult.method === "pix_manual") && (
                         <p className="text-panel-900">Pagamento registrado.</p>
                       )}
-                      <button
-                        type="button"
-                        onClick={closePaymentForm}
-                        className="rounded border border-panel-300 px-3 py-1.5 font-medium text-panel-900 hover:bg-panel-100 self-start"
-                      >
+                      <Button size="sm" onClick={closePaymentForm} className="self-start">
                         Fechar
-                      </button>
+                      </Button>
                     </div>
                   ) : (
-                    <form onSubmit={handleRegisterPayment} className="flex flex-col gap-2 text-xs">
-                      <label className="flex flex-col gap-1">
-                        Tipo
-                        <select
-                          value={paymentKind}
-                          onChange={(e) => setPaymentKind(e.target.value as PanelPaymentKind)}
-                          className="rounded border border-panel-300 px-2 py-1"
-                        >
-                          <option value="deposit">Depósito</option>
-                          <option value="balance">Saldo</option>
-                          <option value="extra">Extra</option>
-                        </select>
-                      </label>
-                      <label className="flex flex-col gap-1">
-                        Forma de pagamento
-                        <select
-                          value={paymentMethod}
-                          onChange={(e) => setPaymentMethod(e.target.value as PanelPaymentMethod)}
-                          className="rounded border border-panel-300 px-2 py-1"
-                        >
-                          {(Object.keys(PAYMENT_METHOD_LABELS) as PanelPaymentMethod[]).map((method) => (
-                            <option key={method} value={method}>
-                              {PAYMENT_METHOD_LABELS[method]}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="flex flex-col gap-1">
-                        Valor (R$)
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={paymentAmount}
-                          onChange={(e) => setPaymentAmount(e.target.value)}
-                          placeholder="0,00"
-                          className="rounded border border-panel-300 px-2 py-1"
-                        />
-                      </label>
+                    <form onSubmit={handleRegisterPayment} className="flex flex-col gap-3">
+                      <SelectField
+                        id="payment-kind"
+                        label="Tipo"
+                        value={paymentKind}
+                        onChange={(e) => setPaymentKind(e.target.value as PanelPaymentKind)}
+                      >
+                        <option value="deposit">Depósito</option>
+                        <option value="balance">Saldo</option>
+                        <option value="extra">Extra</option>
+                      </SelectField>
+                      <SelectField
+                        id="payment-method"
+                        label="Forma de pagamento"
+                        value={paymentMethod}
+                        onChange={(e) => setPaymentMethod(e.target.value as PanelPaymentMethod)}
+                      >
+                        {(Object.keys(PAYMENT_METHOD_LABELS) as PanelPaymentMethod[]).map((method) => (
+                          <option key={method} value={method}>
+                            {PAYMENT_METHOD_LABELS[method]}
+                          </option>
+                        ))}
+                      </SelectField>
+                      <TextField
+                        id="payment-amount"
+                        label="Valor (R$)"
+                        type="text"
+                        inputMode="decimal"
+                        value={paymentAmount}
+                        onChange={(e) => setPaymentAmount(e.target.value)}
+                        placeholder="0,00"
+                      />
                       {(paymentMethod === "asaas_pix" || paymentMethod === "asaas_card") && (
-                        <label className="flex flex-col gap-1">
-                          CPF/CNPJ do hóspede
-                          <input
-                            type="text"
-                            value={paymentCpf}
-                            onChange={(e) => setPaymentCpf(e.target.value)}
-                            className="rounded border border-panel-300 px-2 py-1"
-                          />
-                        </label>
+                        <TextField
+                          id="payment-cpf"
+                          label="CPF/CNPJ do hóspede"
+                          type="text"
+                          value={paymentCpf}
+                          onChange={(e) => setPaymentCpf(e.target.value)}
+                        />
                       )}
                       <div className="flex gap-2">
-                        <button
-                          type="submit"
-                          disabled={actionBusy}
-                          className="rounded bg-accent-600 px-3 py-1.5 font-medium text-white hover:bg-accent-700 disabled:opacity-50"
-                        >
+                        <Button type="submit" variant="primary" size="sm" disabled={actionBusy}>
                           Confirmar
-                        </button>
-                        <button
-                          type="button"
-                          onClick={closePaymentForm}
-                          className="rounded border border-panel-300 px-3 py-1.5 font-medium text-panel-900 hover:bg-panel-100"
-                        >
+                        </Button>
+                        <Button type="button" size="sm" onClick={closePaymentForm}>
                           Cancelar
-                        </button>
+                        </Button>
                       </div>
                     </form>
                   )}
-                </div>
+                </Card>
               )}
             </section>
 
@@ -464,7 +432,7 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged }:
                   href={whatsappHref(detail.contact.phone)}
                   target="_blank"
                   rel="noreferrer"
-                  className="text-accent-600 hover:underline"
+                  className="text-accent-700 hover:underline"
                 >
                   {detail.contact.phone} (WhatsApp)
                 </a>
@@ -481,7 +449,7 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged }:
             )}
 
             <p className="text-xs text-panel-500 mt-auto pt-4 border-t border-panel-100">
-              {STATUS_LABELS[detail.status] ?? detail.status} · criada em {formatDateDisplay(detail.created_at.slice(0, 10))}
+              Criada em {formatDateDisplay(detail.created_at.slice(0, 10))}
             </p>
           </>
         )}

@@ -1,6 +1,9 @@
 import { useState } from "react";
 import CataventoIcon from "../components/CataventoIcon";
 import { ApiError } from "../api/client";
+import Card from "../components/ui/Card";
+import Button from "../components/ui/Button";
+import { TextField } from "../components/ui/Field";
 
 interface LoginPageProps {
   onLogin: (email: string, password: string) => Promise<void>;
@@ -40,54 +43,37 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
           <span className="font-semibold tracking-wide text-panel-900">CATAVENTO PAINEL</span>
         </div>
 
-        <form
-          onSubmit={handleSubmit}
-          className="bg-white border border-panel-200 rounded-lg p-6 flex flex-col gap-4"
-        >
-          <div className="flex flex-col gap-1">
-            <label htmlFor="email" className="text-sm font-medium text-panel-700">
-              Email
-            </label>
-            <input
-              id="email"
-              type="email"
-              autoComplete="username"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="border border-panel-300 rounded px-3 py-2 text-sm text-panel-900 focus:outline-none focus:ring-2 focus:ring-accent-500"
-            />
-          </div>
+        <Card as="form" onSubmit={handleSubmit} className="p-6 flex flex-col gap-4">
+          <TextField
+            id="email"
+            label="Email"
+            type="email"
+            autoComplete="username"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
 
-          <div className="flex flex-col gap-1">
-            <label htmlFor="password" className="text-sm font-medium text-panel-700">
-              Senha
-            </label>
-            <input
-              id="password"
-              type="password"
-              autoComplete="current-password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="border border-panel-300 rounded px-3 py-2 text-sm text-panel-900 focus:outline-none focus:ring-2 focus:ring-accent-500"
-            />
-          </div>
+          <TextField
+            id="password"
+            label="Senha"
+            type="password"
+            autoComplete="current-password"
+            required
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
 
           {error && (
-            <p role="alert" className="text-sm text-red-600">
+            <p role="alert" className="text-sm text-danger-500">
               {error}
             </p>
           )}
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="mt-2 bg-panel-900 text-white text-sm font-medium rounded py-2 hover:bg-panel-700 disabled:opacity-60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
-          >
+          <Button type="submit" variant="primary" disabled={loading} className="mt-2 justify-center">
             {loading ? "Entrando..." : "Entrar"}
-          </button>
-        </form>
+          </Button>
+        </Card>
       </div>
     </div>
   );
