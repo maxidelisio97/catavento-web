@@ -373,6 +373,22 @@ Ver CLAUDE.md raíz — regla de todo el repo, no solo del backend.
   constraint en `insertNightOrThrowConflict` (o en el catch que
   corresponda) y traducirlo a un 409 limpio.
 
+- **`dateSchema` (regex `\d{4}-\d{2}-\d{2}`) valida formato, no calendario —
+  una fecha como `2026-13-45` pasa Zod y revienta como 500 crudo al
+  `::date` cast de Postgres.** Confirmado empíricamente en
+  `/panel/rate-overrides` (risk-review de 8C, pre-merge). El mismo patrón
+  está repetido, sin cambios, en `panelTapeChart.ts`,
+  `panelMoveReservation.ts`, `panelManualReservation.ts`,
+  `reservations.ts` y `availability.ts` — no es un bug de 8C, es un gap de
+  validación transversal a todo el panel. Mismo patrón de fondo que el
+  resto de esta sección: un error de Postgres sin traducir a un 4xx de
+  aplicación. No filtra nada sensible (`errorHandler.ts` genericiza el
+  5xx), así que es un problema de UX/DX, no de seguridad. Fix pendiente:
+  un `dateSchema` compartido que valide calendario real (ej. vía `Date` +
+  chequeo de roundtrip, o un `.refine` que verifique
+  `!Number.isNaN(Date.parse(...))`), aplicado parejo a los seis
+  endpoints — barrido propio, no mezclar con otro cambio.
+
 ## Plan de módulos (orden; se puede parar en cualquier punto)
 1. Cuartos y tarifas (spec: SPEC-modulo-1-cuartos-y-tarifas.md)
 2. Disponibilidad (anti-overbooking)
