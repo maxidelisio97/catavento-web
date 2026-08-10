@@ -7,7 +7,7 @@ import { useEffect } from "react";
 import { trackEvent } from "./analytics";
 
 const STORAGE_KEY = "ga-scroll-seccion-seen";
-const SECTION_IDS = ["hero", "experiencias", "quartos", "depoimentos", "taiba", "reservar"];
+const SECTION_IDS = ["hero", "galeria", "quartos", "depoimentos", "taiba", "reservar"];
 
 function readSeen(): Set<string> {
   try {

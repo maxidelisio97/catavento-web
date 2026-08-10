@@ -4,7 +4,7 @@
  * Si necesito modificar el header o sus links, este es el archivo.
  */
 import { useState, useEffect } from "react";
-import { MdMenu, MdClose } from "react-icons/md";
+import { MdMenu, MdClose, MdKeyboardArrowDown } from "react-icons/md";
 import { LuCalendarCheck } from "react-icons/lu";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { NAV_ITEMS } from "../config/site";
@@ -17,6 +17,7 @@ export default function Header() {
   const [open, setOpen] = useState(false);
   const [formInView, setFormInView] = useState(true);
   const [footerInView, setFooterInView] = useState(false);
+  const [navRevealed, setNavRevealed] = useState(false);
   const reduce = useReducedMotion();
 
   useEffect(() => {
@@ -44,15 +45,44 @@ export default function Header() {
     };
   }, []);
 
+  // Reseta o "revelado" manual sempre que o formulario volta a tela, para
+  // que o header volte a esconder da proxima vez que o usuario passar dele.
+  useEffect(() => {
+    if (formInView) setNavRevealed(false);
+  }, [formInView]);
+
   const showReserveCta = !formInView && !footerInView;
   const textClass = scrolled ? "text-warm-900" : "text-white";
   const mutedClass = scrolled ? "text-warm-800/50" : "text-white/60";
 
+  // Guarda o menu (desktop) depois que o formulario de disponibilidade sai
+  // de tela; reaparece ao clicar na abinha central. Mobile fica sempre
+  // visivel (o toque nao tem "passar por cima"). Nao respeita
+  // prefers-reduced-motion de proposito: e um comportamento funcional (achar
+  // a nav), nao um efeito decorativo — decisao 2026-08-01, revisar se o dono
+  // preferir outro criterio.
+  const headerHidden = !formInView && !navRevealed && !open;
+
   return (
+    <>
+    {/* Abinha central: só existe enquanto o header está escondido; clicar
+        revela a nav (substitui o hover, que não existe em bom número de
+        setups desktop com trackpad/touch). */}
+    {headerHidden && (
+      <button
+        type="button"
+        onClick={() => setNavRevealed(true)}
+        aria-label="Mostrar menu"
+        className="hidden md:flex fixed top-0 inset-x-0 mx-auto w-14 h-8 items-center justify-center gap-1 rounded-b-lg bg-white shadow-[0_2px_6px_0_rgba(0,0,0,0.12)] text-warm-900 z-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral-500"
+      >
+        <CataventoIcon height={14} />
+        <MdKeyboardArrowDown size={14} aria-hidden />
+      </button>
+    )}
     <header
       className={`fixed top-0 inset-x-0 z-50 transition-all duration-500 ${
         scrolled ? "bg-white shadow-[0_1px_0_0_oklch(88%_0.022_70)]" : "bg-transparent"
-      }`}
+      } ${headerHidden ? "md:-translate-y-full" : "md:translate-y-0"}`}
     >
       <nav className="max-w-[1440px] mx-auto flex md:grid md:grid-cols-3 items-center justify-between px-6 md:px-10 h-[72px] md:h-20">
         {/* Logo */}
@@ -142,5 +172,6 @@ export default function Header() {
         </div>
       )}
     </header>
+    </>
   );
 }

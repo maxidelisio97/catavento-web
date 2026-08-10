@@ -82,7 +82,7 @@ export default function Hero() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.9, delay: 0.65, ease }}
           >
-            Seu refúgio à beira-mar em Taíba. A 100m da praia, com jardim exuberante, piscina e brisa constante.
+            Seu refúgio à beira-mar em Taíba. A 100m da praia, com jardim, piscina e brisa constante.
           </motion.p>
 
           <motion.div
@@ -96,12 +96,6 @@ export default function Hero() {
               className="inline-flex items-center gap-2 bg-coral-600 hover:bg-coral-500 text-white font-body font-semibold text-sm px-8 py-3.5 rounded-full transition-all duration-200 active:scale-[0.97] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral-400"
             >
               Reservar
-            </a>
-            <a
-              href="#experiencias"
-              className="inline-flex items-center gap-2 border border-white/45 text-white hover:bg-white/10 font-body font-medium text-sm px-7 py-3.5 rounded-full transition-all duration-200 active:scale-[0.97] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
-            >
-              Conheça a experiência
             </a>
           </motion.div>
 

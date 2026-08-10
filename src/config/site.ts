@@ -6,7 +6,6 @@
 
 export const NAV_ITEMS = [
   { label: "Início", href: "#hero" },
-  { label: "Experiências", href: "#experiencias" },
   { label: "Quartos", href: "#quartos" },
   { label: "Taíba", href: "#taiba" },
   { label: "Galeria", href: "#galeria" },

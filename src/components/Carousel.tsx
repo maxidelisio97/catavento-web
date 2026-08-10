@@ -12,7 +12,10 @@ import { cn } from "../lib/utils";
 // position: ajuste manual de object-position para fotos cujo enquadramento
 // original nao centra o assunto (ex.: moveis altos e estreitos, cortados pela
 // metade num wrapper 4/3). Default "center" cobre o caso comum.
-export type CarouselImage = { src: string; alt: string; position?: string };
+// fit: "cover" para fotos ja recortadas na proporcao do wrapper (preenche
+// sem sobra); "contain" (default) mostra a foto inteira, com faixas vazias
+// nas fotos que ainda nao foram recortadas na proporcao certa.
+export type CarouselImage = { src: string; alt: string; position?: string; fit?: "cover" | "contain" };
 
 type CarouselProps = {
   images: readonly CarouselImage[];
@@ -63,7 +66,10 @@ export default function Carousel({ images, className, wrapperClassName, delay = 
           alt={images[index].alt}
           loading="lazy"
           className={className}
-          style={{ objectPosition: images[index].position ?? "center" }}
+          style={{
+            objectPosition: images[index].position ?? "center",
+            ...(images[index].fit ? { objectFit: images[index].fit } : {}),
+          }}
           initial={reduce ? false : { opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={reduce ? undefined : { opacity: 0 }}
@@ -90,7 +96,7 @@ export default function Carousel({ images, className, wrapperClassName, delay = 
             <MdChevronRight size={20} />
           </button>
 
-          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-1.5">
+          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex flex-wrap items-center justify-center gap-1.5 max-w-[85%]">
             {images.map((img, i) => (
               <button
                 key={img.src}
