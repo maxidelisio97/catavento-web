@@ -5,6 +5,8 @@ import type { Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
 import { db as prodDb } from '../db/client.js';
 import { requireAuth } from '../auth/requireAuth.js';
+import { blockIfMustChangePassword } from '../auth/blockIfMustChangePassword.js';
+import { requirePermission } from '../auth/requirePermission.js';
 import { getBusinessSettings, settingsSchemas, updateSettings } from '../settings/settings.js';
 
 const settingsResponseSchema = z.object({
@@ -28,6 +30,8 @@ const panelSettingsPlugin: FastifyPluginAsync<PanelSettingsPluginOptions> = asyn
 
   await fastify.register(async (protectedScope) => {
     protectedScope.addHook('onRequest', requireAuth(db));
+    protectedScope.addHook('onRequest', blockIfMustChangePassword());
+    protectedScope.addHook('onRequest', requirePermission(db, 'config.settings'));
     const typed = protectedScope.withTypeProvider<ZodTypeProvider>();
 
     typed.get(

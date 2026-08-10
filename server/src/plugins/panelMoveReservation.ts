@@ -12,6 +12,8 @@ import type { Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
 import { db as prodDb } from '../db/client.js';
 import { requireAuth } from '../auth/requireAuth.js';
+import { blockIfMustChangePassword } from '../auth/blockIfMustChangePassword.js';
+import { requirePermission } from '../auth/requirePermission.js';
 import {
   moveNight,
   moveStay,
@@ -83,6 +85,11 @@ const panelMoveReservationPlugin: FastifyPluginAsync<PanelMoveReservationPluginO
 
   await fastify.register(async (protectedScope) => {
     protectedScope.addHook('onRequest', requireAuth(db));
+    protectedScope.addHook('onRequest', blockIfMustChangePassword());
+    // move-options is a read-only helper, but it's scoped to feed exactly
+    // the mover UI (§ 4.4 barrido note) — gated the same as the actions it
+    // exists for, not reservations.view.
+    protectedScope.addHook('onRequest', requirePermission(db, 'reservations.move'));
     const typed = protectedScope.withTypeProvider<ZodTypeProvider>();
 
     typed.get(

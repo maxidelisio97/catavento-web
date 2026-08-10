@@ -5,6 +5,8 @@ import type { Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
 import { db as prodDb } from '../db/client.js';
 import { requireAuth } from '../auth/requireAuth.js';
+import { blockIfMustChangePassword } from '../auth/blockIfMustChangePassword.js';
+import { requirePermission } from '../auth/requirePermission.js';
 import { AsaasApiError } from '../asaasClient.js';
 import { PaymentAlreadyReceivedError } from '../reservations/createOrReusePayment.js';
 import { OverpaymentError } from '../reservations/overpaymentGuard.js';
@@ -110,11 +112,16 @@ const panelReservationActionsPlugin: FastifyPluginAsync<PanelReservationActionsP
 
   await fastify.register(async (protectedScope) => {
     protectedScope.addHook('onRequest', requireAuth(db));
+    protectedScope.addHook('onRequest', blockIfMustChangePassword());
     const typed = protectedScope.withTypeProvider<ZodTypeProvider>();
 
+    // Mixed permissions in this one file (§ 4.4): payment/extra are
+    // payments.*, the rest are reservations.* — gated per-route via the
+    // route option instead of one scope-wide hook.
     typed.post(
       '/panel/reservations/:code/payment',
       {
+        onRequest: [requirePermission(db, 'payments.charge')],
         schema: {
           params: codeParamsSchema,
           body: paymentBodySchema,
@@ -162,6 +169,7 @@ const panelReservationActionsPlugin: FastifyPluginAsync<PanelReservationActionsP
     typed.post(
       '/panel/reservations/:code/check-in',
       {
+        onRequest: [requirePermission(db, 'reservations.checkin')],
         schema: {
           params: codeParamsSchema,
           response: { 200: z.object({ status: z.literal('checked_in') }), 404: errorResponseSchema, 409: errorResponseSchema },
@@ -184,6 +192,7 @@ const panelReservationActionsPlugin: FastifyPluginAsync<PanelReservationActionsP
     typed.post(
       '/panel/reservations/:code/check-out',
       {
+        onRequest: [requirePermission(db, 'reservations.checkout')],
         schema: {
           params: codeParamsSchema,
           response: {
@@ -214,6 +223,7 @@ const panelReservationActionsPlugin: FastifyPluginAsync<PanelReservationActionsP
     typed.post(
       '/panel/reservations/:code/cancel',
       {
+        onRequest: [requirePermission(db, 'reservations.cancel')],
         schema: {
           params: codeParamsSchema,
           body: cancelBodySchema,
@@ -237,6 +247,7 @@ const panelReservationActionsPlugin: FastifyPluginAsync<PanelReservationActionsP
     typed.post(
       '/panel/reservations/:code/no-show',
       {
+        onRequest: [requirePermission(db, 'reservations.cancel')],
         schema: {
           params: codeParamsSchema,
           body: cancelBodySchema,
@@ -259,6 +270,7 @@ const panelReservationActionsPlugin: FastifyPluginAsync<PanelReservationActionsP
     typed.post(
       '/panel/reservations/:code/extra',
       {
+        onRequest: [requirePermission(db, 'payments.extra')],
         schema: {
           params: codeParamsSchema,
           body: extraBodySchema,

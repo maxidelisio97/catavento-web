@@ -11,6 +11,7 @@ import { testDb } from '../../db/testClient.js';
 import { registerErrorHandler } from '../../errorHandler.js';
 import panelSettingsPlugin from '../panelSettings.js';
 import { hashPassword } from '../../auth/hashPassword.js';
+import { createRoleWithPermissions, createSessionCookieForRole, getDueñoRoleId } from '../../test-support/permissionFixtures.js';
 import { SESSION_COOKIE_NAME } from '../../auth/cookie.js';
 
 const SETTING_KEYS = ['deposit_percent', 'hold_minutes', 'pet_fee_cents'] as const;
@@ -28,7 +29,12 @@ function buildApp() {
 async function insertSessionCookie(): Promise<string> {
   const user = await testDb
     .insertInto('users')
-    .values({ email: 'owner@catavento.test', name: 'Maxi', password_hash: await hashPassword('whatever') })
+    .values({
+      email: 'owner@catavento.test',
+      name: 'Maxi',
+      password_hash: await hashPassword('whatever'),
+      role_id: await getDueñoRoleId(testDb),
+    })
     .returning('id')
     .executeTakeFirstOrThrow();
 
@@ -154,5 +160,35 @@ describe('PATCH /panel/settings', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json().pet_fee_cents).toBe(0);
+  });
+});
+
+describe('authorization (config.settings)', () => {
+  it('403s a session without config.settings', async () => {
+    const roleId = await createRoleWithPermissions(testDb, []);
+    const token = await createSessionCookieForRole(testDb, roleId);
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/panel/settings',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('200s a session with config.settings', async () => {
+    const roleId = await createRoleWithPermissions(testDb, ['config.settings']);
+    const token = await createSessionCookieForRole(testDb, roleId);
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/panel/settings',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+
+    expect(response.statusCode).toBe(200);
   });
 });

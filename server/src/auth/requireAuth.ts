@@ -10,6 +10,7 @@ export interface AuthenticatedUser {
   name: string;
   role: string;
   sessionId: string;
+  mustChangePassword: boolean;
 }
 
 declare module 'fastify' {
@@ -47,6 +48,7 @@ export function requireAuth(db: Kysely<DB>) {
       name: session.name,
       role: session.role,
       sessionId: session.sessionId,
+      mustChangePassword: session.mustChangePassword,
     };
   };
 }

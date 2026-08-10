@@ -85,6 +85,21 @@ hallazgo puede esperar.
 - Fin de semana = noches de viernes y sábado.
 - El precio de una reserva se congela al crearla.
 
+### Rendimiento y consultas a la base
+- Toda consulta nueva o modificada se piensa con rendimiento: antes de
+  agregar un query que filtra/ordena/joinea por una columna, verificar
+  que esa columna esté indexada si la consulta va a ser frecuente.
+- NO indexar por las dudas: un índice acelera lecturas pero ralentiza
+  escrituras y ocupa espacio. Indexar lo que se consulta seguido, no
+  todo. Las PK y UNIQUE ya están indexadas por Postgres — no duplicar.
+- Ante un query nuevo sobre tabla grande o caliente (reservations,
+  reservation_nights, payments, availability), evaluar con EXPLAIN
+  ANALYZE si usa índice o hace seq scan, y proponer índice solo si el
+  plan lo justifica.
+- Para columnas de filtro frecuente sin índice (ej. búsquedas por
+  fecha, por estado, por FK muy consultada), proponer el índice como
+  parte del mismo cambio que introduce la consulta.
+
 ## Constraints de DB no visibles en el código
 - `idx_payments_one_pending_per_reservation` (migración 1784587500000):
   UNIQUE en `payments.reservation_id` WHERE status='pending', sin

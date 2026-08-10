@@ -13,6 +13,7 @@ import type { DB } from '../../db/types.js';
 import { registerErrorHandler } from '../../errorHandler.js';
 import panelMoveReservationPlugin from '../panelMoveReservation.js';
 import { hashPassword } from '../../auth/hashPassword.js';
+import { createRoleWithPermissions, createSessionCookieForRole, getDueñoRoleId } from '../../test-support/permissionFixtures.js';
 import { SESSION_COOKIE_NAME } from '../../auth/cookie.js';
 import { eachNightUTC } from '../../shared/dateUtils.js';
 import { createQueryBarrierPlugin, createQueryStartSignal, rawSqlContains, selectReferencesTable } from '../../test-support/queryBarrier.js';
@@ -116,7 +117,12 @@ async function insertReservation(options: ReservationFixtureOptions): Promise<{ 
 async function insertSessionCookie(): Promise<string> {
   const user = await testDb
     .insertInto('users')
-    .values({ email: 'owner@catavento.test', name: 'Maxi', password_hash: await hashPassword('whatever') })
+    .values({
+      email: 'owner@catavento.test',
+      name: 'Maxi',
+      password_hash: await hashPassword('whatever'),
+      role_id: await getDueñoRoleId(testDb),
+    })
     .returning('id')
     .executeTakeFirstOrThrow();
 
@@ -779,5 +785,51 @@ describe('concurrency: two moves of the SAME reservation share the SAME advisory
       .execute();
     expect(rows).toHaveLength(1); // never both unitB and unitC at once
     expect(rows[0]!.room_unit_id).toBe(unitC); // last write wins
+  });
+});
+
+describe('authorization (reservations.move)', () => {
+  it('403s a session without reservations.move on GET move-options', async () => {
+    const roleId = await createRoleWithPermissions(testDb, []);
+    const token = await createSessionCookieForRole(testDb, roleId);
+    const roomId = await insertRoom('Casal', { capacity: 2 });
+    const unitId = await insertUnit(roomId, '101');
+    const { code } = await insertReservation({
+      roomId,
+      checkIn: '2026-10-05',
+      checkOut: '2026-10-07',
+      nightUnitIds: [unitId, unitId],
+    });
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/panel/reservations/${code}/move-options`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('200s a session with reservations.move on GET move-options', async () => {
+    const roleId = await createRoleWithPermissions(testDb, ['reservations.move']);
+    const token = await createSessionCookieForRole(testDb, roleId);
+    const roomId = await insertRoom('Casal', { capacity: 2 });
+    const unitId = await insertUnit(roomId, '101');
+    const { code } = await insertReservation({
+      roomId,
+      checkIn: '2026-10-05',
+      checkOut: '2026-10-07',
+      nightUnitIds: [unitId, unitId],
+    });
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/panel/reservations/${code}/move-options`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+
+    expect(response.statusCode).toBe(200);
   });
 });

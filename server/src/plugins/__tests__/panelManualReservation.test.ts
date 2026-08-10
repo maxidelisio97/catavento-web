@@ -13,6 +13,7 @@ import type { DB } from '../../db/types.js';
 import { registerErrorHandler } from '../../errorHandler.js';
 import panelManualReservationPlugin from '../panelManualReservation.js';
 import { hashPassword } from '../../auth/hashPassword.js';
+import { createRoleWithPermissions, createSessionCookieForRole, getDueñoRoleId } from '../../test-support/permissionFixtures.js';
 import { SESSION_COOKIE_NAME } from '../../auth/cookie.js';
 import { createReservation, NoAvailabilityError } from '../../availability/createReservation.js';
 import { createQueryTimingPlugin, selectReferencesTable, waitForLockWait } from '../../test-support/queryBarrier.js';
@@ -81,7 +82,12 @@ async function insertUnit(roomId: number, label: string): Promise<number> {
 async function insertSessionCookie(): Promise<string> {
   const user = await testDb
     .insertInto('users')
-    .values({ email: 'owner@catavento.test', name: 'Maxi', password_hash: await hashPassword('whatever') })
+    .values({
+      email: 'owner@catavento.test',
+      name: 'Maxi',
+      password_hash: await hashPassword('whatever'),
+      role_id: await getDueñoRoleId(testDb),
+    })
     .returning('id')
     .executeTakeFirstOrThrow();
 
@@ -627,5 +633,41 @@ describe('POST /panel/reservations/manual', () => {
       expect(rows).toHaveLength(1); // only the holder's — the blocked create never committed
       expect(rows[0]!.id).toBe(firstReservationId);
     }, 15000);
+  });
+});
+
+describe('authorization (reservations.create_manual)', () => {
+  it('403s a session without reservations.create_manual', async () => {
+    const roleId = await createRoleWithPermissions(testDb, []);
+    const token = await createSessionCookieForRole(testDb, roleId);
+    const roomId = await insertRoom('Triplo', { capacity: 3 });
+    await insertUnit(roomId, 'T1');
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/reservations/manual',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { ...basePayload, room_id: roomId },
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('201s a session with reservations.create_manual', async () => {
+    const roleId = await createRoleWithPermissions(testDb, ['reservations.create_manual']);
+    const token = await createSessionCookieForRole(testDb, roleId);
+    const roomId = await insertRoom('Triplo', { capacity: 3 });
+    await insertUnit(roomId, 'T1');
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/reservations/manual',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { ...basePayload, room_id: roomId },
+    });
+
+    expect(response.statusCode).toBe(201);
   });
 });

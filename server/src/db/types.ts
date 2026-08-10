@@ -43,6 +43,11 @@ export interface Payments {
   updated_at: Generated<Timestamp>;
 }
 
+export interface Permissions {
+  description: string;
+  key: string;
+}
+
 export interface Pgmigrations {
   id: Generated<number>;
   name: string;
@@ -123,6 +128,20 @@ export interface Reservations {
   updated_at: Generated<Timestamp>;
 }
 
+export interface RolePermissions {
+  permission: string;
+  role_id: number;
+}
+
+export interface Roles {
+  created_at: Generated<Timestamp>;
+  description: string | null;
+  id: Generated<number>;
+  is_owner: Generated<boolean>;
+  is_system: Generated<boolean>;
+  name: string;
+}
+
 export interface RoomRates {
   created_at: Generated<Timestamp>;
   id: Generated<number>;
@@ -176,29 +195,41 @@ export interface Settings {
   value: string;
 }
 
+export interface UserPermissionOverrides {
+  granted: boolean;
+  permission: string;
+  user_id: number;
+}
+
 export interface Users {
   created_at: Generated<Timestamp>;
   email: string;
   id: Generated<number>;
   is_active: Generated<boolean>;
+  must_change_password: Generated<boolean>;
   name: string;
   password_hash: string;
   role: Generated<string>;
+  role_id: number | null;
   updated_at: Generated<Timestamp>;
 }
 
 export interface DB {
   payments: Payments;
+  permissions: Permissions;
   pgmigrations: Pgmigrations;
   rate_overrides: RateOverrides;
   reservation_balances: ReservationBalances;
   reservation_extras: ReservationExtras;
   reservation_nights: ReservationNights;
   reservations: Reservations;
+  role_permissions: RolePermissions;
+  roles: Roles;
   room_rates: RoomRates;
   room_units: RoomUnits;
   rooms: Rooms;
   sessions: Sessions;
   settings: Settings;
+  user_permission_overrides: UserPermissionOverrides;
   users: Users;
 }
