@@ -6,25 +6,27 @@
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from '@fastify/type-provider-zod';
 import cookiePlugin from '@fastify/cookie';
-import { sql } from 'kysely';
+import { Kysely, PostgresDialect, sql, type RootOperationNode } from 'kysely';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { testDb } from '../../db/testClient.js';
+import type { DB } from '../../db/types.js';
+import { testDb, testPool } from '../../db/testClient.js';
 import { registerErrorHandler } from '../../errorHandler.js';
 import panelUsersPlugin from '../panelUsers.js';
 import { hashPassword } from '../../auth/hashPassword.js';
 import { SESSION_COOKIE_NAME } from '../../auth/cookie.js';
+import { createQueryTimingPlugin, selectReferencesTable, waitForLockWait } from '../../test-support/queryBarrier.js';
 import {
   createRoleWithPermissions,
   createSessionCookieForRole,
   getDueñoRoleId,
 } from '../../test-support/permissionFixtures.js';
 
-function buildApp() {
+function buildApp(db: Kysely<DB> = testDb) {
   const app = Fastify().withTypeProvider<ZodTypeProvider>();
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   app.register(cookiePlugin);
-  app.register(panelUsersPlugin, { db: testDb });
+  app.register(panelUsersPlugin, { db });
   registerErrorHandler(app);
   return app;
 }
@@ -193,6 +195,108 @@ describe('anti-self-lockout guard (§ 2.4)', () => {
 
     expect(response.statusCode).toBe(200);
   });
+
+  // Identifies ownerGuard.countActiveOwners' OWN `users` JOIN `roles`
+  // `FOR UPDATE` query specifically — NOT isCurrentlyActiveOwner's separate
+  // `users`/`roles` select (selects 2 columns, `is_owner`/`is_active`, no
+  // lock). Both reference the same two tables, so they're only
+  // distinguishable by their column list: this one selects exactly `id`.
+  function isActiveOwnersForUpdateQuery(node: RootOperationNode): boolean {
+    if (!selectReferencesTable(node, 'users') || !selectReferencesTable(node, 'roles')) return false;
+    const selections = (node as { selections?: { selection?: { column?: { column?: { name?: string } } } }[] })
+      .selections;
+    return (selections?.length ?? 0) === 1 && selections![0]!.selection?.column?.column?.name === 'id';
+  }
+
+  // DETERMINISTIC, same technique as panelRateOverrides.test.ts's cupo-guard
+  // lock test and panelManualReservation.test.ts's createReservation lock
+  // test: a raw connection holds the EXACT `users`+`roles` FOR UPDATE lock
+  // countActiveOwners takes (simulating a first demotion already in flight,
+  // lock acquired, not yet committed), while the REAL
+  // POST /panel/users/:id/deactivate endpoint for a SECOND active Dueño runs
+  // concurrently through the actual plugin code. Proves the exact race
+  // ownerGuard.ts's own doc comment calls out: "two concurrent demotions of
+  // the last two owners can't both read '2 owners, safe' and both proceed".
+  it(
+    'DETERMINISTIC: two concurrent demotions of the last two active Dueños — one wins, the other is rejected, never zero active Dueños',
+    async () => {
+      const dueñoRoleId = await getDueñoRoleId(testDb);
+      const ownerA = await insertUser(dueñoRoleId);
+      const ownerB = await insertUser(dueñoRoleId);
+      const actingRoleId = await createRoleWithPermissions(testDb, ['admin.users']);
+      const token = await createSessionCookieForRole(testDb, actingRoleId);
+
+      // Warm the pool first — a cold connection's first query can cost 300-400ms on its own.
+      await Promise.all([
+        testDb.selectFrom('users').select('id').limit(1).execute(),
+        testDb.selectFrom('users').select('id').limit(1).execute(),
+      ]);
+
+      const holder = await testPool.connect();
+      const { plugin: timingPlugin, timings } = createQueryTimingPlugin({ match: isActiveOwnersForUpdateQuery });
+      const measuredDb = new Kysely<DB>({ dialect: new PostgresDialect({ pool: testPool }), plugins: [timingPlugin] });
+      const app = buildApp(measuredDb);
+
+      let deactivatePromise!: ReturnType<typeof app.inject>;
+      let sawGenuineLockWait = false;
+      try {
+        await holder.query('BEGIN');
+        await holder.query(
+          `SELECT users.id FROM users JOIN roles ON roles.id = users.role_id
+           WHERE roles.is_owner = true AND users.is_active = true FOR UPDATE`,
+        );
+
+        // Simulates ownerB's demotion already in flight (holds the lock,
+        // about to apply its own change) while ownerA's REAL deactivate
+        // request runs concurrently through the actual guard code.
+        deactivatePromise = app.inject({
+          method: 'POST',
+          url: `/panel/users/${ownerA}/deactivate`,
+          cookies: { [SESSION_COOKIE_NAME]: token },
+        });
+        deactivatePromise.catch(() => {});
+
+        sawGenuineLockWait = await waitForLockWait(testPool, {
+          excludePids: [holder.processID!],
+          queryContains: 'roles',
+        });
+
+        // Finish what the holder's demotion does, still holding the lock:
+        // deactivate ownerB, leaving ownerA as the only active Dueño.
+        await holder.query('UPDATE users SET is_active = false WHERE id = $1', [ownerB]);
+        await holder.query('COMMIT');
+      } catch (err) {
+        await holder.query('ROLLBACK').catch(() => {});
+        throw err;
+      } finally {
+        holder.release();
+      }
+
+      expect(sawGenuineLockWait).toBe(true);
+
+      const response = await deactivatePromise;
+      // ownerA's demotion woke up AFTER ownerB's committed, re-read the
+      // active-owner count under lock, saw only 1 left, and correctly
+      // rejected — never both proceeding.
+      expect(response.statusCode).toBe(409);
+      expect(response.json().error).toBe('LAST_OWNER_LOCKOUT');
+
+      // Confirms the wait was on the SPECIFIC FOR UPDATE query, not some
+      // other point in the call.
+      expect(timings).toHaveLength(1);
+
+      const activeOwners = await testDb
+        .selectFrom('users')
+        .innerJoin('roles', 'roles.id', 'users.role_id')
+        .select('users.id')
+        .where('roles.is_owner', '=', true)
+        .where('users.is_active', '=', true)
+        .execute();
+      expect(activeOwners).toHaveLength(1); // exactly one — never zero, never both untouched
+      expect(activeOwners[0]!.id).toBe(ownerA);
+    },
+    15000,
+  );
 });
 
 describe('PATCH /panel/users/:id/overrides', () => {

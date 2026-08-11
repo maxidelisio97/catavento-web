@@ -32,8 +32,8 @@ async function resetDb(): Promise<void> {
 
 beforeEach(resetDb);
 
-describe('authorization (admin.users) on GET /panel/permissions', () => {
-  it('403s without admin.users', async () => {
+describe('authorization (admin.users OR admin.roles) on GET /panel/permissions', () => {
+  it('403s without admin.users or admin.roles', async () => {
     const roleId = await createRoleWithPermissions(testDb, []);
     const token = await createSessionCookieForRole(testDb, roleId);
     const app = buildApp();
@@ -52,6 +52,17 @@ describe('authorization (admin.users) on GET /panel/permissions', () => {
     const keys = response.json().map((p: { key: string }) => p.key);
     expect(keys).toContain('reservations.view');
     expect(keys).toContain('admin.roles');
+  });
+
+  it('200s with admin.roles alone (an admin.users-less role manager can read the catalog)', async () => {
+    const roleId = await createRoleWithPermissions(testDb, ['admin.roles']);
+    const token = await createSessionCookieForRole(testDb, roleId);
+    const app = buildApp();
+
+    const response = await app.inject({ method: 'GET', url: '/panel/permissions', cookies: { [SESSION_COOKIE_NAME]: token } });
+    expect(response.statusCode).toBe(200);
+    const keys = response.json().map((p: { key: string }) => p.key);
+    expect(keys).toContain('reservations.view');
   });
 });
 

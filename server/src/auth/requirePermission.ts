@@ -23,3 +23,18 @@ export function requirePermission(db: Kysely<DB>, permission: string) {
     }
   };
 }
+
+/**
+ * Same as requirePermission, but grants access if the user has ANY of the
+ * given permissions (SPEC-modulo-9-usuarios-permisos.md § 4.5 — GET
+ * /panel/permissions is readable by admin.users OR admin.roles).
+ */
+export function requireAnyPermission(db: Kysely<DB>, permissions: readonly string[]) {
+  return async function onRequest(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const input = await getEffectivePermissionInput(db, request.user!.id);
+
+    if (!permissions.some((permission) => can(input, permission))) {
+      reply.status(403).send();
+    }
+  };
+}

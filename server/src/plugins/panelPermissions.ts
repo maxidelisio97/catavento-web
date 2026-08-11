@@ -10,7 +10,7 @@ import type { DB } from '../db/types.js';
 import { db as prodDb } from '../db/client.js';
 import { requireAuth } from '../auth/requireAuth.js';
 import { blockIfMustChangePassword } from '../auth/blockIfMustChangePassword.js';
-import { requirePermission } from '../auth/requirePermission.js';
+import { requireAnyPermission } from '../auth/requirePermission.js';
 import { effectivePermissions } from '../permissions/effectivePermissions.js';
 import { getAllPermissionKeys, getEffectivePermissionInput } from '../permissions/permissionRepository.js';
 
@@ -27,7 +27,7 @@ const panelPermissionsPlugin: FastifyPluginAsync<PanelPermissionsPluginOptions> 
   await fastify.register(async (catalogScope) => {
     catalogScope.addHook('onRequest', requireAuth(db));
     catalogScope.addHook('onRequest', blockIfMustChangePassword());
-    catalogScope.addHook('onRequest', requirePermission(db, 'admin.users'));
+    catalogScope.addHook('onRequest', requireAnyPermission(db, ['admin.users', 'admin.roles']));
     const typed = catalogScope.withTypeProvider<ZodTypeProvider>();
 
     typed.get(

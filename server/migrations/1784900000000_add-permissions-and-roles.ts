@@ -1,4 +1,5 @@
 import type { ColumnDefinitions, MigrationBuilder } from 'node-pg-migrate';
+import { ZERO_ACTIVE_OWNERS_GUARD_SQL } from '../src/permissions/zeroActiveOwnersGuardSql.js';
 
 export const shorthands: ColumnDefinitions | undefined = undefined;
 
@@ -107,22 +108,10 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
 
   // Hard safety net: never let this migration succeed silently if it would
   // leave zero active Dueño accounts — that would be an unrecoverable panel
-  // lockout (§ 2.4). Aborts the whole migration transaction instead.
-  pgm.sql(`
-    DO $$
-    DECLARE
-      owner_count integer;
-    BEGIN
-      SELECT COUNT(*) INTO owner_count
-      FROM users
-      JOIN roles ON roles.id = users.role_id
-      WHERE roles.is_owner = true AND users.is_active = true;
-
-      IF owner_count = 0 THEN
-        RAISE EXCEPTION 'Migration aborted: backfill would leave zero active Dueño accounts.';
-      END IF;
-    END $$;
-  `);
+  // lockout (§ 2.4). Aborts the whole migration transaction instead. See
+  // zeroActiveOwnersGuardSql.ts for why this lives in its own module and
+  // zeroActiveOwnersGuard.test.ts for the proof that it actually aborts.
+  pgm.sql(ZERO_ACTIVE_OWNERS_GUARD_SQL);
 }
 
 export async function down(pgm: MigrationBuilder): Promise<void> {

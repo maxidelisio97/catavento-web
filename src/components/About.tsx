@@ -66,9 +66,9 @@ export default function About() {
 
           <div className="mt-7 space-y-4 font-body text-base leading-[1.75] text-warm-800/65 max-w-[52ch]">
             <p>
-              Localizada a poucos passos da Praia da Taíba, a Pousada Catavento
+              Localizada a poucos passos da Praia da Taibinha, a Pousada Catavento
               é o destino ideal para quem busca tranquilidade e contato com a
-              natureza. Quartos confortáveis, jardim exuberante e piscina ao ar
+              natureza. Quartos confortáveis, jardim e piscina ao ar
               livre — tudo pensado para sua melhor estadia.
             </p>
             <p>
