@@ -56,6 +56,7 @@ export interface SessionWithUser {
   email: string;
   name: string;
   role: string;
+  mustChangePassword: boolean;
 }
 
 /**
@@ -83,6 +84,7 @@ export async function findValidSession(
       'users.name',
       'users.role',
       'users.is_active',
+      'users.must_change_password',
     ])
     .where('sessions.token_hash', '=', hashToken(token))
     .executeTakeFirst();
@@ -109,6 +111,7 @@ export async function findValidSession(
     email: row.email,
     name: row.name,
     role: row.role,
+    mustChangePassword: row.must_change_password,
   };
 }
 

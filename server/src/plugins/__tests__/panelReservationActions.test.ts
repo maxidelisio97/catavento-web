@@ -12,6 +12,7 @@ import { testDb, testPool } from '../../db/testClient.js';
 import type { DB } from '../../db/types.js';
 import { registerErrorHandler } from '../../errorHandler.js';
 import { hashPassword } from '../../auth/hashPassword.js';
+import { createRoleWithPermissions, createSessionCookieForRole, getDueñoRoleId } from '../../test-support/permissionFixtures.js';
 import { SESSION_COOKIE_NAME } from '../../auth/cookie.js';
 import { checkIn, registerPayment, InvalidReservationTransitionError } from '../../panel/reservationActions.js';
 import { OverpaymentError } from '../../reservations/overpaymentGuard.js';
@@ -125,7 +126,12 @@ async function insertPayment(reservationId: number, amountCents: number, status:
 async function insertSessionCookie(): Promise<string> {
   const user = await testDb
     .insertInto('users')
-    .values({ email: 'owner@catavento.test', name: 'Maxi', password_hash: await hashPassword('whatever') })
+    .values({
+      email: 'owner@catavento.test',
+      name: 'Maxi',
+      password_hash: await hashPassword('whatever'),
+      role_id: await getDueñoRoleId(testDb),
+    })
     .returning('id')
     .executeTakeFirstOrThrow();
 
@@ -1730,5 +1736,149 @@ describe('POST /panel/reservations/:code/extra', () => {
       .where('reservation_id', '=', reservation.id)
       .execute();
     expect(extras).toHaveLength(2);
+  });
+});
+
+// This file gates a mix of permissions per-route (§ 4.4): payment/extra are
+// payments.*, everything else is reservations.*. One 403/200 pair per
+// permission — cancel and no-show share reservations.cancel, so one pair
+// covers both.
+describe('authorization (per-route gates)', () => {
+  it('403s payment without payments.charge, 200s with it', async () => {
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId, status: 'confirmed' });
+    const app = buildApp();
+
+    const noPermRoleId = await createRoleWithPermissions(testDb, []);
+    const noPermToken = await createSessionCookieForRole(testDb, noPermRoleId);
+    const forbidden = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: noPermToken },
+      payload: { kind: 'deposit', method: 'cash', amount_cents: 5000 },
+    });
+    expect(forbidden.statusCode).toBe(403);
+
+    const withPermRoleId = await createRoleWithPermissions(testDb, ['payments.charge']);
+    const withPermToken = await createSessionCookieForRole(testDb, withPermRoleId);
+    const allowed = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: withPermToken },
+      payload: { kind: 'deposit', method: 'cash', amount_cents: 5000, idempotency_key: randomUUID() },
+    });
+    expect(allowed.statusCode).toBe(201);
+  });
+
+  it('403s check-in without reservations.checkin, 200s with it', async () => {
+    const roomId = await insertRoom();
+    const app = buildApp();
+
+    const noPermRoleId = await createRoleWithPermissions(testDb, []);
+    const noPermToken = await createSessionCookieForRole(testDb, noPermRoleId);
+    const reservationA = await insertReservation({ roomId, status: 'confirmed' });
+    const forbidden = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservationA.code}/check-in`,
+      cookies: { [SESSION_COOKIE_NAME]: noPermToken },
+    });
+    expect(forbidden.statusCode).toBe(403);
+
+    const withPermRoleId = await createRoleWithPermissions(testDb, ['reservations.checkin']);
+    const withPermToken = await createSessionCookieForRole(testDb, withPermRoleId);
+    const reservationB = await insertReservation({ roomId, status: 'confirmed' });
+    const allowed = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservationB.code}/check-in`,
+      cookies: { [SESSION_COOKIE_NAME]: withPermToken },
+    });
+    expect(allowed.statusCode).toBe(200);
+  });
+
+  it('403s check-out without reservations.checkout, 200s with it', async () => {
+    const roomId = await insertRoom();
+    const app = buildApp();
+
+    const noPermRoleId = await createRoleWithPermissions(testDb, []);
+    const noPermToken = await createSessionCookieForRole(testDb, noPermRoleId);
+    const reservationA = await insertReservation({ roomId, status: 'checked_in', totalCents: 0 });
+    const forbidden = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservationA.code}/check-out`,
+      cookies: { [SESSION_COOKIE_NAME]: noPermToken },
+    });
+    expect(forbidden.statusCode).toBe(403);
+
+    const withPermRoleId = await createRoleWithPermissions(testDb, ['reservations.checkout']);
+    const withPermToken = await createSessionCookieForRole(testDb, withPermRoleId);
+    const reservationB = await insertReservation({ roomId, status: 'checked_in', totalCents: 0 });
+    const allowed = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservationB.code}/check-out`,
+      cookies: { [SESSION_COOKIE_NAME]: withPermToken },
+    });
+    expect(allowed.statusCode).toBe(200);
+  });
+
+  it('403s cancel without reservations.cancel, 200s with it (also gates no-show)', async () => {
+    const roomId = await insertRoom();
+    const app = buildApp();
+
+    const noPermRoleId = await createRoleWithPermissions(testDb, []);
+    const noPermToken = await createSessionCookieForRole(testDb, noPermRoleId);
+    const reservationA = await insertReservation({ roomId, status: 'confirmed' });
+    const forbidden = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservationA.code}/cancel`,
+      cookies: { [SESSION_COOKIE_NAME]: noPermToken },
+      payload: {},
+    });
+    expect(forbidden.statusCode).toBe(403);
+
+    const withPermRoleId = await createRoleWithPermissions(testDb, ['reservations.cancel']);
+    const withPermToken = await createSessionCookieForRole(testDb, withPermRoleId);
+    const reservationB = await insertReservation({ roomId, status: 'confirmed' });
+    const allowed = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservationB.code}/cancel`,
+      cookies: { [SESSION_COOKIE_NAME]: withPermToken },
+      payload: {},
+    });
+    expect(allowed.statusCode).toBe(200);
+
+    const noPermNoShow = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservationA.code}/no-show`,
+      cookies: { [SESSION_COOKIE_NAME]: noPermToken },
+      payload: {},
+    });
+    expect(noPermNoShow.statusCode).toBe(403);
+  });
+
+  it('403s extra without payments.extra, 201s with it', async () => {
+    const roomId = await insertRoom();
+    const app = buildApp();
+
+    const noPermRoleId = await createRoleWithPermissions(testDb, []);
+    const noPermToken = await createSessionCookieForRole(testDb, noPermRoleId);
+    const reservationA = await insertReservation({ roomId, status: 'checked_in', totalCents: 20000 });
+    const forbidden = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservationA.code}/extra`,
+      cookies: { [SESSION_COOKIE_NAME]: noPermToken },
+      payload: { concept: 'Laundry', amount_cents: 1000 },
+    });
+    expect(forbidden.statusCode).toBe(403);
+
+    const withPermRoleId = await createRoleWithPermissions(testDb, ['payments.extra']);
+    const withPermToken = await createSessionCookieForRole(testDb, withPermRoleId);
+    const reservationB = await insertReservation({ roomId, status: 'checked_in', totalCents: 20000 });
+    const allowed = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservationB.code}/extra`,
+      cookies: { [SESSION_COOKIE_NAME]: withPermToken },
+      payload: { concept: 'Laundry', amount_cents: 1000 },
+    });
+    expect(allowed.statusCode).toBe(201);
   });
 });

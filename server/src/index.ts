@@ -16,6 +16,9 @@ import panelRateOverridesPlugin from './plugins/panelRateOverrides.js';
 import panelReservationActionsPlugin from './plugins/panelReservationActions.js';
 import panelMoveReservationPlugin from './plugins/panelMoveReservation.js';
 import panelManualReservationPlugin from './plugins/panelManualReservation.js';
+import panelUsersPlugin from './plugins/panelUsers.js';
+import panelRolesPlugin from './plugins/panelRoles.js';
+import panelPermissionsPlugin from './plugins/panelPermissions.js';
 
 // trustProxy scoped to 127.0.0.1, not `true`: Nginx proxies here from
 // loopback (see nginx.conf.example / nginx-panel.conf.example), so only
@@ -54,6 +57,9 @@ app.register(panelRateOverridesPlugin);
 app.register(panelReservationActionsPlugin);
 app.register(panelMoveReservationPlugin);
 app.register(panelManualReservationPlugin);
+app.register(panelUsersPlugin);
+app.register(panelRolesPlugin);
+app.register(panelPermissionsPlugin);
 
 registerErrorHandler(app);
 

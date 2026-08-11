@@ -5,7 +5,7 @@ import type { Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
 import { db as prodDb } from '../db/client.js';
 import { config } from '../config.js';
-import { verifyPassword } from '../auth/hashPassword.js';
+import { hashPassword, verifyPassword } from '../auth/hashPassword.js';
 import { createSession, revokeSession, revokeAllSessionsForUser } from '../auth/sessionRepository.js';
 import { requireAuth } from '../auth/requireAuth.js';
 import { isRateLimited, recordFailedAttempt, clearAttempts } from '../auth/loginRateLimiter.js';
@@ -29,6 +29,11 @@ const userResponseSchema = z.object({
 });
 
 const errorResponseSchema = z.object({ error: z.string() });
+
+const changePasswordBodySchema = z.object({
+  current_password: z.string().min(1),
+  new_password: z.string().min(8),
+});
 
 interface AuthPluginOptions {
   db?: Kysely<DB>;
@@ -121,6 +126,41 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (fastify, opts) 
       async (request) => {
         const { id, name, email, role } = request.user!;
         return { user: { id, name, email, role } };
+      },
+    );
+
+    // No blockIfMustChangePassword on this scope — this is the one endpoint
+    // that must stay reachable to a user stuck in that state (§ 4.5).
+    typedProtected.post(
+      '/panel/auth/change-password',
+      {
+        schema: {
+          body: changePasswordBodySchema,
+          response: { 204: z.void(), 401: errorResponseSchema },
+        },
+      },
+      async (request, reply) => {
+        const { current_password, new_password } = request.body;
+
+        const row = await db
+          .selectFrom('users')
+          .select('password_hash')
+          .where('id', '=', request.user!.id)
+          .executeTakeFirstOrThrow();
+
+        if (!(await verifyPassword(row.password_hash, current_password))) {
+          reply.status(401).send({ error: 'INVALID_CURRENT_PASSWORD' });
+          return;
+        }
+
+        const newHash = await hashPassword(new_password);
+        await db
+          .updateTable('users')
+          .set({ password_hash: newHash, must_change_password: false })
+          .where('id', '=', request.user!.id)
+          .execute();
+
+        reply.status(204).send();
       },
     );
   });

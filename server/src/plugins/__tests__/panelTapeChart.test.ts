@@ -12,6 +12,7 @@ import { testDb } from '../../db/testClient.js';
 import { registerErrorHandler } from '../../errorHandler.js';
 import panelTapeChartPlugin from '../panelTapeChart.js';
 import { hashPassword } from '../../auth/hashPassword.js';
+import { createRoleWithPermissions, createSessionCookieForRole, getDueñoRoleId } from '../../test-support/permissionFixtures.js';
 import { SESSION_COOKIE_NAME } from '../../auth/cookie.js';
 import { eachNightUTC, addDaysUTC, formatDateUTC, parseDateUTC, todayISO } from '../../shared/dateUtils.js';
 import type { TapeChartNight } from '../../panel/tapeChartQuery.js';
@@ -128,7 +129,12 @@ async function insertPayment(reservationId: number, amountCents: number, status:
 async function insertSessionCookie(): Promise<string> {
   const user = await testDb
     .insertInto('users')
-    .values({ email: 'owner@catavento.test', name: 'Maxi', password_hash: await hashPassword('whatever') })
+    .values({
+      email: 'owner@catavento.test',
+      name: 'Maxi',
+      password_hash: await hashPassword('whatever'),
+      role_id: await getDueñoRoleId(testDb),
+    })
     .returning('id')
     .executeTakeFirstOrThrow();
 
@@ -479,5 +485,37 @@ describe('GET /panel/reservations/:id', () => {
     expect(body.origin).toBe('web');
     expect(body.contact).toEqual({ name: 'Maria Gonzalez', email: 'maria@example.com', phone: '+55 85 90000-0000' });
     expect(body.comments).toBe('Chegada tarde');
+  });
+});
+
+describe('authorization (reservations.view)', () => {
+  it('403s a session without reservations.view', async () => {
+    const roleId = await createRoleWithPermissions(testDb, []);
+    const token = await createSessionCookieForRole(testDb, roleId);
+    const app = buildApp();
+
+    const { from, to } = windowAround(0, 14);
+    const response = await app.inject({
+      method: 'GET',
+      url: `/panel/tape-chart?from=${from}&to=${to}`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('200s a session with reservations.view', async () => {
+    const roleId = await createRoleWithPermissions(testDb, ['reservations.view']);
+    const token = await createSessionCookieForRole(testDb, roleId);
+    const app = buildApp();
+
+    const { from, to } = windowAround(0, 14);
+    const response = await app.inject({
+      method: 'GET',
+      url: `/panel/tape-chart?from=${from}&to=${to}`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+
+    expect(response.statusCode).toBe(200);
   });
 });

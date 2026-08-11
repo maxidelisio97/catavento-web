@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { testDb } from '../../db/testClient.js';
 import { registerErrorHandler } from '../../errorHandler.js';
 import authPlugin from '../../plugins/auth.js';
-import { hashPassword } from '../../auth/hashPassword.js';
+import { hashPassword, verifyPassword } from '../../auth/hashPassword.js';
 import { resetRateLimiterForTests } from '../../auth/loginRateLimiter.js';
 import { SESSION_COOKIE_NAME } from '../../auth/cookie.js';
 
@@ -269,6 +269,105 @@ describe('POST /panel/auth/logout', () => {
       cookies: { [SESSION_COOKIE_NAME]: token },
     });
     expect(meAfterLogout.statusCode).toBe(401);
+  });
+});
+
+describe('POST /panel/auth/change-password', () => {
+  // Not a deadlock: a user stuck in must_change_password=true must still be
+  // able to reach exactly this endpoint (§ 4.5) — auth.ts's protected scope
+  // deliberately never registers blockIfMustChangePassword. Login above
+  // already proves the session works; this proves the still-pending-change
+  // password can call change-password without being blocked by its own flag.
+  it('changes the password and clears must_change_password on success', async () => {
+    const user = await insertTestUser({ password: 'old-password-123' });
+    await testDb.updateTable('users').set({ must_change_password: true }).where('id', '=', user.id).execute();
+    const app = buildApp();
+    const loginResponse = await app.inject({
+      method: 'POST',
+      url: '/panel/auth/login',
+      payload: { email: user.email, password: user.password },
+    });
+    const token = extractCookieValue(loginResponse.headers['set-cookie'])!;
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/auth/change-password',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { current_password: user.password, new_password: 'new-password-456' },
+    });
+
+    expect(response.statusCode).toBe(204);
+    const row = await testDb
+      .selectFrom('users')
+      .select('must_change_password')
+      .where('id', '=', user.id)
+      .executeTakeFirstOrThrow();
+    expect(row.must_change_password).toBe(false);
+
+    const loginWithNewPassword = await app.inject({
+      method: 'POST',
+      url: '/panel/auth/login',
+      payload: { email: user.email, password: 'new-password-456' },
+    });
+    expect(loginWithNewPassword.statusCode).toBe(200);
+  });
+
+  it('401s and leaves the password unchanged when current_password is wrong', async () => {
+    const user = await insertTestUser();
+    const app = buildApp();
+    const loginResponse = await app.inject({
+      method: 'POST',
+      url: '/panel/auth/login',
+      payload: { email: user.email, password: user.password },
+    });
+    const token = extractCookieValue(loginResponse.headers['set-cookie'])!;
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/auth/change-password',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { current_password: 'not-the-password', new_password: 'new-password-456' },
+    });
+
+    expect(response.statusCode).toBe(401);
+
+    const loginWithOldPassword = await app.inject({
+      method: 'POST',
+      url: '/panel/auth/login',
+      payload: { email: user.email, password: user.password },
+    });
+    expect(loginWithOldPassword.statusCode).toBe(200);
+  });
+
+  // Same minimum-length rule as scripts/create-user.ts (M6B's only defined
+  // password rule) — a temporary password can't be swapped for another weak
+  // one without going through validation.
+  it('rejects a new_password shorter than 8 characters', async () => {
+    const user = await insertTestUser();
+    const app = buildApp();
+    const loginResponse = await app.inject({
+      method: 'POST',
+      url: '/panel/auth/login',
+      payload: { email: user.email, password: user.password },
+    });
+    const token = extractCookieValue(loginResponse.headers['set-cookie'])!;
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/auth/change-password',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { current_password: user.password, new_password: 'short' },
+    });
+
+    expect(response.statusCode).toBe(400);
+
+    const row = await testDb
+      .selectFrom('users')
+      .select('password_hash')
+      .where('id', '=', user.id)
+      .executeTakeFirstOrThrow();
+    const stillOldPassword = await verifyPassword(row.password_hash, user.password);
+    expect(stillOldPassword).toBe(true);
   });
 });
 

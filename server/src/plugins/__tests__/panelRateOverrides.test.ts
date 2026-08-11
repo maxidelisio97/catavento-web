@@ -13,6 +13,7 @@ import type { DB } from '../../db/types.js';
 import { registerErrorHandler } from '../../errorHandler.js';
 import panelRateOverridesPlugin from '../panelRateOverrides.js';
 import { hashPassword } from '../../auth/hashPassword.js';
+import { createRoleWithPermissions, createSessionCookieForRole, getDueñoRoleId } from '../../test-support/permissionFixtures.js';
 import { SESSION_COOKIE_NAME } from '../../auth/cookie.js';
 import { applyRateOverridesRange } from '../../panel/rateOverrides.js';
 import { createQueryTimingPlugin, selectReferencesTable, waitForLockWait } from '../../test-support/queryBarrier.js';
@@ -67,7 +68,12 @@ async function insertOccupyingReservation(roomId: number, checkIn: string, check
 async function insertSessionCookie(): Promise<string> {
   const user = await testDb
     .insertInto('users')
-    .values({ email: 'owner@catavento.test', name: 'Maxi', password_hash: await hashPassword('whatever') })
+    .values({
+      email: 'owner@catavento.test',
+      name: 'Maxi',
+      password_hash: await hashPassword('whatever'),
+      role_id: await getDueñoRoleId(testDb),
+    })
     .returning('id')
     .executeTakeFirstOrThrow();
 
@@ -699,4 +705,36 @@ describe('PATCH /panel/rate-overrides/range — concurrency guard (SPEC § 6.4, 
     },
     15000,
   );
+});
+
+describe('authorization (config.calendar)', () => {
+  it('403s a session without config.calendar', async () => {
+    const roleId = await createRoleWithPermissions(testDb, []);
+    const token = await createSessionCookieForRole(testDb, roleId);
+    const roomId = await insertRoom('Triplo');
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/panel/rate-overrides?room_id=${roomId}&from=2026-01-01&to=2026-01-31`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('200s a session with config.calendar', async () => {
+    const roleId = await createRoleWithPermissions(testDb, ['config.calendar']);
+    const token = await createSessionCookieForRole(testDb, roleId);
+    const roomId = await insertRoom('Triplo');
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/panel/rate-overrides?room_id=${roomId}&from=2026-01-01&to=2026-01-31`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+
+    expect(response.statusCode).toBe(200);
+  });
 });
