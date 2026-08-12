@@ -35,6 +35,7 @@
  * all of them are released together.
  */
 import type { KyselyPlugin, PluginTransformQueryArgs, PluginTransformResultArgs, RootOperationNode } from 'kysely';
+import type { PoolClient } from 'pg';
 
 export interface QueryBarrierOptions {
   /** How many concurrent callers must reach the matched query before any of them proceeds. */
@@ -217,6 +218,15 @@ export async function waitForLockWait(
   return false;
 }
 
+/**
+ * `processID` is set on the underlying connection at runtime but isn't part
+ * of `@types/pg`'s `PoolClient` — used to exclude the lock holder's own
+ * connection from `waitForLockWait`'s `pg_stat_activity` scan.
+ */
+export function getProcessId(client: PoolClient): number {
+  return (client as unknown as { processID: number }).processID;
+}
+
 interface TableNodeLike {
   kind: string;
   table?: { identifier?: { name?: string } };
@@ -281,6 +291,6 @@ export function selectWhereReferencesColumn(node: RootOperationNode, column: str
  */
 export function rawSqlContains(node: RootOperationNode, substring: string): boolean {
   if (node.kind !== 'RawNode') return false;
-  const fragments = (node as { sqlFragments?: string[] }).sqlFragments ?? [];
+  const fragments = (node as { sqlFragments?: readonly string[] }).sqlFragments ?? [];
   return fragments.some((f) => f.includes(substring));
 }

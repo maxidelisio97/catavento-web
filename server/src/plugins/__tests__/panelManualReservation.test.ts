@@ -16,7 +16,7 @@ import { hashPassword } from '../../auth/hashPassword.js';
 import { createRoleWithPermissions, createSessionCookieForRole, getDueñoRoleId } from '../../test-support/permissionFixtures.js';
 import { SESSION_COOKIE_NAME } from '../../auth/cookie.js';
 import { createReservation, NoAvailabilityError } from '../../availability/createReservation.js';
-import { createQueryTimingPlugin, selectReferencesTable, waitForLockWait } from '../../test-support/queryBarrier.js';
+import { createQueryTimingPlugin, getProcessId, selectReferencesTable, waitForLockWait } from '../../test-support/queryBarrier.js';
 
 function buildApp(db: Kysely<DB> = testDb) {
   const app = Fastify().withTypeProvider<ZodTypeProvider>();
@@ -581,7 +581,7 @@ describe('POST /panel/reservations/manual', () => {
         createPromise.catch(() => {});
 
         sawGenuineLockWait = await waitForLockWait(testPool, {
-          excludePids: [holder.processID!],
+          excludePids: [getProcessId(holder)],
           queryContains: 'rooms',
         });
 

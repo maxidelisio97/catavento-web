@@ -14,7 +14,7 @@ import { registerErrorHandler } from '../../errorHandler.js';
 import panelUsersPlugin from '../panelUsers.js';
 import { hashPassword } from '../../auth/hashPassword.js';
 import { SESSION_COOKIE_NAME } from '../../auth/cookie.js';
-import { createQueryTimingPlugin, selectReferencesTable, waitForLockWait } from '../../test-support/queryBarrier.js';
+import { createQueryTimingPlugin, getProcessId, selectReferencesTable, waitForLockWait } from '../../test-support/queryBarrier.js';
 import {
   createRoleWithPermissions,
   createSessionCookieForRole,
@@ -237,7 +237,7 @@ describe('anti-self-lockout guard (§ 2.4)', () => {
       const measuredDb = new Kysely<DB>({ dialect: new PostgresDialect({ pool: testPool }), plugins: [timingPlugin] });
       const app = buildApp(measuredDb);
 
-      let deactivatePromise!: ReturnType<typeof app.inject>;
+      let deactivatePromise!: Promise<Awaited<ReturnType<typeof app.inject>>>;
       let sawGenuineLockWait = false;
       try {
         await holder.query('BEGIN');
@@ -249,15 +249,17 @@ describe('anti-self-lockout guard (§ 2.4)', () => {
         // Simulates ownerB's demotion already in flight (holds the lock,
         // about to apply its own change) while ownerA's REAL deactivate
         // request runs concurrently through the actual guard code.
-        deactivatePromise = app.inject({
-          method: 'POST',
-          url: `/panel/users/${ownerA}/deactivate`,
-          cookies: { [SESSION_COOKIE_NAME]: token },
-        });
+        deactivatePromise = Promise.resolve(
+          app.inject({
+            method: 'POST',
+            url: `/panel/users/${ownerA}/deactivate`,
+            cookies: { [SESSION_COOKIE_NAME]: token },
+          }),
+        );
         deactivatePromise.catch(() => {});
 
         sawGenuineLockWait = await waitForLockWait(testPool, {
-          excludePids: [holder.processID!],
+          excludePids: [getProcessId(holder)],
           queryContains: 'roles',
         });
 

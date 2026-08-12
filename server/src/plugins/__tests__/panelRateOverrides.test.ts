@@ -16,7 +16,7 @@ import { hashPassword } from '../../auth/hashPassword.js';
 import { createRoleWithPermissions, createSessionCookieForRole, getDueñoRoleId } from '../../test-support/permissionFixtures.js';
 import { SESSION_COOKIE_NAME } from '../../auth/cookie.js';
 import { applyRateOverridesRange } from '../../panel/rateOverrides.js';
-import { createQueryTimingPlugin, selectReferencesTable, waitForLockWait } from '../../test-support/queryBarrier.js';
+import { createQueryTimingPlugin, getProcessId, selectReferencesTable, waitForLockWait } from '../../test-support/queryBarrier.js';
 import { addDaysUTC, formatDateUTC, parseDateUTC } from '../../shared/dateUtils.js';
 
 function buildApp(db: Kysely<DB> = testDb) {
@@ -663,7 +663,7 @@ describe('PATCH /panel/rate-overrides/range — concurrency guard (SPEC § 6.4, 
         rangePromise.catch(() => {});
 
         sawGenuineLockWait = await waitForLockWait(testPool, {
-          excludePids: [holder.processID!],
+          excludePids: [getProcessId(holder)],
           queryContains: 'rooms',
         });
 
