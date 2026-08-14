@@ -30,6 +30,11 @@ const JOBS = [
     widths: [160, 320, 480],
   },
   {
+    name: "room-triplo-exterior",
+    source: "public/images/Cuarto triplo/cuarto-triplo-exterior.jpg",
+    widths: [480, 900],
+  },
+  {
     name: "room-quadruplo",
     source: "public/images/Cuarto Cuadruplo/Cuarto-Cuadruple1.webp",
     widths: [160, 320, 480],

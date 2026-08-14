@@ -182,7 +182,7 @@ export default function TaibaGuide() {
                 key={currentPhoto.id}
                 images={currentPhoto.images}
                 className="w-full h-full object-contain"
-                wrapperClassName="h-[620px] max-w-[600px] mx-auto rounded-sm bg-white/5"
+                wrapperClassName="h-[420px] md:h-[620px] max-w-[600px] mx-auto rounded-sm bg-white/5"
               />
               <div className="absolute -bottom-8 -right-8 w-40 h-40 bg-white/5 -z-10" />
             </div>

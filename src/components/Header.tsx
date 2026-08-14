@@ -128,7 +128,7 @@ export default function Header() {
                   e.preventDefault();
                   goToBookingForm();
                 }}
-                className="flex items-center justify-center gap-1.5 font-body text-sm font-semibold tracking-[0.02em] w-10 h-10 md:w-auto md:h-auto md:px-5 md:py-2.5 rounded-full bg-coral-600 hover:bg-coral-500 text-white transition-colors duration-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral-400"
+                className="flex items-center justify-center gap-1.5 font-body text-sm font-semibold tracking-[0.02em] w-11 h-11 md:w-auto md:h-auto md:px-5 md:py-2.5 rounded-full bg-coral-600 hover:bg-coral-500 text-white transition-colors duration-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral-400"
                 initial={reduce ? false : { opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={reduce ? undefined : { opacity: 0 }}
@@ -143,7 +143,7 @@ export default function Header() {
 
           <button
             type="button"
-            className={`md:hidden p-2 rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral-500 ${textClass}`}
+            className={`md:hidden flex items-center justify-center w-11 h-11 -mr-2 rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral-500 ${textClass}`}
             onClick={() => setOpen(!open)}
             aria-label={open ? "Fechar menu" : "Abrir menu"}
             aria-expanded={open}

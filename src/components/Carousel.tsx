@@ -73,7 +73,7 @@ export default function Carousel({ images, className, wrapperClassName, delay = 
           initial={reduce ? false : { opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={reduce ? undefined : { opacity: 0 }}
-          transition={{ duration: 0.35, ease }}
+          transition={{ duration: 0.9, ease: "easeInOut" }}
         />
       </AnimatePresence>
 
@@ -83,7 +83,7 @@ export default function Carousel({ images, className, wrapperClassName, delay = 
             type="button"
             aria-label="Foto anterior"
             onClick={() => go(index - 1)}
-            className="absolute left-2 top-1/2 -translate-y-1/2 flex items-center justify-center w-8 h-8 rounded-full bg-warm-900/40 hover:bg-warm-900/60 text-white transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+            className="absolute left-2 top-1/2 -translate-y-1/2 flex items-center justify-center w-11 h-11 rounded-full bg-warm-900/40 hover:bg-warm-900/60 text-white transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
           >
             <MdChevronLeft size={20} />
           </button>
@@ -91,7 +91,7 @@ export default function Carousel({ images, className, wrapperClassName, delay = 
             type="button"
             aria-label="Próxima foto"
             onClick={() => go(index + 1)}
-            className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center justify-center w-8 h-8 rounded-full bg-warm-900/40 hover:bg-warm-900/60 text-white transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+            className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center justify-center w-11 h-11 rounded-full bg-warm-900/40 hover:bg-warm-900/60 text-white transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
           >
             <MdChevronRight size={20} />
           </button>

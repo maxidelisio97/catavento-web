@@ -14,6 +14,28 @@ import Carousel, { type CarouselImage } from "./Carousel";
 
 const CATEGORIES = [
   {
+    id: "exterior",
+    icon: MdCottage,
+    label: "Espaços",
+    titleMain: "Cada canto conta um pouco",
+    titleAccent: "do Catavento",
+    description:
+      "O jardim, a varanda, o catavento no telhado — a pousada é feita de detalhes simples que convidam a desacelerar. Estes registros são o dia a dia real de quem se hospeda aqui.",
+    images: [
+      { src: assetPath("images/exterior/exterior2.webp"), alt: "Gramado e varanda com teto de palha, coqueiro ao centro", fit: "cover" },
+      { src: assetPath("images/exterior/exterior3.webp"), alt: "Varanda com teto de palha entre as plantas", fit: "cover" },
+      { src: assetPath("images/exterior/exterior4.webp"), alt: "Corredor entre os quartos com cortina de bambu", fit: "cover" },
+      { src: assetPath("images/exterior/exterior6.webp"), alt: "Corredor externo entre a fachada e a varanda com teto de palha", fit: "cover" },
+      { src: assetPath("images/exterior/exterior7.webp"), alt: "Varanda com teto de palha e catavento no telhado ao fundo", fit: "cover" },
+      { src: assetPath("images/exterior/exterior8.webp"), alt: "Entrada iluminada à noite, com mesa de jantar ao fundo", fit: "cover" },
+      { src: assetPath("images/exterior/exterior9.webp"), alt: "Fachada da pousada com coqueiro e garagem coberta", fit: "cover" },
+      { src: assetPath("images/exterior/exterior10.webp"), alt: "Caminho florido até a piscina, com o catavento ao fundo", fit: "cover" },
+      { src: assetPath("images/exterior/exterior11.webp"), alt: "Vista aérea dos telhados da pousada com o catavento", fit: "cover" },
+      { src: assetPath("images/exterior/exterior12.webp"), alt: "Placas de madeira indicando os quartos e o café da manhã", fit: "cover" },
+      { src: assetPath("images/dron.webp"), alt: "Vista aérea da pousada, piscina e o mar de Taíba" },
+    ] satisfies CarouselImage[],
+  },
+  {
     id: "cafe",
     icon: MdFreeBreakfast,
     label: "Café da Manhã",
@@ -60,34 +82,12 @@ const CATEGORIES = [
       { src: assetPath("images/beco/beco4.webp"), alt: "Show de música ao vivo no Beco do Surf", fit: "cover" },
     ] satisfies CarouselImage[],
   },
-  {
-    id: "exterior",
-    icon: MdCottage,
-    label: "Espaços",
-    titleMain: "Cada canto conta um pouco",
-    titleAccent: "do Catavento",
-    description:
-      "O jardim, a varanda, o catavento no telhado — a pousada é feita de detalhes simples que convidam a desacelerar. Estes registros são o dia a dia real de quem se hospeda aqui.",
-    images: [
-      { src: assetPath("images/exterior/exterior2.webp"), alt: "Gramado e varanda com teto de palha, coqueiro ao centro", fit: "cover" },
-      { src: assetPath("images/exterior/exterior3.webp"), alt: "Varanda com teto de palha entre as plantas", fit: "cover" },
-      { src: assetPath("images/exterior/exterior4.webp"), alt: "Corredor entre os quartos com cortina de bambu", fit: "cover" },
-      { src: assetPath("images/exterior/exterior6.webp"), alt: "Corredor externo entre a fachada e a varanda com teto de palha", fit: "cover" },
-      { src: assetPath("images/exterior/exterior7.webp"), alt: "Varanda com teto de palha e catavento no telhado ao fundo", fit: "cover" },
-      { src: assetPath("images/exterior/exterior8.webp"), alt: "Entrada iluminada à noite, com mesa de jantar ao fundo", fit: "cover" },
-      { src: assetPath("images/exterior/exterior9.webp"), alt: "Fachada da pousada com coqueiro e garagem coberta", fit: "cover" },
-      { src: assetPath("images/exterior/exterior10.webp"), alt: "Caminho florido até a piscina, com o catavento ao fundo", fit: "cover" },
-      { src: assetPath("images/exterior/exterior11.webp"), alt: "Vista aérea dos telhados da pousada com o catavento", fit: "cover" },
-      { src: assetPath("images/exterior/exterior12.webp"), alt: "Placas de madeira indicando os quartos e o café da manhã", fit: "cover" },
-      { src: assetPath("images/dron.webp"), alt: "Vista aérea da pousada, piscina e o mar de Taíba" },
-    ] satisfies CarouselImage[],
-  },
 ] as const;
 
 const ease = EASE;
 
 export default function Gallery() {
-  const [active, setActive] = useState<string>("cafe");
+  const [active, setActive] = useState<string>("exterior");
   const reduce = useReducedMotion();
 
   const current = CATEGORIES.find((c) => c.id === active) ?? CATEGORIES[0];
@@ -153,7 +153,7 @@ export default function Gallery() {
               key={current.id}
               images={current.images}
               className="w-full h-full object-contain"
-              wrapperClassName="h-[620px] max-w-[600px] mx-auto rounded-sm bg-sand-100"
+              wrapperClassName="h-[420px] md:h-[620px] max-w-[600px] mx-auto rounded-sm bg-sand-100"
             />
             {/* Accent block */}
             <div className="absolute -bottom-8 -right-8 w-40 h-40 bg-sand-100 -z-10" />
