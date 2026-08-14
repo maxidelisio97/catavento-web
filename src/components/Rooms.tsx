@@ -76,7 +76,7 @@ const ROOMS = [
       { src: assetPath("images/Cuarto triplo/Cuarto-triple5.webp"), alt: "Suíte Triplo — cama de casal e cama de solteiro" },
       { src: assetPath("images/Cuarto triplo/Cuarto-triple1.webp"), alt: "Suíte Triplo — banheiro com pia moderna e box" },
       { src: assetPath("images/Cuarto triplo/Cuarto-triple3.webp"), alt: "Suíte Triplo — pia do banheiro com amenities" },
-      { src: assetPath("images/Cuarto triplo/cuarto-triplo-exterior.jpg"), alt: "Suíte Triplo — varanda com rede, mesa e cadeiras" },
+      { src: assetPath("images/responsive/room-triplo-exterior-900.webp"), alt: "Suíte Triplo — varanda com rede, mesa e cadeiras" },
       { src: assetPath("images/Cuarto triplo/Cuarto-triple4.webp"), alt: "Suíte Triplo — corredor externo com teto de palha" },
       { src: assetPath("images/Cuarto triplo/cuarto-triplo-exterior2.webp"), alt: "Suíte Triplo — corredor coberto com mesa de jantar" },
     ],
