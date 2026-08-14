@@ -49,6 +49,33 @@ de copy se valida contra ese documento.
 - Tipografia: Fraunces (headings), Inter (body)
 - react-day-picker (v10) para seleccion de rango de fechas en el
   formulario de reserva (estilado custom via `.rdp-root.booking-daypicker`)
+- Deploy a producción (frontend): el VPS tiene un checkout git completo
+  del repo en `/var/www/catavento-web` — NO es rsync de un build local,
+  el build se rehace en el server. Nginx sirve estático desde
+  `/var/www/catavento-web/dist` (config en
+  `/etc/nginx/sites-available/cataventotaiba.com`), con SPA fallback
+  (`try_files`). Sin restart de nada del lado del server, alcanza con:
+  ```bash
+  ssh catavento-vps
+  cd /var/www/catavento-web
+  git pull origin main
+  npm ci
+  npm run build
+  ```
+  Alias SSH (`catavento-vps`) vive en `~/.ssh/config` local, no en el repo.
+- Deploy a producción (panel, `panel/`): el panel se buildea dentro de
+  este mismo checkout y se copia a una carpeta servida aparte
+  (`/var/www/catavento-panel/dist`, otro server_name en Nginx:
+  `painel.cataventotaiba.com`). Después de bajar los cambios del repo:
+  ```bash
+  cd /var/www/catavento-web/panel
+  npm ci
+  npm run build
+  rsync -a --delete dist/ /var/www/catavento-panel/dist/
+  ```
+  Si el sitio no refleja el cambio, puede ser permisos —
+  `sudo chown -R www-data:www-data /var/www/catavento-panel/dist`
+  resolvió esto en despliegues previos.
 - Imagenes responsive: script `scripts/generate-responsive-images.mjs`
   (correr via `npm run images:hero` o el comando que corresponda) —
   genera variantes AVIF+WebP en 640/828/1080/1920px. Toda imagen nueva

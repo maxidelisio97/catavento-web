@@ -13,10 +13,24 @@ algo parece mejorable, proponerlo antes de cambiar.
   Cliente/ORM: a proponer al iniciar el módulo 1 (candidatos: pg,
   Drizzle, Kysely) — proponer con justificación y esperar ok.
 - Pagos: Asaas (sandbox: sandbox.asaas.com). Docs: docs.asaas.com.
-- Proceso gestionado con PM2 (`ecosystem.config.cjs`), detrás de Nginx
-  (ver `nginx.conf.example`). Deploy manual (sin CI/CD, decisión
-  deliberada para tener control total): `git pull` + `npm run build`
-  + `pm2 restart` en el VPS.
+- Proceso gestionado con PM2 (`ecosystem.config.cjs`, app
+  `catavento-payments`), detrás de Nginx (ver `nginx.conf.example`).
+  Deploy manual (sin CI/CD, decisión deliberada para tener control
+  total), verificado contra el historial real del VPS:
+  ```bash
+  ssh catavento-vps
+  cd /var/www/catavento-web
+  git pull origin main
+  cd server
+  npm ci
+  npm run build
+  npm run migrate:up
+  pm2 restart catavento-payments
+  ```
+  `migrate:up` corre siempre, incluso sin migraciones nuevas (es
+  no-op si no hay nada pendiente) — evitar el error de deployar
+  código que espera una columna/tabla que la migración todavía no
+  corrió.
 - La base `catavento_db` y el usuario `catavento_app` YA EXISTEN en el
   VPS (verificado 2026-07-17, conexión funcional). Las migraciones
   crean/modifican TABLAS, nunca la base ni el usuario. No incluir
