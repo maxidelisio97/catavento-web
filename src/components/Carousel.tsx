@@ -6,7 +6,6 @@
 import { useRef, useState, type TouchEvent } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { MdChevronLeft, MdChevronRight } from "react-icons/md";
-import { EASE } from "../lib/motion";
 import { cn } from "../lib/utils";
 
 // position: ajuste manual de object-position para fotos cujo enquadramento
@@ -25,17 +24,39 @@ type CarouselProps = {
   amount?: number;
 };
 
-const ease = EASE;
 const SWIPE_THRESHOLD = 40;
+
+// Slide horizontal tipo Instagram: a foto que entra vem do lado para onde se
+// navega, a que sai vai para o lado oposto — as duas se movem ao mesmo tempo
+// (por isso o <img> e absolute inset-0, empilhado sobre o anterior).
+const slideVariants = {
+  enter: (dir: number) => ({ x: dir > 0 ? "100%" : "-100%", opacity: 1 }),
+  center: { x: 0, opacity: 1 },
+  exit: (dir: number) => ({ x: dir > 0 ? "-100%" : "100%", opacity: 1 }),
+};
+
+const staticVariants = {
+  enter: { opacity: 1 },
+  center: { opacity: 1 },
+  exit: { opacity: 1 },
+};
 
 export default function Carousel({ images, className, wrapperClassName, delay = 0, amount = 0.2 }: CarouselProps) {
   const [index, setIndex] = useState(0);
+  const [direction, setDirection] = useState(0);
   const reduce = useReducedMotion();
   const touchStartX = useRef<number | null>(null);
   const hasMultiple = images.length > 1;
 
-  function go(next: number) {
-    setIndex((next + images.length) % images.length);
+  function goDelta(delta: number) {
+    setDirection(delta);
+    setIndex((prev) => (prev + delta + images.length) % images.length);
+  }
+
+  function goTo(next: number) {
+    if (next === index) return;
+    setDirection(next > index ? 1 : -1);
+    setIndex(next);
   }
 
   function handleTouchStart(e: TouchEvent) {
@@ -45,35 +66,38 @@ export default function Carousel({ images, className, wrapperClassName, delay = 
   function handleTouchEnd(e: TouchEvent) {
     if (touchStartX.current === null) return;
     const delta = e.changedTouches[0].clientX - touchStartX.current;
-    if (Math.abs(delta) > SWIPE_THRESHOLD) go(index + (delta < 0 ? 1 : -1));
+    if (Math.abs(delta) > SWIPE_THRESHOLD) goDelta(delta < 0 ? 1 : -1);
     touchStartX.current = null;
   }
 
+  // delay/amount ficam na API so por compatibilidade com os call sites
+  // existentes — sem reveal on-scroll, nao tem mais nada pra fazer com eles.
+  void delay;
+  void amount;
+
   return (
-    <motion.div
+    <div
       className={cn("relative overflow-hidden", wrapperClassName)}
-      initial={reduce ? false : { y: 20 }}
-      whileInView={reduce ? undefined : { y: 0 }}
-      viewport={{ once: true, amount }}
-      transition={{ duration: 0.65, delay, ease }}
       onTouchStart={hasMultiple ? handleTouchStart : undefined}
       onTouchEnd={hasMultiple ? handleTouchEnd : undefined}
     >
-      <AnimatePresence initial={false} mode="wait">
+      <AnimatePresence initial={false} custom={direction}>
         <motion.img
           key={images[index].src}
           src={images[index].src}
           alt={images[index].alt}
           loading="lazy"
-          className={className}
+          className={cn("absolute inset-0", className)}
           style={{
             objectPosition: images[index].position ?? "center",
             ...(images[index].fit ? { objectFit: images[index].fit } : {}),
           }}
-          initial={reduce ? false : { opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={reduce ? undefined : { opacity: 0 }}
-          transition={{ duration: 0.9, ease: "easeInOut" }}
+          custom={direction}
+          variants={reduce ? staticVariants : slideVariants}
+          initial={reduce ? false : "enter"}
+          animate="center"
+          exit="exit"
+          transition={reduce ? { duration: 0 } : { duration: 0.4, ease: "easeInOut" }}
         />
       </AnimatePresence>
 
@@ -82,16 +106,16 @@ export default function Carousel({ images, className, wrapperClassName, delay = 
           <button
             type="button"
             aria-label="Foto anterior"
-            onClick={() => go(index - 1)}
-            className="absolute left-2 top-1/2 -translate-y-1/2 flex items-center justify-center w-11 h-11 rounded-full bg-warm-900/40 hover:bg-warm-900/60 text-white transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+            onClick={() => goDelta(-1)}
+            className="absolute left-2 top-1/2 -translate-y-1/2 flex items-center justify-center w-11 h-11 rounded-full bg-madera/40 hover:bg-madera/60 text-white transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
           >
             <MdChevronLeft size={20} />
           </button>
           <button
             type="button"
             aria-label="Próxima foto"
-            onClick={() => go(index + 1)}
-            className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center justify-center w-11 h-11 rounded-full bg-warm-900/40 hover:bg-warm-900/60 text-white transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+            onClick={() => goDelta(1)}
+            className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center justify-center w-11 h-11 rounded-full bg-madera/40 hover:bg-madera/60 text-white transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
           >
             <MdChevronRight size={20} />
           </button>
@@ -103,7 +127,7 @@ export default function Carousel({ images, className, wrapperClassName, delay = 
                 type="button"
                 aria-label={`Ir para foto ${i + 1}`}
                 aria-current={i === index}
-                onClick={() => setIndex(i)}
+                onClick={() => goTo(i)}
                 className={cn(
                   "h-1.5 rounded-full bg-white/50 transition-all",
                   i === index ? "w-4 bg-white" : "w-1.5"
@@ -113,6 +137,6 @@ export default function Carousel({ images, className, wrapperClassName, delay = 
           </div>
         </>
       )}
-    </motion.div>
+    </div>
   );
 }

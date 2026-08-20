@@ -28,7 +28,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         {message && (
           <motion.div
             role="status"
-            className="fixed bottom-6 left-1/2 z-[60] -translate-x-1/2 px-5 py-3 rounded-full bg-warm-900 text-white font-body text-sm text-center shadow-lg shadow-warm-900/25 max-w-[90vw]"
+            className="fixed bottom-6 left-1/2 z-[60] -translate-x-1/2 px-5 py-3 rounded-full bg-madera text-offwhite font-body text-sm text-center shadow-lg shadow-madera/25 max-w-[90vw]"
             initial={reduce ? false : { opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={reduce ? undefined : { opacity: 0, y: 10 }}

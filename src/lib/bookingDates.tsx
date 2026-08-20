@@ -1,8 +1,8 @@
 /*
- * Estado compartido de fechas seleccionadas en el BookingForm, para que
- * las cards de Quartos (Rooms.tsx) puedan reutilizarlas al ir a HQBeds
- * en vez de mandar sin fechas. Unica fuente de verdad: BookingForm
- * escribe (setRange), el resto de la app solo lee.
+ * Estado compartido de fechas seleccionadas en el RoomBookingModal. Vive
+ * en Context (no en el propio drawer) para sobrevivir a que el usuario
+ * cierre el modal de un quarto y abra el de otro: las fechas elegidas se
+ * mantienen en vez de resetear cada vez que el drawer se desmonta.
  */
 import { createContext, useContext, useState, type ReactNode } from "react";
 import type { DateRange } from "react-day-picker";

@@ -33,7 +33,7 @@ export default function WhatsAppFloatButton() {
           rel="noopener noreferrer"
           aria-label="Dúvidas? Fale conosco"
           onClick={() => trackEvent("whatsapp_click")}
-          className="md:hidden fixed bottom-5 right-5 z-40 flex items-center justify-center w-14 h-14 rounded-full bg-coral-600 text-white shadow-lg shadow-warm-900/25 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral-500"
+          className="md:hidden fixed bottom-5 right-5 z-40 flex items-center justify-center w-14 h-14 rounded-full bg-terracota-text text-offwhite shadow-lg shadow-madera/25 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-terracota"
           initial={reduce ? false : { opacity: 0, scale: 0.7, y: 12 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={reduce ? undefined : { opacity: 0, scale: 0.7, y: 12 }}

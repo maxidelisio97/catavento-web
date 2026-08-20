@@ -3,7 +3,6 @@
  * Contiene contacto, redes, navegacion secundaria y direccion.
  * Si necesito editar informacion de contacto o pie de pagina, voy aca.
  */
-import { motion, useReducedMotion } from "motion/react";
 import { MdWhatsapp, MdPhone, MdLocationOn } from "react-icons/md";
 import { FaInstagram } from "react-icons/fa";
 import {
@@ -15,27 +14,16 @@ import {
   WHATSAPP_URL,
 } from "../config/site";
 import { trackEvent } from "../lib/analytics";
-import { EASE } from "../lib/motion";
-import { goToBookingForm } from "../lib/scroll";
-
-
-const ease = EASE;
+import { goToRooms } from "../lib/scroll";
 
 
 export default function Reservation() {
-  const reduce = useReducedMotion();
-
   return (
-    <footer id="reservar" className="relative bg-warm-900 text-white">
+    <footer id="reservar" className="relative bg-madera text-white">
       {/* CTA band */}
       <div className="border-b border-white/10">
         <div className="max-w-[1440px] mx-auto px-6 md:px-10 py-16 md:py-20 flex flex-col md:flex-row items-start md:items-center justify-between gap-8">
-          <motion.div
-            initial={reduce ? false : { y: 16 }}
-            whileInView={reduce ? undefined : { y: 0 }}
-            viewport={{ once: true, amount: 0.2 }}
-            transition={{ duration: 0.6, ease }}
-          >
+          <div>
             <div className="flex items-center gap-5 mb-5">
               <span className="w-8 h-px bg-white/25" />
               <span className="font-body text-[10px] font-semibold uppercase tracking-[0.3em] text-white/45">
@@ -45,22 +33,16 @@ export default function Reservation() {
             <h2 className="font-heading text-3xl md:text-4xl font-semibold text-white leading-[1] tracking-tight max-w-[18ch]">
               Garanta sua estadia em Taíba
             </h2>
-          </motion.div>
+          </div>
 
-          <motion.div
-            className="flex flex-col sm:flex-row gap-3 shrink-0"
-            initial={reduce ? false : { y: 16 }}
-            whileInView={reduce ? undefined : { y: 0 }}
-            viewport={{ once: true, amount: 0.2 }}
-            transition={{ duration: 0.6, delay: 0.1, ease }}
-          >
+          <div className="flex flex-col sm:flex-row gap-3 shrink-0">
             <a
-              href="#booking-form"
+              href="#quartos"
               onClick={(e) => {
                 e.preventDefault();
-                goToBookingForm();
+                goToRooms();
               }}
-              className="inline-flex items-center justify-center gap-2 bg-coral-600 hover:bg-coral-500 text-white font-body font-semibold text-[11px] uppercase tracking-[0.12em] px-7 py-3.5 rounded-full transition-all duration-200 active:scale-[0.97] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+              className="inline-flex items-center justify-center gap-2 bg-terracota-text hover:brightness-110 text-offwhite font-body font-semibold text-[11px] uppercase tracking-[0.12em] px-7 py-3.5 rounded-full transition-all duration-200 active:scale-[0.97] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
             >
               Reservar
             </a>
@@ -74,20 +56,14 @@ export default function Reservation() {
               <MdWhatsapp size={14} />
               Tirar dúvidas pelo WhatsApp
             </a>
-          </motion.div>
+          </div>
         </div>
       </div>
 
       {/* Footer columns */}
       <div className="max-w-[1440px] mx-auto px-6 md:px-10 py-14 md:py-18 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10 lg:gap-12">
         {/* Brand */}
-        <motion.div
-          className="sm:col-span-2 lg:col-span-1"
-          initial={reduce ? false : { y: 14 }}
-          whileInView={reduce ? undefined : { y: 0 }}
-          viewport={{ once: true, amount: 0.2 }}
-          transition={{ duration: 0.5, ease }}
-        >
+        <div className="sm:col-span-2 lg:col-span-1">
           <a href="#hero" className="flex flex-col leading-none mb-4">
             <span className="font-heading font-bold text-sm tracking-[0.2em] uppercase text-white">
               Catavento
@@ -109,15 +85,10 @@ export default function Reservation() {
             <FaInstagram size={16} />
             @cataventotaiba
           </a>
-        </motion.div>
+        </div>
 
         {/* Navigation */}
-        <motion.div
-          initial={reduce ? false : { y: 14 }}
-          whileInView={reduce ? undefined : { y: 0 }}
-          viewport={{ once: true, amount: 0.2 }}
-          transition={{ duration: 0.5, delay: 0.08, ease }}
-        >
+        <div>
           <h3 className="font-body text-[10px] font-semibold uppercase tracking-[0.25em] text-white/40 mb-5">
             Navegação
           </h3>
@@ -133,15 +104,10 @@ export default function Reservation() {
               </li>
             ))}
           </ul>
-        </motion.div>
+        </div>
 
         {/* Contact */}
-        <motion.div
-          initial={reduce ? false : { y: 14 }}
-          whileInView={reduce ? undefined : { y: 0 }}
-          viewport={{ once: true, amount: 0.2 }}
-          transition={{ duration: 0.5, delay: 0.16, ease }}
-        >
+        <div>
           <h3 className="font-body text-[10px] font-semibold uppercase tracking-[0.25em] text-white/40 mb-5">
             Contato
           </h3>
@@ -168,15 +134,10 @@ export default function Reservation() {
               </a>
             </li>
           </ul>
-        </motion.div>
+        </div>
 
         {/* Address */}
-        <motion.div
-          initial={reduce ? false : { y: 14 }}
-          whileInView={reduce ? undefined : { y: 0 }}
-          viewport={{ once: true, amount: 0.2 }}
-          transition={{ duration: 0.5, delay: 0.24, ease }}
-        >
+        <div>
           <h3 className="font-body text-[10px] font-semibold uppercase tracking-[0.25em] text-white/40 mb-5">
             Localização
           </h3>
@@ -191,20 +152,14 @@ export default function Reservation() {
             R. Francisca Ferreira Martins, 1121<br />
             Taíba — CE, Brasil
           </a>
-        </motion.div>
+        </div>
       </div>
 
       {/* Bottom bar */}
-      <motion.div
-        className="border-t border-white/8 max-w-[1440px] mx-auto px-6 md:px-10 py-5 flex flex-col sm:flex-row items-center justify-between gap-3 text-[11px] font-body text-white/30"
-        initial={reduce ? false : { y: 10 }}
-        whileInView={reduce ? undefined : { y: 0 }}
-        viewport={{ once: true }}
-        transition={{ duration: 0.5, delay: 0.3, ease }}
-      >
+      <div className="border-t border-white/8 max-w-[1440px] mx-auto px-6 md:px-10 py-5 flex flex-col sm:flex-row items-center justify-between gap-3 text-[11px] font-body text-white/30">
         <span>&copy; {new Date().getFullYear()} Pousada Catavento. Todos os direitos reservados.</span>
         <span>Taíba, Ceará · Brasil</span>
-      </motion.div>
+      </div>
     </footer>
   );
 }

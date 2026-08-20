@@ -6,7 +6,6 @@
 
 import Header from "./components/Header";
 import Hero from "./components/Hero";
-import About from "./components/About";
 import Gallery from "./components/Gallery";
 import Rooms from "./components/Rooms";
 import Testimonials from "./components/Testimonials";
@@ -28,9 +27,8 @@ function App() {
         <Header />
         <main>
           <Hero />
-          <About />
-          <Gallery />
           <Rooms />
+          <Gallery />
           <Testimonials />
           <TaibaGuide />
           <Partnerships />

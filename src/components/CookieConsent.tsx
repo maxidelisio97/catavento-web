@@ -52,7 +52,7 @@ export default function CookieConsent() {
         <>
           <motion.div
             aria-hidden="true"
-            className="fixed inset-0 z-40 bg-warm-900 pointer-events-none"
+            className="fixed inset-0 z-40 bg-madera pointer-events-none"
             initial={reduce ? false : { opacity: 0 }}
             animate={{ opacity: 0.35 }}
             exit={reduce ? undefined : { opacity: 0 }}
@@ -67,10 +67,10 @@ export default function CookieConsent() {
             exit={reduce ? undefined : { opacity: 0, y: 20 }}
             transition={{ duration: 0.7, ease: "easeOut" }}
           >
-            <div className="flex flex-col gap-4 rounded-2xl border border-stone-200 bg-white p-5 shadow-xl shadow-warm-900/20">
+            <div className="flex flex-col gap-4 rounded-2xl border border-pill-border bg-offwhite p-5 shadow-xl shadow-madera/20">
               <div className="flex items-start gap-3">
-                <CataventoIcon height={22} color="var(--color-coral-600)" className="shrink-0 mt-0.5" />
-                <p className="text-sm text-stone-500">
+                <CataventoIcon height={22} color="var(--color-terracota)" className="shrink-0 mt-0.5" />
+                <p className="text-sm text-ink/85">
                   Aceitando cookies, você nos ajuda a melhorar a experiência
                   da pousada.
                 </p>
@@ -79,14 +79,14 @@ export default function CookieConsent() {
                 <button
                   type="button"
                   onClick={() => handleChoice(false)}
-                  className="rounded-full px-4 py-2 text-sm text-stone-500 hover:text-warm-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral-500"
+                  className="rounded-full px-4 py-2 text-sm text-ink/85 hover:text-madera focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-terracota"
                 >
                   Recusar
                 </button>
                 <button
                   type="button"
                   onClick={() => handleChoice(true)}
-                  className="rounded-full bg-coral-600 px-4 py-2 text-sm text-white hover:bg-coral-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral-500"
+                  className="rounded-full bg-terracota-text px-4 py-2 text-sm text-offwhite hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-terracota"
                 >
                   Aceitar
                 </button>
