@@ -11,7 +11,7 @@ const OUT_DIR = path.resolve("public/images/responsive");
 const JOBS = [
   {
     name: "hero",
-    source: "public/images/Entrada-parque.webp",
+    source: "public/images/hero/hero.webp",
     widths: [640, 828, 1080, 1920],
   },
   {
@@ -28,11 +28,6 @@ const JOBS = [
     name: "room-triplo",
     source: "public/images/Cuarto triplo/Cuarto-triple2.webp",
     widths: [160, 320, 480],
-  },
-  {
-    name: "room-triplo-exterior",
-    source: "public/images/Cuarto triplo/cuarto-triplo-exterior.jpg",
-    widths: [480, 900],
   },
   {
     name: "room-quadruplo",
@@ -71,7 +66,7 @@ async function run() {
   // Open Graph / Twitter Card preview image (siempre desde el hero).
   // JPG a proposito: los crawlers de link preview (WhatsApp incluido) no soportan
   // AVIF/WebP de forma confiable todavia.
-  await sharp(path.resolve("public/images/Entrada-parque.webp"))
+  await sharp(path.resolve("public/images/hero/hero.webp"))
     .resize({ width: 1200, height: 630, fit: "cover" })
     .jpeg({ quality: 82 })
     .toFile(path.resolve("public/images/og-image.jpg"));

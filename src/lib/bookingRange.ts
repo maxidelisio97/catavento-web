@@ -1,6 +1,6 @@
 /*
- * Utilidades de rango de fechas compartidas entre BookingForm.tsx (form
- * principal) y RoomBookingModal.tsx (drawer de reserva por habitacao).
+ * Utilidades de rango de fechas usadas por RoomBookingModal.tsx (drawer
+ * de reserva por habitacao).
  */
 import type { DateRange } from "react-day-picker";
 

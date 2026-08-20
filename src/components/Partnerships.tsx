@@ -11,9 +11,6 @@ import { useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { MdCheckCircle, MdClose } from "react-icons/md";
 import { FORMSPREE_FORM_ID, WHATSAPP_URL } from "../config/site";
-import { EASE } from "../lib/motion";
-
-const ease = EASE;
 
 const INQUIRY_TYPES = [
   "Agência de viagens",
@@ -25,8 +22,8 @@ const INQUIRY_TYPES = [
 type Status = "idle" | "sending" | "success" | "error";
 
 const inputClass =
-  "w-full rounded-lg border border-stone-300 bg-white px-4 py-2.5 font-body text-sm text-warm-900 placeholder:text-warm-800/35 focus:outline-none focus:ring-2 focus:ring-coral-500/40 focus:border-coral-500 transition-colors";
-const labelClass = "block font-body text-xs font-semibold uppercase tracking-[0.08em] text-warm-800/60 mb-1.5";
+  "w-full rounded-lg border border-pill-border bg-offwhite px-4 py-2.5 font-body text-sm text-madera placeholder:text-ink/35 focus:outline-none focus:ring-2 focus:ring-terracota/40 focus:border-terracota transition-colors";
+const labelClass = "block font-body text-xs font-semibold uppercase tracking-[0.08em] text-ink/60 mb-1.5";
 
 export default function Partnerships() {
   const reduce = useReducedMotion();
@@ -55,42 +52,33 @@ export default function Partnerships() {
   }
 
   return (
-    <section id="parcerias" className="relative py-24 md:py-36 bg-sand-50 scroll-mt-[72px] md:scroll-mt-20">
+    <section id="parcerias" className="relative py-24 md:py-36 bg-cream scroll-mt-[72px] md:scroll-mt-20">
       <div className="max-w-[1440px] mx-auto px-6 md:px-10">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-12 lg:gap-20">
           {/* Texto */}
-          <motion.div
-            initial={reduce ? false : { y: 16 }}
-            whileInView={reduce ? undefined : { y: 0 }}
-            viewport={{ once: true, amount: 0.2 }}
-            transition={{ duration: 0.6, ease }}
-          >
+          <div>
             <div className="flex items-center gap-5 mb-5">
-              <span className="w-12 h-px bg-sand-300" />
-              <span className="font-body text-[10px] font-semibold uppercase tracking-[0.3em] text-coral-600">
+              <span className="w-12 h-px bg-rule" />
+              <span className="font-body text-[10px] font-semibold uppercase tracking-[0.3em] text-terracota-text">
                 Parcerias
               </span>
             </div>
-            <h2 className="font-heading text-4xl md:text-5xl font-semibold text-warm-900 leading-[0.98] tracking-tight">
+            <h2 className="font-heading text-4xl md:text-5xl font-semibold text-madera leading-[0.98] tracking-tight">
               Trabalha com grupos ou viagens?
             </h2>
-            <p className="mt-5 font-body text-base text-warm-800/60 max-w-[45ch] leading-relaxed">
+            <p className="mt-5 font-body text-base text-ink/85 max-w-[45ch] leading-relaxed">
               Trabalhamos com agências de viagem, escolas de kitesurf e
               organizadores de grupos grandes. Conta pra gente os detalhes e
               coordenamos a estadia juntos.
             </p>
-          </motion.div>
+          </div>
 
           {/* Formulario */}
-          <motion.form
+          <form
             action={`https://formspree.io/f/${FORMSPREE_FORM_ID}`}
             method="POST"
             onSubmit={handleSubmit}
             className="flex flex-col gap-4"
-            initial={reduce ? false : { y: 16 }}
-            whileInView={reduce ? undefined : { y: 0 }}
-            viewport={{ once: true, amount: 0.2 }}
-            transition={{ duration: 0.6, delay: 0.1, ease }}
           >
             <div>
               <label htmlFor="partner-name" className={labelClass}>
@@ -147,13 +135,13 @@ export default function Partnerships() {
             <button
               type="submit"
               disabled={status === "sending"}
-              className="mt-2 self-start bg-coral-600 hover:bg-coral-500 text-white font-body font-semibold text-[11px] uppercase tracking-[0.12em] px-7 py-3.5 rounded-full transition-all duration-200 active:scale-[0.97] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral-500 disabled:opacity-60 disabled:cursor-not-allowed"
+              className="mt-2 self-start bg-terracota-text hover:brightness-110 text-offwhite font-body font-semibold text-[11px] uppercase tracking-[0.12em] px-7 py-3.5 rounded-full transition-all duration-200 active:scale-[0.97] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-terracota disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {status === "sending" ? "Enviando..." : "Enviar consulta"}
             </button>
 
             {status === "error" && (
-              <p role="alert" className="font-body text-sm text-coral-600">
+              <p role="alert" className="font-body text-sm text-terracota-text">
                 Não foi possível enviar sua mensagem. Tente novamente ou{" "}
                 <a href={WHATSAPP_URL} target="_blank" rel="noopener noreferrer" className="underline font-semibold">
                   fale pelo WhatsApp
@@ -161,7 +149,7 @@ export default function Partnerships() {
                 .
               </p>
             )}
-          </motion.form>
+          </form>
         </div>
       </div>
 
@@ -171,7 +159,7 @@ export default function Partnerships() {
           <>
             <motion.div
               aria-hidden="true"
-              className="fixed inset-0 z-[70] bg-warm-900/50"
+              className="fixed inset-0 z-[70] bg-madera/50"
               initial={reduce ? false : { opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={reduce ? undefined : { opacity: 0 }}
@@ -188,18 +176,18 @@ export default function Partnerships() {
               exit={reduce ? undefined : { opacity: 0, scale: 0.95 }}
               transition={{ duration: 0.25 }}
             >
-              <div className="relative w-full max-w-sm bg-white rounded-2xl p-8 text-center shadow-xl shadow-warm-900/25">
+              <div className="relative w-full max-w-sm bg-offwhite rounded-2xl p-8 text-center shadow-xl shadow-madera/25">
                 <button
                   type="button"
                   onClick={() => setStatus("idle")}
                   aria-label="Fechar"
-                  className="absolute top-3 right-3 p-1.5 rounded-full text-warm-800/40 hover:text-warm-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-coral-500"
+                  className="absolute top-3 right-3 p-1.5 rounded-full text-ink/40 hover:text-madera focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-terracota"
                 >
                   <MdClose size={18} />
                 </button>
-                <MdCheckCircle className="mx-auto text-coral-600" size={40} />
-                <h3 className="mt-4 font-heading text-xl font-semibold text-warm-900">Obrigado!</h3>
-                <p className="mt-2 font-body text-sm text-warm-800/60">
+                <MdCheckCircle className="mx-auto text-terracota" size={40} />
+                <h3 className="mt-4 font-heading text-xl font-semibold text-madera">Obrigado!</h3>
+                <p className="mt-2 font-body text-sm text-ink/60">
                   Em breve entraremos em contato.
                 </p>
               </div>

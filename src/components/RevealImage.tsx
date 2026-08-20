@@ -1,6 +1,4 @@
 import type { ImgHTMLAttributes } from "react";
-import { motion, useReducedMotion } from "motion/react";
-import { EASE } from "../lib/motion";
 import { cn } from "../lib/utils";
 
 type RevealImageProps = Pick<
@@ -12,33 +10,24 @@ type RevealImageProps = Pick<
   amount?: number;
 };
 
-const ease = EASE;
-
+// Passthrough estático: mantém a API (wrapperClassName/delay/amount) para não
+// quebrar call sites, mas sem motion — a imagem aparece no lugar, sem reveal.
 export default function RevealImage({
   wrapperClassName,
   className,
-  delay = 0,
-  amount = 0.2,
+  delay,
+  amount,
   ...props
 }: RevealImageProps) {
-  const reduce = useReducedMotion();
+  // delay/amount ficam na API so por compatibilidade com os call sites
+  // existentes (nao quebrar quem ja passa essas props) — sem motion, nao
+  // tem mais nada pra fazer com eles.
+  void delay;
+  void amount;
 
   return (
-    <motion.div
-      className={cn("overflow-hidden", wrapperClassName)}
-      initial={reduce ? false : { y: 20 }}
-      whileInView={reduce ? undefined : { y: 0 }}
-      viewport={{ once: true, amount }}
-      transition={{ duration: 0.65, delay, ease }}
-    >
-      <motion.img
-        {...props}
-        className={className}
-        initial={reduce ? false : { scale: 1.05 }}
-        whileInView={reduce ? undefined : { scale: 1 }}
-        viewport={{ once: true, amount }}
-        transition={{ duration: 0.9, delay, ease }}
-      />
-    </motion.div>
+    <div className={cn("overflow-hidden", wrapperClassName)}>
+      <img {...props} className={className} />
+    </div>
   );
 }

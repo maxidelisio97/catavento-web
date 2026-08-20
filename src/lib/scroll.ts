@@ -40,9 +40,9 @@ export function smoothScrollTo(id: string, duration = 900) {
 }
 
 /*
- * Atajo compartido por el header y el CTA flotante: scroll suave al
- * formulario real.
+ * Atajo compartido por el header y el CTA flotante: scroll suave a los
+ * quartos (punto de entrada real a la reserva, via las cards + modal).
  */
-export function goToBookingForm() {
-  smoothScrollTo("booking-form");
+export function goToRooms() {
+  smoothScrollTo("quartos");
 }
