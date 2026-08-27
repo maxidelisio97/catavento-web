@@ -132,5 +132,120 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   cursor: not-allowed;
 }
 
+/* Botao "Verificar": molino estatico (a rotacao do rotor foi removida —
+   com o path assimetrico das 8 pontas, a rotacao nao lia como "girar", so
+   parecia quebrada na metade do ciclo). O vento agora e comunicado so pelos
+   tracos de .verificar-wind, que correm em loop sutil mesmo em repouso; no
+   hover o molino voa para fora do botao com fade enquanto uma seta entra do
+   lado oposto e os tracos de vento aceleram. */
+
+/* Morph hover (icone -> seta) so existe em md+: em touch nao ha :hover real,
+   entao em mobile o icone fica sempre em repouso (so texto + botao full-width
+   comunicam a acao). Escopar evita que um :hover "preso" de touch (comum em
+   navegadores mobile apos o tap) desloque o icone sem nada para substitui-lo. */
+@media (min-width: 768px) {
+  .verificar-icon,
+  .verificar-arrow {
+    transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
+  }
+
+  .verificar-arrow {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+
+  .verificar-btn:hover .verificar-icon,
+  .verificar-btn:focus-visible .verificar-icon {
+    opacity: 0;
+    transform: translateX(14px) rotate(9deg);
+  }
+
+  .verificar-btn:hover .verificar-arrow,
+  .verificar-btn:focus-visible .verificar-arrow {
+    opacity: 1;
+    transform: translateX(0);
+  }
+
+  /* Tracos finos de vento: em repouso correm num loop lento e sutil (ritmo
+     de brisa) atras do molino estatico — e o unico sinal de "vento" que
+     resta, entao precisa se ler mesmo parado. No hover aceleram num flash
+     rapido enquanto o molino voa para fora do botao. */
+  @keyframes cv-wind-idle {
+    0%, 100% {
+      opacity: 0;
+      transform: translateX(-8px);
+    }
+    50% {
+      opacity: 0.4;
+      transform: translateX(8px);
+    }
+  }
+
+  @keyframes cv-wind-streak {
+    0%, 100% {
+      opacity: 0;
+      transform: translateX(-8px);
+    }
+    45% {
+      opacity: 0.7;
+    }
+    75% {
+      opacity: 0;
+      transform: translateX(16px);
+    }
+  }
+
+  .verificar-wind {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  .verificar-wind span {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 11px;
+    height: 1.5px;
+    border-radius: 1px;
+    background: currentColor;
+    opacity: 0;
+    animation: cv-wind-idle 3.4s ease-in-out infinite;
+  }
+
+  .verificar-wind span:first-child {
+    margin-top: -7px;
+  }
+
+  .verificar-wind span:last-child {
+    width: 7px;
+    margin-top: 5px;
+    animation-delay: 1.1s;
+  }
+
+  .verificar-btn:hover .verificar-wind span,
+  .verificar-btn:focus-visible .verificar-wind span {
+    animation: cv-wind-streak 0.5s ease-out;
+  }
+
+  .verificar-btn:hover .verificar-wind span:last-child,
+  .verificar-btn:focus-visible .verificar-wind span:last-child {
+    animation-delay: 0.07s;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .verificar-icon,
+  .verificar-arrow {
+    transition: opacity 0.2s ease;
+    transform: none !important;
+  }
+
+  .verificar-wind span {
+    animation: none !important;
+    opacity: 0 !important;
+  }
+}
+
 /* Isotipo do molino no header: totalmente estatico (sem rotacao, nem em
    repouso nem no hover). */

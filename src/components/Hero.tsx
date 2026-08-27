@@ -1,15 +1,20 @@
 /*
  * Construye la primera seccion visible de la homepage.
  * Foto de fondo (jardim + catavento + coqueiros) com degrade madera para
- * legibilidade. Sem CTA propio — a reserva pasa por las cards de Quartos.
+ * legibilidade, com o card de disponibilidade (BookingForm) sobreposto na
+ * base do hero. As cards de Quartos oferecem um segundo ponto de reserva
+ * por habitacao (RoomBookingModal), sem selector de quarto aqui.
  */
 import { motion, useReducedMotion } from "motion/react";
 import { assetPath } from "../config/site";
+import { EASE } from "../lib/motion";
+import BookingForm from "./BookingForm";
 
 export default function Hero() {
   const reduce = useReducedMotion();
 
   return (
+    <>
     <section id="hero" className="relative bg-madera">
       <div className="relative min-h-[100dvh] flex flex-col">
         {/* Foto de fundo — enquadrada mais para baixo (menos ceu, molino inteiro) */}
@@ -75,5 +80,23 @@ export default function Hero() {
         </div>
       </div>
     </section>
+
+    {/* Card de reserva: en desktop se superpone al borde inferior del hero (mitad
+        foto, mitad fondo); en mobile va debajo, a ancho completo, sin overlap. */}
+    <div id="booking-form" className="relative z-20 scroll-mt-[72px] md:scroll-mt-20 md:px-6 lg:px-10 md:-mt-14 lg:-mt-16">
+      <motion.div
+        id="booking-form-card"
+        className="bg-cream px-6 py-10 md:max-w-4xl md:mx-auto md:rounded-sm md:border md:border-pill-border md:p-10 md:shadow-xl md:shadow-madera/15"
+        initial={reduce ? false : { opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.7, delay: 1, ease: EASE }}
+      >
+        <h2 className="text-center font-heading text-2xl md:text-3xl font-semibold text-madera mb-6 md:mb-8">
+          Reserve sua estadia
+        </h2>
+        <BookingForm />
+      </motion.div>
+    </div>
+    </>
   );
 }
