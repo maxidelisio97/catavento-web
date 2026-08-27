@@ -1,7 +1,8 @@
 /*
- * Logica de submit do RoomBookingModal.tsx (unico ponto de reserva do
- * site): validacao de datas, estado de hospedes, e o redirecionamento a
- * HQBeds com o evento de analytics correto.
+ * Logica compartida de submit entre BookingForm.tsx (form principal) e
+ * RoomBookingModal.tsx (drawer de reserva por habitacao): validacao de
+ * datas, estado de hospedes, e o redirecionamento a HQBeds com o evento
+ * correto (ver nota de eventos separados em BookingForm.tsx/git history).
  */
 import { useState } from "react";
 import { buildHqbedsUrl } from "../config/site";
@@ -12,9 +13,9 @@ import { startOfToday } from "./bookingRange";
 
 type Room = { name: string; guests: number };
 
-export function useBookingSubmit(room: Room) {
+export function useBookingSubmit(room?: Room) {
   const { range, setRange } = useBookingDates();
-  const [adults, setAdults] = useState(room.guests);
+  const [adults, setAdults] = useState(room?.guests ?? 2);
   const [children, setChildren] = useState(0);
   const [datesError, setDatesError] = useState<string | undefined>(undefined);
 
@@ -35,13 +36,17 @@ export function useBookingSubmit(room: Room) {
     const departure = toIsoDate(range!.to!);
     const url = buildHqbedsUrl({ arrival, departure, adults, children });
 
-    trackEvent("confirmar_reserva_popup", {
-      habitacion: room.name,
-      checkin: arrival,
-      checkout: departure,
-      adultos: adults,
-      criancas: children,
-    });
+    if (room) {
+      trackEvent("confirmar_reserva_popup", {
+        habitacion: room.name,
+        checkin: arrival,
+        checkout: departure,
+        adultos: adults,
+        criancas: children,
+      });
+    } else {
+      trackEvent("click_verificar_disponibilidad", { arrival, departure, adults, children });
+    }
 
     window.open(url, "_blank", "noopener,noreferrer");
     return { ok: true };
