@@ -1,9 +1,12 @@
 import { useState } from "react";
 import type { PanelUser } from "../api/auth";
+import { usePermissions } from "../hooks/usePermissions";
 import TapeChartPage from "./TapeChartPage";
 import GeneralSettingsPage from "./GeneralSettingsPage";
 import RoomRatesTable from "../components/settings/RoomRatesTable";
 import RateOverridesCalendar from "../components/settings/RateOverridesCalendar";
+import UsersListPage from "./UsersListPage";
+import RolesListPage from "./RolesListPage";
 
 interface PanelLayoutProps {
   user: PanelUser;
@@ -11,7 +14,7 @@ interface PanelLayoutProps {
   onLogoutAll: () => Promise<void>;
 }
 
-type PanelSection = "tape-chart" | "geral" | "precos" | "calendario";
+type PanelSection = "tape-chart" | "geral" | "precos" | "calendario" | "usuarios" | "papeis";
 
 // Flat items for now, grouped only by a visual divider — once there are
 // enough sections under "Configuração" to earn a real submenu, promote this
@@ -26,6 +29,8 @@ const SECTION_TITLES: Record<Exclude<PanelSection, "tape-chart">, string> = {
   geral: "Geral",
   precos: "Preços",
   calendario: "Calendário",
+  usuarios: "Usuários",
+  papeis: "Papéis",
 };
 
 function NavButton({
@@ -53,6 +58,13 @@ function NavButton({
 export default function PanelLayout({ user, onLogout, onLogoutAll }: PanelLayoutProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [section, setSection] = useState<PanelSection>("tape-chart");
+  const permissions = usePermissions();
+
+  // § 5/§ 6: narrow, targeted gate for just these two nav items — hiding by
+  // permission ahead of 9C's general sweep. Each item gates independently:
+  // a user can have admin.users without admin.roles, or vice versa.
+  const showUsuarios = permissions.has("admin.users");
+  const showPapeis = permissions.has("admin.roles");
 
   async function handleLogoutAll() {
     setMenuOpen(false);
@@ -85,6 +97,22 @@ export default function PanelLayout({ user, onLogout, onLogoutAll }: PanelLayout
                 {label}
               </NavButton>
             ))}
+
+            {(showUsuarios || showPapeis) && (
+              <>
+                <span className="w-px h-5 bg-panel-200 mx-1" aria-hidden="true" />
+                {showUsuarios && (
+                  <NavButton active={section === "usuarios"} onClick={() => setSection("usuarios")}>
+                    Usuários
+                  </NavButton>
+                )}
+                {showPapeis && (
+                  <NavButton active={section === "papeis"} onClick={() => setSection("papeis")}>
+                    Papéis
+                  </NavButton>
+                )}
+              </>
+            )}
           </nav>
         </div>
 
@@ -132,6 +160,8 @@ export default function PanelLayout({ user, onLogout, onLogoutAll }: PanelLayout
             {section === "geral" && <GeneralSettingsPage />}
             {section === "precos" && <RoomRatesTable />}
             {section === "calendario" && <RateOverridesCalendar />}
+            {section === "usuarios" && <UsersListPage />}
+            {section === "papeis" && <RolesListPage />}
           </div>
         )}
       </main>

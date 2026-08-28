@@ -301,6 +301,56 @@ describe('anti-self-lockout guard (§ 2.4)', () => {
   );
 });
 
+describe('GET /panel/users/:id/overrides', () => {
+  it('403s without admin.users', async () => {
+    const dueñoRoleId = await getDueñoRoleId(testDb);
+    const targetUserId = await insertUser(dueñoRoleId);
+    const roleId = await createRoleWithPermissions(testDb, []);
+    const token = await createSessionCookieForRole(testDb, roleId);
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/panel/users/${targetUserId}/overrides`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('200s with admin.users and returns the user\'s existing overrides', async () => {
+    const dueñoRoleId = await getDueñoRoleId(testDb);
+    const token = await createSessionCookieForRole(testDb, dueñoRoleId);
+    const staffRoleId = await createRoleWithPermissions(testDb, []);
+    const staffUserId = await insertUser(staffRoleId);
+    await testDb
+      .insertInto('user_permission_overrides')
+      .values({ user_id: staffUserId, permission: 'reservations.view', granted: true })
+      .execute();
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/panel/users/${staffUserId}/overrides`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual([{ permission: 'reservations.view', granted: true }]);
+  });
+
+  it('404s for a user that does not exist', async () => {
+    const dueñoRoleId = await getDueñoRoleId(testDb);
+    const token = await createSessionCookieForRole(testDb, dueñoRoleId);
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/panel/users/999999/overrides',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+    expect(response.statusCode).toBe(404);
+  });
+});
+
 describe('PATCH /panel/users/:id/overrides', () => {
   it('sets, then removes, an override', async () => {
     const dueñoRoleId = await getDueñoRoleId(testDb);

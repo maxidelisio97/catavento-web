@@ -1,6 +1,11 @@
 /**
- * GET/POST /panel/users, PATCH /panel/users/:id, PATCH /panel/users/:id/overrides,
+ * GET/POST /panel/users, PATCH /panel/users/:id, GET/PATCH /panel/users/:id/overrides,
  * POST /panel/users/:id/deactivate — SPEC-modulo-9-usuarios-permisos.md § 4.5.
+ *
+ * GET .../overrides was not in the original § 4.5 endpoint table (only the
+ * PATCH was) — added during 9B: the overrides editor UI needs to read a
+ * user's existing overrides before rendering, and PATCH is write-only
+ * (204, no body). Same admin.users gate as every other route in this file.
  */
 import type { FastifyError, FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from '@fastify/type-provider-zod';
@@ -45,6 +50,8 @@ const patchUserBodySchema = z
     is_active: z.boolean().optional(),
   })
   .refine((body) => Object.keys(body).length > 0, { message: 'Body must include at least one field' });
+
+const overrideResponseSchema = z.object({ permission: z.string(), granted: z.boolean() });
 
 const overrideEntrySchema = z.object({
   permission: z.string(),
@@ -164,6 +171,28 @@ const panelUsersPlugin: FastifyPluginAsync<PanelUsersPluginOptions> = async (fas
           if (err instanceof LastOwnerLockoutError) throw httpError(409, 'LAST_OWNER_LOCKOUT');
           throw err;
         }
+      },
+    );
+
+    typed.get(
+      '/panel/users/:id/overrides',
+      {
+        schema: {
+          params: z.object({ id: z.coerce.number().int().positive() }),
+          response: { 200: z.array(overrideResponseSchema), 404: errorResponseSchema },
+        },
+      },
+      async (request) => {
+        const { id } = request.params;
+
+        const user = await db.selectFrom('users').select('id').where('id', '=', id).executeTakeFirst();
+        if (!user) throw httpError(404, 'USER_NOT_FOUND');
+
+        return db
+          .selectFrom('user_permission_overrides')
+          .select(['permission', 'granted'])
+          .where('user_id', '=', id)
+          .execute();
       },
     );
 
