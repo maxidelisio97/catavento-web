@@ -29,8 +29,8 @@ const ROOMS = [
     name: "Suíte Casal",
     description: "Ideal para casais ou viajantes individuais.",
     images: [
-      { src: assetPath("images/Cuarto Casal/Cuarto-Casal1.webp"), alt: "Suíte Casal — cama de casal com painel decorativo de fibra na parede" },
       { src: assetPath("images/Cuarto Casal/Cuarto-Casal2.webp"), alt: "Suíte Casal — outro ângulo do quarto com a cama de casal" },
+      { src: assetPath("images/Cuarto Casal/Cuarto-Casal1.webp"), alt: "Suíte Casal — cama de casal com painel decorativo de fibra na parede" },
       { src: assetPath("images/Cuarto Casal/Cuarto-Casal3.webp"), alt: "Suíte Casal — banheiro com pia dupla e espelhos" },
       { src: assetPath("images/Cuarto Casal/Cuarto-Casal4.webp"), alt: "Suíte Casal — banheiro com vaso sanitário e box" },
       { src: assetPath("images/Cuarto Casal/Cuarto-Casal5.webp"), alt: "Suíte Casal — varanda com rede e cadeiras" },
