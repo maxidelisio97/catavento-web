@@ -17,6 +17,22 @@ algo parece mejorable, proponerlo antes de cambiar.
   `catavento-payments`), detrás de Nginx (ver `nginx.conf.example`).
   Deploy manual (sin CI/CD, decisión deliberada para tener control
   total), verificado contra el historial real del VPS:
+
+  Antes de tocar nada (paso 0, todo deploy de backend): backup de la
+  base. Nunca quedó documentado hasta ahora — se corría a mano en M7/M8
+  y se perdía entre sesiones. `pg_dump` a secas falla por permisos: hay
+  que correrlo como el usuario `postgres`.
+  ```bash
+  sudo -u postgres pg_dump -Fc catavento_db \
+    > /tmp/catavento_db_$(date +%Y%m%d_%H%M%S).dump
+  sudo mkdir -p /var/backups/catavento
+  sudo mv /tmp/catavento_db_*.dump /var/backups/catavento/
+  ```
+  El dump se escribe a `/tmp` primero porque `postgres` no tiene
+  permiso de escritura en `/var/backups/catavento/`; el `mv` (con un
+  usuario que sí puede) lo saca de `/tmp` para que no se pierda si el
+  sistema lo limpia.
+
   ```bash
   ssh catavento-vps
   cd /var/www/catavento-web
