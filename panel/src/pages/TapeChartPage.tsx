@@ -21,7 +21,11 @@ function useWindowNightsCount(): number {
   return isMobile ? 7 : 14;
 }
 
-export default function TapeChartPage() {
+interface TapeChartPageProps {
+  can: (permission: string) => boolean;
+}
+
+export default function TapeChartPage({ can }: TapeChartPageProps) {
   const windowNights = useWindowNightsCount();
   const [from, setFrom] = useState(todayISO());
   const [data, setData] = useState<TapeChartResult | null>(null);
@@ -73,6 +77,7 @@ export default function TapeChartPage() {
           reservationId={selectedReservationId}
           onClose={() => setSelectedReservationId(null)}
           onChanged={() => setRefreshKey((k) => k + 1)}
+          can={can}
         />
       )}
     </div>
