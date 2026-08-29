@@ -20,6 +20,23 @@ interface ReservationDrawerProps {
   onClose: () => void;
   /** Called after check-in/check-out/payment succeeds, so the tape chart behind can refresh. */
   onChanged?: () => void;
+  /** SPEC-modulo-9-usuarios-permisos.md § 6: effective permission check from usePermissions(). */
+  can: (permission: string) => boolean;
+}
+
+const NO_PERMISSION_MESSAGE = "Você não tem permissão para essa ação.";
+
+const PAYMENT_KIND_LABELS: Record<PanelPaymentKind, string> = {
+  deposit: "Depósito",
+  balance: "Saldo",
+  extra: "Extra",
+};
+
+// payments.charge covers deposit/balance, payments.extra covers the extra
+// kind — same split as the backend gate (SPEC § 6, "el botón se muestra si
+// tiene payments.charge O payments.extra; el selector de tipo se filtra").
+function permissionForPaymentKind(kind: PanelPaymentKind): string {
+  return kind === "extra" ? "payments.extra" : "payments.charge";
 }
 
 const ORIGIN_LABELS: Record<string, string> = { web: "Site", manual: "Manual", ota: "OTA" };
@@ -37,12 +54,23 @@ const PAYMENT_METHOD_LABELS: Record<PanelPaymentMethod, string> = {
   pix_manual: "PIX direto",
 };
 
+// SPEC § 6: a 403 here means the UI was out of sync with the effective
+// permission (stale usePermissions() cache, or a gate this drawer missed) —
+// the backend is the real barrier, this is just presenting that rejection
+// clearly instead of a generic/crude error.
+function describeActionError(err: unknown, fallback: string): string {
+  if (err instanceof ApiError) {
+    return err.status === 403 ? NO_PERMISSION_MESSAGE : err.message;
+  }
+  return fallback;
+}
+
 function whatsappHref(phone: string): string {
   const digits = phone.replace(/\D/g, "");
   return `https://wa.me/${digits}`;
 }
 
-export default function ReservationDrawer({ reservationId, onClose, onChanged }: ReservationDrawerProps) {
+export default function ReservationDrawer({ reservationId, onClose, onChanged, can }: ReservationDrawerProps) {
   const [detail, setDetail] = useState<ReservationDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [entered, setEntered] = useState(false);
@@ -96,7 +124,7 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged }:
       await checkIn(detail!.code!);
       reload();
     } catch (err) {
-      setActionError(err instanceof ApiError ? err.message : "Não foi possível fazer o check-in.");
+      setActionError(describeActionError(err, "Não foi possível fazer o check-in."));
     } finally {
       setActionBusy(false);
     }
@@ -109,7 +137,7 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged }:
       await checkOut(detail!.code!);
       reload();
     } catch (err) {
-      setActionError(err instanceof ApiError ? err.message : "Não foi possível fazer o check-out.");
+      setActionError(describeActionError(err, "Não foi possível fazer o check-out."));
     } finally {
       setActionBusy(false);
     }
@@ -145,14 +173,25 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged }:
         reload();
       }
     } catch (err) {
-      setActionError(err instanceof ApiError ? err.message : "Não foi possível registrar o pagamento.");
+      setActionError(describeActionError(err, "Não foi possível registrar o pagamento."));
     } finally {
       setActionBusy(false);
     }
   }
 
+  const canCharge = can("payments.charge");
+  const canExtra = can("payments.extra");
+  const allowedPaymentKinds = (Object.keys(PAYMENT_KIND_LABELS) as PanelPaymentKind[]).filter((kind) =>
+    can(permissionForPaymentKind(kind)),
+  );
+
   function openPaymentForm() {
     setPaymentIdempotencyKey(crypto.randomUUID());
+    // Default to a kind the user can actually submit — e.g. someone with
+    // only payments.extra must not land on the disallowed "balance" default.
+    if (allowedPaymentKinds.length > 0 && !allowedPaymentKinds.includes(paymentKind)) {
+      setPaymentKind(allowedPaymentKinds[0]!);
+    }
     setShowPaymentForm(true);
   }
 
@@ -291,7 +330,12 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged }:
 
               <div className="flex flex-wrap gap-2">
                 {detail.status === "confirmed" && (
-                  <Button size="sm" onClick={handleCheckIn} disabled={actionBusy}>
+                  <Button
+                    size="sm"
+                    onClick={handleCheckIn}
+                    disabled={actionBusy || !can("reservations.checkin")}
+                    title={!can("reservations.checkin") ? NO_PERMISSION_MESSAGE : undefined}
+                  >
                     Check-in
                   </Button>
                 )}
@@ -300,11 +344,13 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged }:
                   <Button
                     size="sm"
                     onClick={handleCheckOut}
-                    disabled={actionBusy || detail.money.balance_cents > 0}
+                    disabled={actionBusy || !can("reservations.checkout") || detail.money.balance_cents > 0}
                     title={
-                      detail.money.balance_cents > 0
-                        ? `Falta cobrar ${formatMoneyCents(detail.money.balance_cents)} — registre o pagamento para poder fechar`
-                        : undefined
+                      !can("reservations.checkout")
+                        ? NO_PERMISSION_MESSAGE
+                        : detail.money.balance_cents > 0
+                          ? `Falta cobrar ${formatMoneyCents(detail.money.balance_cents)} — registre o pagamento para poder fechar`
+                          : undefined
                     }
                   >
                     Check-out
@@ -316,7 +362,7 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged }:
                   </p>
                 )}
 
-                {!NOT_PAYABLE_STATUSES.has(detail.status) && (
+                {!NOT_PAYABLE_STATUSES.has(detail.status) && (canCharge || canExtra) && (
                   <Button size="sm" onClick={() => (showPaymentForm ? closePaymentForm() : openPaymentForm())}>
                     Registrar pagamento
                   </Button>
@@ -370,9 +416,11 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged }:
                         value={paymentKind}
                         onChange={(e) => setPaymentKind(e.target.value as PanelPaymentKind)}
                       >
-                        <option value="deposit">Depósito</option>
-                        <option value="balance">Saldo</option>
-                        <option value="extra">Extra</option>
+                        {allowedPaymentKinds.map((kind) => (
+                          <option key={kind} value={kind}>
+                            {PAYMENT_KIND_LABELS[kind]}
+                          </option>
+                        ))}
                       </SelectField>
                       <SelectField
                         id="payment-method"

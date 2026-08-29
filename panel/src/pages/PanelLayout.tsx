@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { PanelUser } from "../api/auth";
 import { usePermissions } from "../hooks/usePermissions";
 import TapeChartPage from "./TapeChartPage";
@@ -19,10 +19,14 @@ type PanelSection = "tape-chart" | "geral" | "precos" | "calendario" | "usuarios
 // Flat items for now, grouped only by a visual divider — once there are
 // enough sections under "Configuração" to earn a real submenu, promote this
 // to one, but a submenu component for 3 items would be pure ceremony today.
-const CONFIG_SECTIONS: { key: PanelSection; label: string }[] = [
-  { key: "geral", label: "Geral" },
-  { key: "precos", label: "Preços" },
-  { key: "calendario", label: "Calendário" },
+// SPEC-modulo-9-usuarios-permisos.md § 6: each config tab maps to the same
+// permission that gates its backend endpoint (config.settings covers both
+// Geral and Preços — they write to /panel/settings and /panel/room-rates,
+// both under config.settings per the 9A gate table).
+const CONFIG_SECTIONS: { key: PanelSection; label: string; permission: string }[] = [
+  { key: "geral", label: "Geral", permission: "config.settings" },
+  { key: "precos", label: "Preços", permission: "config.settings" },
+  { key: "calendario", label: "Calendário", permission: "config.calendar" },
 ];
 
 const SECTION_TITLES: Record<Exclude<PanelSection, "tape-chart">, string> = {
@@ -60,11 +64,43 @@ export default function PanelLayout({ user, onLogout, onLogoutAll }: PanelLayout
   const [section, setSection] = useState<PanelSection>("tape-chart");
   const permissions = usePermissions();
 
-  // § 5/§ 6: narrow, targeted gate for just these two nav items — hiding by
-  // permission ahead of 9C's general sweep. Each item gates independently:
-  // a user can have admin.users without admin.roles, or vice versa.
+  // § 6: whole-screen gates hide by permission — `has()` returns false while
+  // permissions are still loading, so this fails closed the same way the 9B
+  // admin nav items already did (nothing gated shows up before the fetch
+  // resolves). Each item gates independently: a user can have admin.users
+  // without admin.roles, or config.settings without config.calendar.
+  const showMapa = permissions.has("reservations.view");
   const showUsuarios = permissions.has("admin.users");
   const showPapeis = permissions.has("admin.roles");
+  const visibleConfigSections = CONFIG_SECTIONS.filter(({ permission }) => permissions.has(permission));
+
+  // Guards render, not just nav visibility: if `section` still points at a
+  // screen the user turns out not to have permission for (e.g. the
+  // "tape-chart" default with no reservations.view), don't render it just
+  // because the nav button that would have led there is hidden.
+  const accessibleSectionsOrdered: PanelSection[] = [
+    ...(showMapa ? (["tape-chart"] as const) : []),
+    ...visibleConfigSections.map((s) => s.key),
+    ...(showUsuarios ? (["usuarios"] as const) : []),
+    ...(showPapeis ? (["papeis"] as const) : []),
+  ];
+  const accessibleSections = new Set(accessibleSectionsOrdered);
+  const canRenderSection = accessibleSections.has(section);
+
+  // review-risk (9C, contexto fresco): sin esto, un usuario sin
+  // reservations.view (el default "tape-chart") pero con algún otro
+  // permiso (ej. solo config.settings) veía "sem permissão" en vez de
+  // aterrizar en la pantalla que sí puede usar. Redirige una sola vez,
+  // apenas se resuelven los permisos, a la primera sección accesible —
+  // nunca mientras loaded es false (evita pisar el "tape-chart" default
+  // con un salto prematuro basado en un set todavía vacío por carga).
+  useEffect(() => {
+    if (!permissions.loaded) return;
+    if (accessibleSections.has(section)) return;
+    if (accessibleSectionsOrdered.length === 0) return;
+    setSection(accessibleSectionsOrdered[0]!);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [permissions.loaded, section]);
 
   async function handleLogoutAll() {
     setMenuOpen(false);
@@ -86,13 +122,17 @@ export default function PanelLayout({ user, onLogout, onLogoutAll }: PanelLayout
           </span>
 
           <nav className="flex items-center gap-1">
-            <NavButton active={section === "tape-chart"} onClick={() => setSection("tape-chart")}>
-              Mapa
-            </NavButton>
+            {showMapa && (
+              <NavButton active={section === "tape-chart"} onClick={() => setSection("tape-chart")}>
+                Mapa
+              </NavButton>
+            )}
 
-            <span className="w-px h-5 bg-panel-200 mx-1" aria-hidden="true" />
+            {(showMapa || visibleConfigSections.length > 0) && (
+              <span className="w-px h-5 bg-panel-200 mx-1" aria-hidden="true" />
+            )}
 
-            {CONFIG_SECTIONS.map(({ key, label }) => (
+            {visibleConfigSections.map(({ key, label }) => (
               <NavButton key={key} active={section === key} onClick={() => setSection(key)}>
                 {label}
               </NavButton>
@@ -151,8 +191,12 @@ export default function PanelLayout({ user, onLogout, onLogoutAll }: PanelLayout
       </header>
 
       <main className="p-6">
-        {section === "tape-chart" && <TapeChartPage />}
-        {section !== "tape-chart" && (
+        {!permissions.loaded && <p className="text-sm text-panel-500">Carregando...</p>}
+        {permissions.loaded && !canRenderSection && (
+          <p className="text-sm text-panel-500">Você não tem permissão para acessar esta seção.</p>
+        )}
+        {canRenderSection && section === "tape-chart" && <TapeChartPage can={permissions.has} />}
+        {canRenderSection && section !== "tape-chart" && (
           <div>
             <h1 className="text-[22px] font-semibold tracking-tight text-panel-900 mb-4">
               {SECTION_TITLES[section]}
