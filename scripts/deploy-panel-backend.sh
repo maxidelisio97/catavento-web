@@ -75,8 +75,8 @@ rsync -a --delete dist/ "$PANEL_DIST_DIR/"
 sudo chown -R www-data:www-data "$PANEL_DIST_DIR"
 
 echo "=== Verificación post-deploy: panel ==="
-echo "--- buscando el cambio del fix de overrides en el build servido ---"
-if grep -rq "Salve a troca de papel antes de editar" "$PANEL_DIST_DIR"/assets/*.js; then
+echo "--- buscando el cambio de 9C (UX de permisos) en el build servido ---"
+if grep -rq "Você não tem permissão para essa ação" "$PANEL_DIST_DIR"/assets/*.js; then
   echo "OK: el cambio está presente en el build servido."
 else
   echo "FALLO: el cambio NO aparece en el build servido — el deploy del panel quedó viejo." >&2
