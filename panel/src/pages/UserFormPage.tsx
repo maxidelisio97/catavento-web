@@ -70,6 +70,12 @@ export default function UserFormPage({ user, roles, onSaved, onCancel }: UserFor
 
   const selectedRole = roles.find((role) => String(role.id) === roleId) ?? null;
   const rolePermissions = new Set(selectedRole?.permissions ?? []);
+  // A role picked in the dropdown but not yet saved has no effect on the
+  // backend — painting overrides against it would show a permission state
+  // that doesn't exist yet. Disable the section entirely instead of showing
+  // it against a hypothetical role: the inconsistent state becomes
+  // impossible to render, not just explained.
+  const roleChangePending = user !== null && roleId !== roleIdToString(user.role_id);
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -200,23 +206,25 @@ export default function UserFormPage({ user, roles, onSaved, onCancel }: UserFor
           <div>
             <h2 className="text-[15px] font-semibold text-panel-900">Permissões</h2>
             <p className="text-[12.5px] text-panel-500 mt-0.5">
-              {selectedRole?.is_owner
-                ? `O papel "${selectedRole.name}" tem acesso total por definição — os overrides não têm efeito sobre um Dueño (§ 2.4).`
-                : selectedRole
-                  ? `O papel "${selectedRole.name}" dá as permissões marcadas com ✓ abaixo. Use os overrides para ajustar caso a caso.`
-                  : "Este usuário não tem papel — nenhuma permissão vem do papel. Overrides ainda podem conceder permissões pontuais."}
+              {roleChangePending
+                ? "Salve a troca de papel antes de editar as permissões individuais."
+                : selectedRole?.is_owner
+                  ? `O papel "${selectedRole.name}" tem acesso total por definição — os overrides não têm efeito sobre um Dueño (§ 2.4).`
+                  : selectedRole
+                    ? `O papel "${selectedRole.name}" dá as permissões marcadas com ✓ abaixo. Use os overrides para ajustar caso a caso.`
+                    : "Este usuário não tem papel — nenhuma permissão vem do papel. Overrides ainda podem conceder permissões pontuais."}
             </p>
           </div>
 
-          {!selectedRole?.is_owner && !catalog && !overridesError && (
+          {!roleChangePending && !selectedRole?.is_owner && !catalog && !overridesError && (
             <p className="text-sm text-panel-500">Carregando...</p>
           )}
-          {overridesError && (
+          {!roleChangePending && overridesError && (
             <p role="alert" className="text-sm text-danger-500">
               {overridesError}
             </p>
           )}
-          {!selectedRole?.is_owner && catalog && (
+          {!roleChangePending && !selectedRole?.is_owner && catalog && (
             <>
               <OverridesEditor
                 permissions={catalog}
