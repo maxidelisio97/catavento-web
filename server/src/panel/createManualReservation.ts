@@ -178,6 +178,7 @@ export async function createManualReservation(
           method: input.paymentMethod!,
           amount_cents: result.depositCents ?? 0,
           status: 'received',
+          received_at: new Date(),
           changed_by: input.createdBy,
         })
         .returning('id')
@@ -194,6 +195,7 @@ export async function createManualReservation(
           method: input.paymentMethod!,
           amount_cents: result.totalCents,
           status: 'received',
+          received_at: new Date(),
           changed_by: input.createdBy,
         })
         .returning('id')

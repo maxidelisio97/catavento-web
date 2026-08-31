@@ -132,7 +132,12 @@ async function runProcessPaymentReceived(
   if (!alreadyReceived) {
     await trx
       .updateTable('payments')
-      .set({ status: 'received', raw_last_event: JSON.stringify(input.rawEvent), updated_at: new Date() })
+      .set({
+        status: 'received',
+        received_at: new Date(),
+        raw_last_event: JSON.stringify(input.rawEvent),
+        updated_at: new Date(),
+      })
       .where('id', '=', payment.id)
       .execute();
 
