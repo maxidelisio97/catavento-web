@@ -25,6 +25,26 @@ export type JsonValue = JsonArray | JsonObject | JsonPrimitive;
 
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
+export interface CashExpenseCategories {
+  active: Generated<boolean>;
+  created_at: Generated<Timestamp>;
+  id: Generated<number>;
+  name: string;
+}
+
+export interface CashMovements {
+  amount_cents: number;
+  created_at: Generated<Timestamp>;
+  created_by: number;
+  deleted_at: Timestamp | null;
+  description: string | null;
+  expense_category_id: number | null;
+  id: Generated<number>;
+  kind: string;
+  method: string | null;
+  occurred_on: Timestamp;
+}
+
 export interface Payments {
   amount_cents: number;
   asaas_payment_id: string | null;
@@ -38,6 +58,7 @@ export interface Payments {
   kind: Generated<string>;
   method: string;
   raw_last_event: Json | null;
+  received_at: Timestamp | null;
   reservation_id: number;
   status: Generated<string>;
   updated_at: Generated<Timestamp>;
@@ -215,6 +236,8 @@ export interface Users {
 }
 
 export interface DB {
+  cash_expense_categories: CashExpenseCategories;
+  cash_movements: CashMovements;
   payments: Payments;
   permissions: Permissions;
   pgmigrations: Pgmigrations;

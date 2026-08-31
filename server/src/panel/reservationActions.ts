@@ -209,6 +209,7 @@ export async function registerPayment(db: Kysely<DB>, input: RegisterPaymentInpu
         method: input.method,
         amount_cents: input.amountCents,
         status: 'received',
+        received_at: new Date(),
         changed_by: input.changedBy,
         idempotency_key: idempotencyKey,
       })

@@ -160,7 +160,7 @@ export async function createOrReuseAsaasPayment(
         // build new logic on top of assuming this persists.
         await trx
           .updateTable('payments')
-          .set({ status: 'received', updated_at: new Date() })
+          .set({ status: 'received', received_at: new Date(), updated_at: new Date() })
           .where('id', '=', existing.id)
           .execute();
         throw new PaymentAlreadyReceivedError();
