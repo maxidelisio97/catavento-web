@@ -93,6 +93,30 @@ describe('authorization', () => {
     });
     expect(response.statusCode).toBe(403);
   });
+
+  it('creates a category with only cash.manage (no cash.view needed)', async () => {
+    const token = await tokenWith(['cash.manage']);
+    const app = buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/cash/expense-categories',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { name: 'Sueldos' },
+    });
+    expect(response.statusCode).toBe(201);
+  });
+
+  it('403s POST /panel/cash/expense-categories without any cash permission', async () => {
+    const token = await tokenWith([]);
+    const app = buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/cash/expense-categories',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { name: 'Sueldos' },
+    });
+    expect(response.statusCode).toBe(403);
+  });
 });
 
 describe('expense categories', () => {

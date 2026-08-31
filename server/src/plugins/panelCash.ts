@@ -245,7 +245,10 @@ const panelCashPlugin: FastifyPluginAsync<PanelCashPluginOptions> = async (fasti
 
     // --- Movements ---
 
-    protectedScope.addHook('onRequest', requireAnyPermission(db, ['cash.view', 'cash.income', 'cash.expense']));
+    protectedScope.addHook(
+      'onRequest',
+      requireAnyPermission(db, ['cash.view', 'cash.income', 'cash.expense', 'cash.manage']),
+    );
 
     typed.get(
       '/panel/cash/movements',
