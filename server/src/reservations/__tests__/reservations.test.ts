@@ -4,6 +4,41 @@ import { sql } from 'kysely';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { testDb, testPool } from '../../db/testClient.js';
 import { registerErrorHandler } from '../../errorHandler.js';
+import { addDaysUTC, formatDateUTC, parseDateUTC, todayISO } from '../../shared/dateUtils.js';
+import { calculatePrice } from '../../pricing/calculatePrice.js';
+
+// Hardcoded absolute dates are a time bomb: this file used to read
+// check_in: '2026-09-01' everywhere, which was safely in the future when
+// written but eventually became "today" and then the past, making
+// `check_in cannot be in the past` (src/plugins/reservations.ts) fail every
+// POST test in this file with a 400 instead of their expected status — not
+// a code regression, just the wall clock catching up to a literal. Computed
+// relative to todayISO() instead, same pattern already used in
+// panelTapeChart.test.ts / panelRateOverrides.test.ts. CHECK_IN is
+// tomorrow, not today, to keep a full day of buffer against the UTC
+// midnight boundary (real machine clocks run ahead of a session's stated
+// "today" — this is exactly what broke here).
+const CHECK_IN = formatDateUTC(addDaysUTC(parseDateUTC(todayISO()), 1));
+const CHECK_OUT = formatDateUTC(addDaysUTC(parseDateUTC(todayISO()), 3));
+
+// CHECK_IN/CHECK_OUT float with the real calendar, so which of their two
+// nights land on the Friday/Saturday weekend rate (calculatePrice.ts)
+// shifts week to week — a hardcoded expected total would just trade one
+// time bomb for another. Mirrors insertTestRoom's default fixture
+// (capacity 2 ⇒ occupancy 2, weekday_cents 10000, weekend_cents 15000, no
+// overrides) so the two stay in sync if that fixture ever changes.
+const EXPECTED_TOTAL_CENTS = (() => {
+  const result = calculatePrice({
+    checkIn: CHECK_IN,
+    checkOut: CHECK_OUT,
+    guests: 2,
+    roomRates: [{ occupancy: 2, weekdayCents: 10000, weekendCents: 15000 }],
+    rateOverrides: [],
+    roomDefaultMinStay: 1,
+  });
+  if (result.status !== 'available') throw new Error(`Unexpected calculatePrice status: ${result.status}`);
+  return result.totalCents;
+})();
 
 const getPixQrCode = vi.fn();
 const getPayment = vi.fn();
@@ -102,14 +137,14 @@ describe('POST /api/reservations', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/reservations',
-      payload: { room_id: roomId, check_in: '2026-09-01', check_out: '2026-09-03', adults: 2, ...validGuest },
+      payload: { room_id: roomId, check_in: CHECK_IN, check_out: CHECK_OUT, adults: 2, ...validGuest },
     });
 
     expect(response.statusCode).toBe(201);
     const body = response.json();
     expect(body.code).toMatch(/^[A-Z0-9]{8}$/);
     expect(body.status).toBe('pending_payment');
-    expect(body.total_cents).toBe(20000);
+    expect(body.total_cents).toBe(EXPECTED_TOTAL_CENTS);
     // Módulo 5: the guest reserves a TYPE, never a physical unit — the
     // create response must never leak the internal assignment.
     expect(body).not.toHaveProperty('room_unit_id');
@@ -126,7 +161,7 @@ describe('POST /api/reservations', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/reservations',
-      payload: { room_id: roomId, check_in: '2026-09-01', check_out: '2026-09-03', adults: 3, ...validGuest },
+      payload: { room_id: roomId, check_in: CHECK_IN, check_out: CHECK_OUT, adults: 3, ...validGuest },
     });
 
     expect(response.statusCode).toBe(400);
@@ -141,8 +176,8 @@ describe('POST /api/reservations', () => {
       url: '/api/reservations',
       payload: {
         room_id: roomId,
-        check_in: '2026-09-01',
-        check_out: '2026-09-03',
+        check_in: CHECK_IN,
+        check_out: CHECK_OUT,
         adults: 1,
         children: 1,
         children_ages: [5],
@@ -163,8 +198,8 @@ describe('POST /api/reservations', () => {
       url: '/api/reservations',
       payload: {
         room_id: roomId,
-        check_in: '2026-09-01',
-        check_out: '2026-09-03',
+        check_in: CHECK_IN,
+        check_out: CHECK_OUT,
         adults: 2,
         babies: 1,
         ...validGuest,
@@ -184,8 +219,8 @@ describe('POST /api/reservations', () => {
       url: '/api/reservations',
       payload: {
         room_id: roomId,
-        check_in: '2026-09-01',
-        check_out: '2026-09-03',
+        check_in: CHECK_IN,
+        check_out: CHECK_OUT,
         adults: 2,
         children: 2,
         children_ages: [5],
@@ -208,8 +243,8 @@ describe('POST /api/reservations', () => {
       url: '/api/reservations',
       payload: {
         room_id: roomId,
-        check_in: '2026-09-01',
-        check_out: '2026-09-03',
+        check_in: CHECK_IN,
+        check_out: CHECK_OUT,
         adults: 1,
         children: 1,
         children_ages: [age],
@@ -229,8 +264,8 @@ describe('POST /api/reservations', () => {
       url: '/api/reservations',
       payload: {
         room_id: roomId,
-        check_in: '2026-09-01',
-        check_out: '2026-09-03',
+        check_in: CHECK_IN,
+        check_out: CHECK_OUT,
         adults: 2,
         children: 2,
         babies: 1,
@@ -253,8 +288,8 @@ describe('POST /api/reservations', () => {
       .insertInto('reservations')
       .values({
         room_id: roomId,
-        check_in: '2026-09-01',
-        check_out: '2026-09-03',
+        check_in: CHECK_IN,
+        check_out: CHECK_OUT,
         guests: 2,
         status: 'confirmed',
         total_cents: 10000,
@@ -266,7 +301,7 @@ describe('POST /api/reservations', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/reservations',
-      payload: { room_id: roomId, check_in: '2026-09-01', check_out: '2026-09-03', adults: 2, ...validGuest },
+      payload: { room_id: roomId, check_in: CHECK_IN, check_out: CHECK_OUT, adults: 2, ...validGuest },
     });
 
     expect(response.statusCode).toBe(409);
@@ -284,7 +319,7 @@ describe('POST /api/reservations', () => {
   it.each([
     ['invalid email', { guest_email: 'not-an-email' }],
     ['short name', { guest_name: 'Al' }],
-    ['inverted range', { check_in: '2026-09-05', check_out: '2026-09-01' }],
+    ['inverted range', { check_in: CHECK_OUT, check_out: CHECK_IN }],
   ])('rejects %s with 400 and a per-field message', async (_label, override) => {
     const roomId = await insertTestRoom();
     const app = buildApp();
@@ -294,8 +329,8 @@ describe('POST /api/reservations', () => {
       url: '/api/reservations',
       payload: {
         room_id: roomId,
-        check_in: '2026-09-01',
-        check_out: '2026-09-03',
+        check_in: CHECK_IN,
+        check_out: CHECK_OUT,
         adults: 2,
         ...validGuest,
         ...override,
@@ -315,7 +350,7 @@ describe('GET /api/reservations/:code', () => {
     const created = await app.inject({
       method: 'POST',
       url: '/api/reservations',
-      payload: { room_id: roomId, check_in: '2026-09-01', check_out: '2026-09-03', adults: 2, ...validGuest },
+      payload: { room_id: roomId, check_in: CHECK_IN, check_out: CHECK_OUT, adults: 2, ...validGuest },
     });
     const { code } = created.json();
 
@@ -345,8 +380,8 @@ describe('GET /api/reservations/:code', () => {
       .insertInto('reservations')
       .values({
         room_id: roomId,
-        check_in: '2026-09-01',
-        check_out: '2026-09-03',
+        check_in: CHECK_IN,
+        check_out: CHECK_OUT,
         guests: 2,
         status: 'pending_payment',
         expires_at: new Date(Date.now() - 60_000),
@@ -377,8 +412,8 @@ describe('GET /api/reservations/:code', () => {
       .insertInto('reservations')
       .values({
         room_id: roomId,
-        check_in: '2026-09-01',
-        check_out: '2026-09-03',
+        check_in: CHECK_IN,
+        check_out: CHECK_OUT,
         guests: 2,
         status: 'pending_payment',
         expires_at: new Date(Date.now() + 30 * 60 * 1000),
@@ -422,8 +457,8 @@ describe('GET /api/reservations/:code', () => {
       .insertInto('reservations')
       .values({
         room_id: roomId,
-        check_in: '2026-09-01',
-        check_out: '2026-09-03',
+        check_in: CHECK_IN,
+        check_out: CHECK_OUT,
         guests: 2,
         status: 'pending_payment',
         expires_at: new Date(Date.now() + 30 * 60 * 1000),
@@ -465,8 +500,8 @@ describe('GET /api/reservations/:code', () => {
         .insertInto('reservations')
         .values({
           room_id: roomId,
-          check_in: '2026-09-01',
-          check_out: '2026-09-03',
+          check_in: CHECK_IN,
+          check_out: CHECK_OUT,
           guests: 2,
           status: 'pending_payment',
           expires_at: new Date(Date.now() + 30 * 60 * 1000),
@@ -511,8 +546,8 @@ describe('GET /api/reservations/:code', () => {
       .insertInto('reservations')
       .values({
         room_id: roomId,
-        check_in: '2026-09-01',
-        check_out: '2026-09-03',
+        check_in: CHECK_IN,
+        check_out: CHECK_OUT,
         guests: 2,
         status: 'pending_payment',
         expires_at: new Date(Date.now() + 30 * 60 * 1000),
@@ -572,8 +607,8 @@ describe('POST /api/reservations/:code/payment', () => {
       .insertInto('reservations')
       .values({
         room_id: roomId,
-        check_in: '2026-09-01',
-        check_out: '2026-09-03',
+        check_in: CHECK_IN,
+        check_out: CHECK_OUT,
         guests: 2,
         status: 'confirmed',
         total_cents: 20000,
@@ -600,8 +635,8 @@ describe('POST /api/reservations/:code/payment', () => {
       .insertInto('reservations')
       .values({
         room_id: roomId,
-        check_in: '2026-09-01',
-        check_out: '2026-09-03',
+        check_in: CHECK_IN,
+        check_out: CHECK_OUT,
         guests: 2,
         status: 'pending_payment',
         expires_at: new Date(Date.now() - 60_000),
@@ -631,8 +666,8 @@ describe('POST /api/reservations — concurrency', () => {
 
     const payload = {
       room_id: roomId,
-      check_in: '2026-10-01',
-      check_out: '2026-10-03',
+      check_in: CHECK_IN,
+      check_out: CHECK_OUT,
       adults: 2,
       ...validGuest,
     };
