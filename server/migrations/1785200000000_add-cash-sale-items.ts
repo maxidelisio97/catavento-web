@@ -49,6 +49,14 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
     check: '(sale_item_id IS NULL AND quantity IS NULL) OR (sale_item_id IS NOT NULL AND quantity IS NOT NULL)',
   });
 
+  // Symmetric with cash_movements_expense_category_kind_check above: a sale
+  // (sale_item_id) only makes sense on an income row. Without this, a PATCH
+  // could attach a catalog item to an expense row (nothing else stops it —
+  // PATCH's body has no `kind` field to check against at the Zod layer).
+  pgm.addConstraint('cash_movements', 'cash_movements_sale_item_kind_check', {
+    check: "kind = 'income' OR sale_item_id IS NULL",
+  });
+
   // The per-product report (10B, next batch) groups by sale_item_id within
   // a date range on live (non-deleted) rows — same filter shape as
   // idx_cash_movements_occurred_on from 10A.
@@ -60,6 +68,7 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
 
 export async function down(pgm: MigrationBuilder): Promise<void> {
   pgm.dropIndex('cash_movements', 'sale_item_id', { name: 'idx_cash_movements_sale_item_id' });
+  pgm.dropConstraint('cash_movements', 'cash_movements_sale_item_kind_check');
   pgm.dropConstraint('cash_movements', 'cash_movements_sale_item_quantity_check');
   pgm.dropColumn('cash_movements', 'quantity');
   pgm.dropColumn('cash_movements', 'sale_item_id');

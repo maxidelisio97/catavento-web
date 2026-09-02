@@ -31,7 +31,7 @@ function buildApp() {
 }
 
 async function resetDb(): Promise<void> {
-  await sql`TRUNCATE TABLE cash_movements, cash_expense_categories, payments, reservations, rooms, sessions, user_permission_overrides, users RESTART IDENTITY CASCADE`.execute(
+  await sql`TRUNCATE TABLE cash_movements, cash_expense_categories, cash_sale_items, payments, reservations, rooms, sessions, user_permission_overrides, users RESTART IDENTITY CASCADE`.execute(
     testDb,
   );
 }
@@ -114,6 +114,8 @@ async function insertMovement(input: {
   amountCents: number;
   occurredOn: string;
   createdBy: number;
+  saleItemId?: number;
+  quantity?: number;
 }): Promise<number> {
   const row = await testDb
     .insertInto('cash_movements')
@@ -122,7 +124,18 @@ async function insertMovement(input: {
       amount_cents: input.amountCents,
       occurred_on: input.occurredOn,
       created_by: input.createdBy,
+      sale_item_id: input.saleItemId ?? null,
+      quantity: input.quantity ?? null,
     })
+    .returning('id')
+    .executeTakeFirstOrThrow();
+  return row.id;
+}
+
+async function insertSaleItem(name: string): Promise<number> {
+  const row = await testDb
+    .insertInto('cash_sale_items')
+    .values({ name })
     .returning('id')
     .executeTakeFirstOrThrow();
   return row.id;
@@ -398,5 +411,85 @@ describe('net calculation, including a refund', () => {
       reservation_id: reservationId,
     });
     expect(refundEntry.concept).toContain('Reembolso');
+  });
+});
+
+describe('hybrid catalog sale (§ 6, 10B)', () => {
+  it('a catalog sale with no description shows the item name and quantity as its concept', async () => {
+    const fixtureUser = await insertFixtureUser();
+    const saleItemId = await insertSaleItem('Cerveja');
+    await insertMovement({
+      kind: 'income',
+      amountCents: 2400,
+      occurredOn: '2026-08-15',
+      createdBy: fixtureUser,
+      saleItemId,
+      quantity: 2,
+    });
+
+    const token = await tokenWithCashView();
+    const app = buildApp();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/panel/cash/ledger?from=2026-08-01&to=2026-08-31',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+
+    const entry = response.json().entries.find((e: { source: string }) => e.source === 'cash_movement');
+    expect(entry.concept).toBe('Cerveja (x2)');
+    expect(entry.amount_cents).toBe(2400);
+  });
+
+  it('a typed description wins over the derived "item (xN)" concept when both are present', async () => {
+    const fixtureUser = await insertFixtureUser();
+    const saleItemId = await insertSaleItem('Cerveja');
+    await testDb
+      .insertInto('cash_movements')
+      .values({
+        kind: 'income',
+        amount_cents: 2400,
+        occurred_on: '2026-08-15',
+        created_by: fixtureUser,
+        sale_item_id: saleItemId,
+        quantity: 2,
+        description: 'Cerveja para o casal do 101',
+      })
+      .execute();
+
+    const token = await tokenWithCashView();
+    const app = buildApp();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/panel/cash/ledger?from=2026-08-01&to=2026-08-31',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+
+    const entry = response.json().entries.find((e: { source: string }) => e.source === 'cash_movement');
+    expect(entry.concept).toBe('Cerveja para o casal do 101');
+  });
+
+  it('a deactivated sale item still shows its name on a past sale (history, not a live lookup)', async () => {
+    const fixtureUser = await insertFixtureUser();
+    const saleItemId = await insertSaleItem('Tour lancha');
+    await insertMovement({
+      kind: 'income',
+      amountCents: 5000,
+      occurredOn: '2026-08-15',
+      createdBy: fixtureUser,
+      saleItemId,
+      quantity: 1,
+    });
+    await testDb.updateTable('cash_sale_items').set({ active: false }).where('id', '=', saleItemId).execute();
+
+    const token = await tokenWithCashView();
+    const app = buildApp();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/panel/cash/ledger?from=2026-08-01&to=2026-08-31',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+
+    const entry = response.json().entries.find((e: { source: string }) => e.source === 'cash_movement');
+    expect(entry.concept).toBe('Tour lancha (x1)');
   });
 });

@@ -78,14 +78,30 @@ const movementResponseSchema = z.object({
   occurred_on: z.string(),
   description: z.string().nullable(),
   expense_category_id: z.number().nullable(),
+  sale_item_id: z.number().nullable(),
+  quantity: z.number().nullable(),
   method: z.string().nullable(),
   created_by: z.number(),
   created_at: z.string(),
 });
 
-// § 5.2: an expense's form has a category select; a manual income has none
-// (no sale_item_id/catalog until 10B) — so the presence of
-// expense_category_id is tied to kind, not left to caller judgment.
+// § 6 (10B) — the hybrid sale: sale_item_id + quantity picks from the
+// catalog (cash_sale_items), amount_cents is what it actually sold for —
+// the catalog's default_price_cents is only a form default the frontend
+// pre-fills, re-editable before saving. amount_cents is what's stored and
+// is what the per-product report will sum; it's never recomputed from
+// default_price_cents × quantity later, so a future catalog price change
+// can't reshape a past sale's numbers (confirmed with Maxi — same "precio
+// congelado" principle as reservation pricing). No sale_item_id + a
+// description = the free-concept path, unchanged from 10A.
+//
+// § 5.2: an expense's form has a category select; a sale (income) form has
+// either a catalog pick or a free concept — so both expense_category_id and
+// sale_item_id are tied to kind, not left to caller judgment. sale_item_id
+// and quantity are always provided as a pair (also enforced by the DB
+// constraint cash_movements_sale_item_quantity_check as the source of
+// truth) — the report by product depends on quantity, so it's never one
+// without the other.
 const createMovementBodySchema = z
   .object({
     kind: z.enum(['income', 'expense']),
@@ -93,6 +109,8 @@ const createMovementBodySchema = z
     occurred_on: occurredOnSchema,
     description: z.string().optional(),
     expense_category_id: z.number().int().positive().optional(),
+    sale_item_id: z.number().int().positive().optional(),
+    quantity: z.number().int().positive().optional(),
     method: z.string().optional(),
   })
   .refine((body) => body.kind === 'expense' || body.expense_category_id === undefined, {
@@ -100,16 +118,30 @@ const createMovementBodySchema = z
   })
   .refine((body) => body.kind === 'income' || body.expense_category_id !== undefined, {
     message: 'expense_category_id is required for kind=expense',
+  })
+  .refine((body) => body.kind === 'income' || body.sale_item_id === undefined, {
+    message: 'sale_item_id is only valid for kind=income',
+  })
+  .refine((body) => (body.sale_item_id === undefined) === (body.quantity === undefined), {
+    message: 'sale_item_id and quantity must be provided together',
   });
 
 // Editing a movement's kind is out of scope — a mis-entered movement is
 // soft-deleted and re-created, not flipped from income to expense in place.
+// sale_item_id/quantity ARE patchable (correcting a mis-picked item or a
+// wrong quantity is a normal edit, same as amount_cents) — the pairing rule
+// isn't re-validated here at the Zod layer because a PATCH is partial by
+// design (e.g. quantity alone, leaving an already-set sale_item_id as-is);
+// the DB constraint is the actual source of truth and its 23514 is
+// translated to a clean 400 below, same pattern as expense_category_id.
 const patchMovementBodySchema = z
   .object({
     amount_cents: z.number().int().positive().optional(),
     occurred_on: occurredOnSchema.optional(),
     description: z.string().optional(),
     expense_category_id: z.number().int().positive().nullable().optional(),
+    sale_item_id: z.number().int().positive().nullable().optional(),
+    quantity: z.number().int().positive().nullable().optional(),
     method: z.string().optional(),
   })
   .refine((body) => Object.keys(body).length > 0, { message: 'Body must include at least one field' });
@@ -159,6 +191,31 @@ function httpError(statusCode: number, message: string): FastifyError {
   err.code = 'PANEL_CASH_ERROR';
   err.name = 'PanelCashError';
   return err;
+}
+
+// pg's error carries the violated constraint's name in `.constraint` —
+// distinguishing which CHECK fired matters now that cash_movements has
+// three of them (expense_category/kind, sale_item/quantity pairing,
+// sale_item/kind), where before there was only one.
+const CHECK_VIOLATION_MESSAGES: Record<string, string> = {
+  cash_movements_expense_category_kind_check: 'EXPENSE_CATEGORY_ID_NOT_ALLOWED_FOR_INCOME',
+  cash_movements_sale_item_quantity_check: 'SALE_ITEM_ID_AND_QUANTITY_MUST_BE_PAIRED',
+  cash_movements_sale_item_kind_check: 'SALE_ITEM_ID_NOT_ALLOWED_FOR_EXPENSE',
+};
+
+function rethrowAsCleanError(err: unknown): never {
+  if (err && typeof err === 'object' && 'code' in err) {
+    if (err.code === '23514' && 'constraint' in err && typeof err.constraint === 'string') {
+      throw httpError(400, CHECK_VIOLATION_MESSAGES[err.constraint] ?? 'INVALID_MOVEMENT');
+    }
+    // sale_item_id references cash_sale_items — a caller can pass an id
+    // that doesn't exist (typo, stale form). Same "no raw 500 from a DB
+    // constraint" rule as the CHECK violations above.
+    if (err.code === '23503') {
+      throw httpError(400, 'SALE_ITEM_NOT_FOUND');
+    }
+  }
+  throw err;
 }
 
 // § 7: cash.income gates income movements, cash.expense gates expense
@@ -380,6 +437,8 @@ const panelCashPlugin: FastifyPluginAsync<PanelCashPluginOptions> = async (fasti
             sql<string>`occurred_on::text`.as('occurred_on'),
             'description',
             'expense_category_id',
+            'sale_item_id',
+            'quantity',
             'method',
             'created_by',
             'created_at',
@@ -412,36 +471,44 @@ const panelCashPlugin: FastifyPluginAsync<PanelCashPluginOptions> = async (fasti
       async (request, reply) => {
         await assertCanWriteKind(db, request.user!.id, request.body.kind);
 
-        const row = await db
-          .insertInto('cash_movements')
-          .values({
-            kind: request.body.kind,
-            amount_cents: request.body.amount_cents,
-            occurred_on: request.body.occurred_on,
-            description: request.body.description ?? null,
-            expense_category_id: request.body.expense_category_id ?? null,
-            method: request.body.method ?? null,
-            created_by: request.user!.id,
-          })
-          .returning([
-            'id',
-            'kind',
-            'amount_cents',
-            sql<string>`occurred_on::text`.as('occurred_on'),
-            'description',
-            'expense_category_id',
-            'method',
-            'created_by',
-            'created_at',
-          ])
-          .executeTakeFirstOrThrow();
+        try {
+          const row = await db
+            .insertInto('cash_movements')
+            .values({
+              kind: request.body.kind,
+              amount_cents: request.body.amount_cents,
+              occurred_on: request.body.occurred_on,
+              description: request.body.description ?? null,
+              expense_category_id: request.body.expense_category_id ?? null,
+              sale_item_id: request.body.sale_item_id ?? null,
+              quantity: request.body.quantity ?? null,
+              method: request.body.method ?? null,
+              created_by: request.user!.id,
+            })
+            .returning([
+              'id',
+              'kind',
+              'amount_cents',
+              sql<string>`occurred_on::text`.as('occurred_on'),
+              'description',
+              'expense_category_id',
+              'sale_item_id',
+              'quantity',
+              'method',
+              'created_by',
+              'created_at',
+            ])
+            .executeTakeFirstOrThrow();
 
-        reply.status(201);
-        return {
-          ...row,
-          kind: row.kind as 'income' | 'expense',
-          created_at: row.created_at.toISOString(),
-        };
+          reply.status(201);
+          return {
+            ...row,
+            kind: row.kind as 'income' | 'expense',
+            created_at: row.created_at.toISOString(),
+          };
+        } catch (err) {
+          rethrowAsCleanError(err);
+        }
       },
     );
 
@@ -479,6 +546,8 @@ const panelCashPlugin: FastifyPluginAsync<PanelCashPluginOptions> = async (fasti
               sql<string>`occurred_on::text`.as('occurred_on'),
               'description',
               'expense_category_id',
+              'sale_item_id',
+              'quantity',
               'method',
               'created_by',
               'created_at',
@@ -491,13 +560,7 @@ const panelCashPlugin: FastifyPluginAsync<PanelCashPluginOptions> = async (fasti
             created_at: row.created_at.toISOString(),
           };
         } catch (err) {
-          // cash_movements_expense_category_kind_check: an income row can't
-          // carry expense_category_id — same "don't let a raw DB constraint
-          // surface as a 500" rule as the 23505 handling above.
-          if (err && typeof err === 'object' && 'code' in err && err.code === '23514') {
-            throw httpError(400, 'EXPENSE_CATEGORY_ID_NOT_ALLOWED_FOR_INCOME');
-          }
-          throw err;
+          rethrowAsCleanError(err);
         }
       },
     );

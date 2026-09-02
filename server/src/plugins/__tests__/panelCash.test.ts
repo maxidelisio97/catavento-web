@@ -2,9 +2,10 @@
  * Integration tests for SPEC-modulo-10-caja.md § 5.1 (entrega 10A) —
  * GET/POST /panel/cash/expense-categories, PATCH .../:id,
  * GET/POST/PATCH/DELETE /panel/cash/movements — and § 6 (entrega 10B) —
- * GET/POST/PATCH /panel/cash/sale-items (catalog CRUD only in this batch;
- * the hybrid sale on POST /panel/cash/movements and the per-product report
- * arrive in later 10B batches, per plan).
+ * GET/POST/PATCH /panel/cash/sale-items, and the hybrid sale on
+ * POST/PATCH /panel/cash/movements (sale_item_id + quantity, frozen
+ * amount_cents). The per-product report arrives in a later 10B batch, per
+ * plan.
  *
  * Does NOT cover GET /panel/cash/ledger — that arrives with the next batch
  * of 10A and gets its own test file (the "no duplicate payments" test is
@@ -463,6 +464,267 @@ describe('POST /panel/cash/movements', () => {
       payload: { kind: 'income', amount_cents: 1000, occurred_on: '2026-13-45' },
     });
     expect(response.statusCode).toBe(400);
+  });
+});
+
+describe('POST /panel/cash/movements — hybrid sale (§ 6, 10B)', () => {
+  it('registers a catalog sale with an editable price, not the catalog default', async () => {
+    const saleItemId = await insertSaleItem({ name: 'Cerveja', default_price_cents: 1000 });
+    const token = await tokenWith(['cash.income']);
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/cash/movements',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      // Suggested price is 1000/unit; the cashier charged 1200 (happy hour
+      // markup, a discount, whatever) — the movement stores what actually
+      // happened, not the catalog default.
+      payload: { kind: 'income', amount_cents: 2400, occurred_on: '2026-08-30', sale_item_id: saleItemId, quantity: 2 },
+    });
+
+    expect(response.statusCode).toBe(201);
+    const body = response.json();
+    expect(body.sale_item_id).toBe(saleItemId);
+    expect(body.quantity).toBe(2);
+    expect(body.amount_cents).toBe(2400);
+  });
+
+  it('registers a free-concept sale with no sale_item_id, unchanged from 10A', async () => {
+    const token = await tokenWith(['cash.income']);
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/cash/movements',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'income', amount_cents: 1500, occurred_on: '2026-08-30', description: 'Gorjeta' },
+    });
+
+    expect(response.statusCode).toBe(201);
+    const body = response.json();
+    expect(body.sale_item_id).toBeNull();
+    expect(body.quantity).toBeNull();
+  });
+
+  it('a later catalog price change never rewrites a past sale (price frozen on the movement)', async () => {
+    const saleItemId = await insertSaleItem({ name: 'Água', default_price_cents: 500 });
+    const token = await tokenWith(['cash.income', 'cash.manage', 'cash.view']);
+    const app = buildApp();
+
+    const sale = await app.inject({
+      method: 'POST',
+      url: '/panel/cash/movements',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'income', amount_cents: 500, occurred_on: '2026-08-30', sale_item_id: saleItemId, quantity: 1 },
+    });
+    expect(sale.statusCode).toBe(201);
+
+    await app.inject({
+      method: 'PATCH',
+      url: `/panel/cash/sale-items/${saleItemId}`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { default_price_cents: 800 },
+    });
+
+    const list = await app.inject({
+      method: 'GET',
+      url: '/panel/cash/movements',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+    const stored = list.json().find((m: { id: number }) => m.id === sale.json().id);
+    expect(stored.amount_cents).toBe(500); // still what it sold for, not the new 800
+  });
+
+  it('deactivating a sale item does not break or hide a past sale made with it', async () => {
+    const saleItemId = await insertSaleItem({ name: 'Tour lancha' });
+    const token = await tokenWith(['cash.income', 'cash.manage', 'cash.view']);
+    const app = buildApp();
+
+    const sale = await app.inject({
+      method: 'POST',
+      url: '/panel/cash/movements',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'income', amount_cents: 5000, occurred_on: '2026-08-30', sale_item_id: saleItemId, quantity: 1 },
+    });
+    expect(sale.statusCode).toBe(201);
+
+    const deactivate = await app.inject({
+      method: 'PATCH',
+      url: `/panel/cash/sale-items/${saleItemId}`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { active: false },
+    });
+    expect(deactivate.statusCode).toBe(200);
+
+    const list = await app.inject({
+      method: 'GET',
+      url: '/panel/cash/movements',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+    const stored = list.json().find((m: { id: number }) => m.id === sale.json().id);
+    expect(stored).toBeDefined();
+    expect(stored.sale_item_id).toBe(saleItemId);
+  });
+
+  it('400s sale_item_id without quantity (must be paired)', async () => {
+    const saleItemId = await insertSaleItem();
+    const token = await tokenWith(['cash.income']);
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/cash/movements',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'income', amount_cents: 1000, occurred_on: '2026-08-30', sale_item_id: saleItemId },
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('400s quantity without sale_item_id (must be paired)', async () => {
+    const token = await tokenWith(['cash.income']);
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/cash/movements',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'income', amount_cents: 1000, occurred_on: '2026-08-30', quantity: 2 },
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('400s a sale_item_id on an expense (a sale is always income)', async () => {
+    const saleItemId = await insertSaleItem();
+    const categoryId = await insertCategory();
+    const token = await tokenWith(['cash.expense']);
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/cash/movements',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: {
+        kind: 'expense',
+        amount_cents: 1000,
+        occurred_on: '2026-08-30',
+        expense_category_id: categoryId,
+        sale_item_id: saleItemId,
+        quantity: 1,
+      },
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('400s a nonexistent sale_item_id instead of 500ing (FK violation)', async () => {
+    const token = await tokenWith(['cash.income']);
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/cash/movements',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'income', amount_cents: 1000, occurred_on: '2026-08-30', sale_item_id: 999999, quantity: 1 },
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('corrects a mis-picked quantity on an existing catalog sale via PATCH', async () => {
+    const saleItemId = await insertSaleItem({ default_price_cents: 1000 });
+    const token = await tokenWith(['cash.income']);
+    const app = buildApp();
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/panel/cash/movements',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'income', amount_cents: 1000, occurred_on: '2026-08-30', sale_item_id: saleItemId, quantity: 1 },
+    });
+    const id = create.json().id;
+
+    const patch = await app.inject({
+      method: 'PATCH',
+      url: `/panel/cash/movements/${id}`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { quantity: 3, amount_cents: 3000 },
+    });
+    expect(patch.statusCode).toBe(200);
+    expect(patch.json().quantity).toBe(3);
+    expect(patch.json().amount_cents).toBe(3000);
+  });
+
+  // The three tests below exist specifically because PATCH's body has no
+  // `kind` field — Zod can't enforce "sale_item_id only on income" or the
+  // pairing rule there the way it does on POST. These prove the DB
+  // constraints (cash_movements_sale_item_kind_check,
+  // cash_movements_sale_item_quantity_check) actually catch it, translated
+  // to a clean 400 — not the POST-time Zod refine, which never runs on a
+  // PATCH request at all.
+
+  it('400s a PATCH that attaches sale_item_id+quantity to an existing expense (DB constraint, not Zod)', async () => {
+    const categoryId = await insertCategory();
+    const saleItemId = await insertSaleItem();
+    const token = await tokenWith(['cash.expense']);
+    const app = buildApp();
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/panel/cash/movements',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'expense', amount_cents: 1000, occurred_on: '2026-08-30', expense_category_id: categoryId },
+    });
+    const id = create.json().id;
+
+    const patch = await app.inject({
+      method: 'PATCH',
+      url: `/panel/cash/movements/${id}`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { sale_item_id: saleItemId, quantity: 1 },
+    });
+    expect(patch.statusCode).toBe(400);
+  });
+
+  it('400s a PATCH that sets quantity alone on a free-concept income movement (pairing, DB constraint)', async () => {
+    const token = await tokenWith(['cash.income']);
+    const app = buildApp();
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/panel/cash/movements',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'income', amount_cents: 1000, occurred_on: '2026-08-30', description: 'Gorjeta' },
+    });
+    const id = create.json().id;
+
+    const patch = await app.inject({
+      method: 'PATCH',
+      url: `/panel/cash/movements/${id}`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { quantity: 2 },
+    });
+    expect(patch.statusCode).toBe(400);
+  });
+
+  it('400s a PATCH that sets sale_item_id alone on a free-concept income movement (pairing, DB constraint)', async () => {
+    const saleItemId = await insertSaleItem();
+    const token = await tokenWith(['cash.income']);
+    const app = buildApp();
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/panel/cash/movements',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'income', amount_cents: 1000, occurred_on: '2026-08-30', description: 'Gorjeta' },
+    });
+    const id = create.json().id;
+
+    const patch = await app.inject({
+      method: 'PATCH',
+      url: `/panel/cash/movements/${id}`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { sale_item_id: saleItemId },
+    });
+    expect(patch.statusCode).toBe(400);
   });
 });
 
