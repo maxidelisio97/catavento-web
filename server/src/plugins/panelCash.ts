@@ -1,14 +1,15 @@
 /**
  * GET/POST /panel/cash/expense-categories, PATCH .../:id,
- * GET/POST/PATCH/DELETE /panel/cash/movements,
- * GET/POST/PATCH /panel/cash/sale-items —
+ * GET/POST/PATCH/DELETE /panel/cash/movements (hybrid sale via
+ * sale_item_id + quantity, or free-concept via description),
+ * GET/POST/PATCH /panel/cash/sale-items, GET .../sale-items/report —
  * SPEC-modulo-10-caja.md § 5.1 (entrega 10A, libro base) and § 6 (entrega
- * 10B, catálogo híbrido — this batch: the catalog CRUD only, not yet the
- * hybrid sale on POST /panel/cash/movements or the per-product report).
+ * 10B, catálogo híbrido — complete: catalog CRUD, hybrid sale, per-product
+ * report).
  *
- * Does NOT include GET /panel/cash/ledger (§ 3, the unified read of
- * `payments` + `cash_movements`) — that lands in the next batch of 10A,
- * separately from this CRUD layer.
+ * Does NOT include GET /panel/cash/ledger's own file (§ 3, the unified
+ * read of `payments` + `cash_movements`) — that logic lives in
+ * panel/cashLedger.ts, this file only wires its route.
  */
 import type { FastifyError, FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from '@fastify/type-provider-zod';
@@ -23,6 +24,7 @@ import { can } from '../permissions/effectivePermissions.js';
 import { getEffectivePermissionInput } from '../permissions/permissionRepository.js';
 import { formatDateUTC, parseDateUTC } from '../shared/dateUtils.js';
 import { getCashLedger } from '../panel/cashLedger.js';
+import { getSalesByItemReport } from '../panel/salesByItemReport.js';
 
 // Calendar-validating, not just format — § 8: "no repetir el bug del
 // dateSchema" (server/CLAUDE.md documents the regex-only version accepting
@@ -183,6 +185,23 @@ const ledgerResponseSchema = z.object({
   }),
 });
 
+// § 6 (10B) — per-product report. Same querystring shape as the ledger
+// (required from/to, to >= from).
+const saleItemReportQuerySchema = ledgerQuerySchema;
+
+const saleItemReportResponseSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+  items: z.array(
+    z.object({
+      sale_item_id: z.number(),
+      name: z.string(),
+      quantity_sold: z.number(),
+      total_cents: z.number(),
+    }),
+  ),
+});
+
 const errorResponseSchema = z.object({ error: z.string() });
 
 function httpError(statusCode: number, message: string): FastifyError {
@@ -278,6 +297,17 @@ const panelCashPlugin: FastifyPluginAsync<PanelCashPluginOptions> = async (fasti
             .select(['id', 'name', 'default_price_cents', 'active'])
             .orderBy('name')
             .execute();
+        },
+      );
+
+      // § 6 (10B) — units sold and revenue per product in a period. See
+      // panel/salesByItemReport.ts for why this sums the frozen
+      // amount_cents on each sale, never default_price_cents × quantity.
+      typedCategories.get(
+        '/panel/cash/sale-items/report',
+        { schema: { querystring: saleItemReportQuerySchema, response: { 200: saleItemReportResponseSchema } } },
+        async (request) => {
+          return getSalesByItemReport(db, request.query);
         },
       );
     });
