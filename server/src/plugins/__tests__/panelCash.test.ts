@@ -1,7 +1,10 @@
 /**
  * Integration tests for SPEC-modulo-10-caja.md § 5.1 (entrega 10A) —
  * GET/POST /panel/cash/expense-categories, PATCH .../:id,
- * GET/POST/PATCH/DELETE /panel/cash/movements.
+ * GET/POST/PATCH/DELETE /panel/cash/movements — and § 6 (entrega 10B) —
+ * GET/POST/PATCH /panel/cash/sale-items (catalog CRUD only in this batch;
+ * the hybrid sale on POST /panel/cash/movements and the per-product report
+ * arrive in later 10B batches, per plan).
  *
  * Does NOT cover GET /panel/cash/ledger — that arrives with the next batch
  * of 10A and gets its own test file (the "no duplicate payments" test is
@@ -32,7 +35,7 @@ function buildApp() {
 // requirePermission.test.ts / panelUsers.test.ts: the M9 seed + this
 // migration's cash.* seed must survive across test files sharing the DB.
 async function resetDb(): Promise<void> {
-  await sql`TRUNCATE TABLE cash_movements, cash_expense_categories, sessions, user_permission_overrides, users RESTART IDENTITY CASCADE`.execute(
+  await sql`TRUNCATE TABLE cash_movements, cash_expense_categories, cash_sale_items, sessions, user_permission_overrides, users RESTART IDENTITY CASCADE`.execute(
     testDb,
   );
 }
@@ -48,6 +51,15 @@ async function insertCategory(name = 'Fornecedores'): Promise<number> {
   const row = await testDb
     .insertInto('cash_expense_categories')
     .values({ name })
+    .returning('id')
+    .executeTakeFirstOrThrow();
+  return row.id;
+}
+
+async function insertSaleItem(overrides: { name?: string; default_price_cents?: number | null } = {}): Promise<number> {
+  const row = await testDb
+    .insertInto('cash_sale_items')
+    .values({ name: overrides.name ?? 'Cerveja', default_price_cents: overrides.default_price_cents ?? 1000 })
     .returning('id')
     .executeTakeFirstOrThrow();
   return row.id;
@@ -181,6 +193,135 @@ describe('expense categories', () => {
       payload: { active: false },
     });
     expect(response.statusCode).toBe(404);
+  });
+});
+
+describe('sale items catalog', () => {
+  it('creates and lists a sale item', async () => {
+    const token = await tokenWith(['cash.view', 'cash.manage']);
+    const app = buildApp();
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/panel/cash/sale-items',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { name: 'Água', default_price_cents: 500 },
+    });
+    expect(create.statusCode).toBe(201);
+    expect(create.json()).toEqual({ id: expect.any(Number), name: 'Água', default_price_cents: 500, active: true });
+
+    const list = await app.inject({
+      method: 'GET',
+      url: '/panel/cash/sale-items',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+    expect(list.json()).toEqual([{ id: expect.any(Number), name: 'Água', default_price_cents: 500, active: true }]);
+  });
+
+  it('creates a sale item with no suggested price (nullable)', async () => {
+    const token = await tokenWith(['cash.manage']);
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/cash/sale-items',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { name: 'Tour lancha' },
+    });
+    expect(response.statusCode).toBe(201);
+    expect(response.json().default_price_cents).toBeNull();
+  });
+
+  it('409s on a duplicate sale item name', async () => {
+    const token = await tokenWith(['cash.manage']);
+    const app = buildApp();
+    await insertSaleItem({ name: 'Cerveja' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/cash/sale-items',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { name: 'Cerveja' },
+    });
+    expect(response.statusCode).toBe(409);
+  });
+
+  it('renames, reprices, and deactivates a sale item via PATCH', async () => {
+    const token = await tokenWith(['cash.manage']);
+    const app = buildApp();
+    const id = await insertSaleItem({ name: 'Cerveja', default_price_cents: 1000 });
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: `/panel/cash/sale-items/${id}`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { name: 'Cerveja gelada', default_price_cents: 1200, active: false },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ id, name: 'Cerveja gelada', default_price_cents: 1200, active: false });
+  });
+
+  it('404s PATCH on a nonexistent sale item', async () => {
+    const token = await tokenWith(['cash.manage']);
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/panel/cash/sale-items/999999',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { active: false },
+    });
+    expect(response.statusCode).toBe(404);
+  });
+
+  it('403s GET /panel/cash/sale-items without cash.view', async () => {
+    const token = await tokenWith(['cash.income']);
+    const app = buildApp();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/panel/cash/sale-items',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('403s POST /panel/cash/sale-items with only cash.view (deactivating the catalog needs cash.manage)', async () => {
+    const token = await tokenWith(['cash.view']);
+    const app = buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/cash/sale-items',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { name: 'Refrigerante' },
+    });
+    expect(response.statusCode).toBe(403);
+  });
+
+  // The bug the 10A risk-review found: a parent-scope permission hook that
+  // doesn't list every nested route's permission bounces a valid caller
+  // before the route-level check even runs. This proves the fix still
+  // covers 10B's new routes without editing the parent hook — cash.manage
+  // was already in that list from 10A, so a manage-only caller must never
+  // 403 at the door before reaching a route it's actually allowed to use.
+  it('does not reintroduce the 10A parent-scope permission gap for the new catalog routes', async () => {
+    const token = await tokenWith(['cash.manage']);
+    const app = buildApp();
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/panel/cash/sale-items',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { name: 'Suco' },
+    });
+    expect(create.statusCode).toBe(201);
+
+    const patch = await app.inject({
+      method: 'PATCH',
+      url: `/panel/cash/sale-items/${create.json().id}`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { active: false },
+    });
+    expect(patch.statusCode).toBe(200);
   });
 });
 

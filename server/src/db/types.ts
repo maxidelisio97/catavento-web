@@ -43,6 +43,16 @@ export interface CashMovements {
   kind: string;
   method: string | null;
   occurred_on: Timestamp;
+  quantity: number | null;
+  sale_item_id: number | null;
+}
+
+export interface CashSaleItems {
+  active: Generated<boolean>;
+  created_at: Generated<Timestamp>;
+  default_price_cents: number | null;
+  id: Generated<number>;
+  name: string;
 }
 
 export interface Payments {
@@ -238,6 +248,7 @@ export interface Users {
 export interface DB {
   cash_expense_categories: CashExpenseCategories;
   cash_movements: CashMovements;
+  cash_sale_items: CashSaleItems;
   payments: Payments;
   permissions: Permissions;
   pgmigrations: Pgmigrations;

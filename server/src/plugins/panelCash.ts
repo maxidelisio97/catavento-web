@@ -1,7 +1,10 @@
 /**
  * GET/POST /panel/cash/expense-categories, PATCH .../:id,
- * GET/POST/PATCH/DELETE /panel/cash/movements —
- * SPEC-modulo-10-caja.md § 5.1 (entrega 10A, libro base).
+ * GET/POST/PATCH/DELETE /panel/cash/movements,
+ * GET/POST/PATCH /panel/cash/sale-items —
+ * SPEC-modulo-10-caja.md § 5.1 (entrega 10A, libro base) and § 6 (entrega
+ * 10B, catálogo híbrido — this batch: the catalog CRUD only, not yet the
+ * hybrid sale on POST /panel/cash/movements or the per-product report).
  *
  * Does NOT include GET /panel/cash/ledger (§ 3, the unified read of
  * `payments` + `cash_movements`) — that lands in the next batch of 10A,
@@ -42,6 +45,30 @@ const createCategoryBodySchema = z.object({ name: z.string().min(1) });
 
 const patchCategoryBodySchema = z
   .object({ name: z.string().min(1).optional(), active: z.boolean().optional() })
+  .refine((body) => Object.keys(body).length > 0, { message: 'Body must include at least one field' });
+
+// § 6 (10B) — the sale catalog. No DELETE: deactivating (not removing) an
+// item keeps `cash_movements.sale_item_id` valid for past sales — the
+// per-product report must keep showing units sold with an item that's since
+// been taken off the sell picker (confirmed with Maxi before implementing).
+const saleItemResponseSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  default_price_cents: z.number().nullable(),
+  active: z.boolean(),
+});
+
+const createSaleItemBodySchema = z.object({
+  name: z.string().min(1),
+  default_price_cents: z.number().int().positive().optional(),
+});
+
+const patchSaleItemBodySchema = z
+  .object({
+    name: z.string().min(1).optional(),
+    default_price_cents: z.number().int().positive().nullable().optional(),
+    active: z.boolean().optional(),
+  })
   .refine((body) => Object.keys(body).length > 0, { message: 'Body must include at least one field' });
 
 const movementResponseSchema = z.object({
@@ -181,6 +208,21 @@ const panelCashPlugin: FastifyPluginAsync<PanelCashPluginOptions> = async (fasti
           return getCashLedger(db, request.query);
         },
       );
+
+      // § 6 (10B) — reading the catalog only needs cash.view (same as
+      // expense categories): a cashier picking a product to sell needs
+      // cash.income to write the movement, not cash.manage.
+      typedCategories.get(
+        '/panel/cash/sale-items',
+        { schema: { response: { 200: z.array(saleItemResponseSchema) } } },
+        async () => {
+          return db
+            .selectFrom('cash_sale_items')
+            .select(['id', 'name', 'default_price_cents', 'active'])
+            .orderBy('name')
+            .execute();
+        },
+      );
     });
 
     await protectedScope.register(async (manageScope) => {
@@ -236,6 +278,67 @@ const panelCashPlugin: FastifyPluginAsync<PanelCashPluginOptions> = async (fasti
           } catch (err) {
             if (err && typeof err === 'object' && 'code' in err && err.code === '23505') {
               throw httpError(409, 'CATEGORY_NAME_ALREADY_EXISTS');
+            }
+            throw err;
+          }
+        },
+      );
+
+      // § 6 (10B) — catalog CRUD. Same cash.manage gate as expense
+      // categories: managing what's sellable is a different action from
+      // selling it (cash.income, checked on POST /panel/cash/movements).
+      typedManage.post(
+        '/panel/cash/sale-items',
+        {
+          schema: {
+            body: createSaleItemBodySchema,
+            response: { 201: saleItemResponseSchema, 409: errorResponseSchema },
+          },
+        },
+        async (request, reply) => {
+          try {
+            const row = await db
+              .insertInto('cash_sale_items')
+              .values({
+                name: request.body.name,
+                default_price_cents: request.body.default_price_cents ?? null,
+              })
+              .returning(['id', 'name', 'default_price_cents', 'active'])
+              .executeTakeFirstOrThrow();
+            reply.status(201);
+            return row;
+          } catch (err) {
+            if (err && typeof err === 'object' && 'code' in err && err.code === '23505') {
+              throw httpError(409, 'SALE_ITEM_NAME_ALREADY_EXISTS');
+            }
+            throw err;
+          }
+        },
+      );
+
+      typedManage.patch(
+        '/panel/cash/sale-items/:id',
+        {
+          schema: {
+            params: z.object({ id: z.coerce.number().int().positive() }),
+            body: patchSaleItemBodySchema,
+            response: { 200: saleItemResponseSchema, 404: errorResponseSchema, 409: errorResponseSchema },
+          },
+        },
+        async (request) => {
+          const { id } = request.params;
+          try {
+            const row = await db
+              .updateTable('cash_sale_items')
+              .set(request.body)
+              .where('id', '=', id)
+              .returning(['id', 'name', 'default_price_cents', 'active'])
+              .executeTakeFirst();
+            if (!row) throw httpError(404, 'SALE_ITEM_NOT_FOUND');
+            return row;
+          } catch (err) {
+            if (err && typeof err === 'object' && 'code' in err && err.code === '23505') {
+              throw httpError(409, 'SALE_ITEM_NAME_ALREADY_EXISTS');
             }
             throw err;
           }
