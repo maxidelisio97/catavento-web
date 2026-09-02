@@ -184,13 +184,22 @@ describe('GET /panel/cash/sale-items/report', () => {
     expect(body.items[0]).toMatchObject({ name: 'Tour lancha', quantity_sold: 1, total_cents: 5000 });
   });
 
-  // The central case Maxi asked to confirm with a test: the freeze applies
-  // to the AGGREGATE, not just an individual movement row — a later catalog
-  // price edit must never reshape a past period's reported total.
-  it('a later catalog price change does not alter a past period\'s reported total (freeze applies to the aggregate)', async () => {
+  // The central case Maxi asked to confirm with a test: proving one sale
+  // row keeps its own amount_cents (already covered by the hybrid-sale
+  // tests) is NOT the same as proving the report's GROUP BY...SUM never
+  // recomputes from the catalog's CURRENT default_price_cents × the
+  // summed quantity. Two separate sales (N=5 units total, across two
+  // transactions) makes that distinction concrete: if the aggregate were
+  // derived from the live catalog price instead of summing each row's
+  // frozen amount_cents, changing that price would reshape the WHOLE
+  // period's total, not just one row.
+  it('a later catalog price change does not alter a past period\'s aggregated total (freeze applies to the SUM, not just one row)', async () => {
     const fixtureUser = await insertFixtureUser();
     const cervejaId = await insertSaleItem('Cerveja', 1000);
-    await insertSale({ saleItemId: cervejaId, amountCents: 1000, occurredOn: '2026-08-10', quantity: 1, createdBy: fixtureUser });
+    // Two sales in the same period, at the price that was current when
+    // each happened — 2 units @ 1000/unit, then 3 units @ 1000/unit.
+    await insertSale({ saleItemId: cervejaId, amountCents: 2000, occurredOn: '2026-08-10', quantity: 2, createdBy: fixtureUser });
+    await insertSale({ saleItemId: cervejaId, amountCents: 3000, occurredOn: '2026-08-20', quantity: 3, createdBy: fixtureUser });
 
     const token = await tokenWithCashView();
     const app = buildApp();
@@ -200,18 +209,19 @@ describe('GET /panel/cash/sale-items/report', () => {
       url: '/panel/cash/sale-items/report?from=2026-08-01&to=2026-08-31',
       cookies: { [SESSION_COOKIE_NAME]: token },
     });
-    expect(before.json().items[0]).toMatchObject({ quantity_sold: 1, total_cents: 1000 });
+    expect(before.json().items[0]).toMatchObject({ quantity_sold: 5, total_cents: 5000 });
 
-    // Catalog price jumps from 1000 to 5000/unit — if the report recomputed
-    // from default_price_cents × quantity instead of summing the frozen
-    // amount_cents, this same query would now report 5000, not 1000.
-    await testDb.updateTable('cash_sale_items').set({ default_price_cents: 5000 }).where('id', '=', cervejaId).execute();
+    // Catalog price jumps from 1000 to 9999/unit. If the report's SUM were
+    // derived from default_price_cents × quantity_sold instead of summing
+    // each row's frozen amount_cents, the period's total would now read
+    // 5 × 9999 = 49995, not 5000.
+    await testDb.updateTable('cash_sale_items').set({ default_price_cents: 9999 }).where('id', '=', cervejaId).execute();
 
     const after = await app.inject({
       method: 'GET',
       url: '/panel/cash/sale-items/report?from=2026-08-01&to=2026-08-31',
       cookies: { [SESSION_COOKIE_NAME]: token },
     });
-    expect(after.json().items[0]).toMatchObject({ quantity_sold: 1, total_cents: 1000 });
+    expect(after.json().items[0]).toMatchObject({ quantity_sold: 5, total_cents: 5000 });
   });
 });
