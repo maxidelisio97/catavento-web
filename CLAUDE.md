@@ -3,10 +3,11 @@
 ## Alcance de este archivo (monorepo)
 Este repo contiene el frontend (raíz) y el backend (`server/`).
 TODO lo que sigue en este archivo aplica SOLO al frontend, EXCEPTO las
-secciones "Flujo de ramas" y "Delegación a agentes" de acá abajo, que
-son reglas de todo el repo. El backend tiene su propio `server/CLAUDE.md`
-con sus reglas — al trabajar dentro de `server/`, ese archivo manda y
-las reglas de screenshots/layout/motion de acá no aplican.
+secciones "Flujo de ramas", "Delegación a agentes" y "Autorización de
+deploy" de acá abajo, que son reglas de todo el repo. El backend tiene
+su propio `server/CLAUDE.md` con sus reglas — al trabajar dentro de
+`server/`, ese archivo manda y las reglas de screenshots/layout/motion
+de acá no aplican.
 
 ## Delegación a agentes (todo el repo)
 No uses el tool Agent para tareas en segundo plano salvo que el
@@ -36,6 +37,27 @@ entero costó ~200k tokens y trabajo duplicado.
 - Al cerrar el módulo/tema: merge a `main`, push, y borrado inmediato
   de la rama (local y remota). No quedan ramas de feature vivas
   después de mergear.
+
+## Autorización de deploy (todo el repo — frontend y backend)
+- Mergear a `main` NO autoriza el deploy a producción. Son dos
+  decisiones separadas: el merge lo puede hacer Claude como parte de
+  cerrar un módulo, pero el deploy (pull + build + restart en el VPS,
+  sea backend o panel) requiere el OK explícito y puntual de Maxi para
+  ESE deploy, cada vez — no alcanza con que el módulo esté mergeado,
+  verificado con tests, o "listo". Ante la duda, no desplegar: preguntar.
+- Verificación post-deploy obligatoria (no opcional): un build sin
+  error y un proceso reiniciado NO prueban que se desplegó el commit
+  esperado. Después de todo deploy, confirmar explícitamente que:
+  (a) `git log --oneline -3` en el VPS muestra el commit que se
+  esperaba desplegar (si no, el `git pull origin main` — paso 1 del
+  checklist de deploy de cada proyecto — se salteó o falló en
+  silencio), y (b) el artefacto servido corresponde a ese commit (ej.
+  grep de algo del cambio en el `dist`/build compilado, no solo un
+  curl 200). Motivo: en el deploy del módulo 9B se salteó el `git pull`
+  y el build/restart reconstruyó código viejo sin ningún error — el
+  deploy "pareció" exitoso pero seguía sirviendo la versión anterior
+  al merge, y esto no se detectó hasta que el usuario reportó que no
+  veía las pantallas nuevas en producción.
 
 ## Contexto obligatorio
 Antes de cualquier tarea de diseño, contenido o UX, lee `PRODUCT.md`.
