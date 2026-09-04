@@ -6,6 +6,7 @@ import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from '@fastify/type-provider-zod';
 import cookiePlugin from '@fastify/cookie';
 import { createHash, randomBytes } from 'node:crypto';
+import { sql } from 'kysely';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { testDb } from '../../db/testClient.js';
 import { registerErrorHandler } from '../../errorHandler.js';
@@ -59,8 +60,11 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  await testDb.deleteFrom('users').execute();
-  await testDb.deleteFrom('sessions').execute();
+  // TRUNCATE ... CASCADE, not deleteFrom: a plain DELETE on `users` blocks on
+  // any FK a different module leaves pointing at it between files (e.g.
+  // cash_movements.created_by) — see server/CLAUDE.md's test-cleanup
+  // convention. CASCADE is what every other file's cleanup already uses.
+  await sql`TRUNCATE TABLE sessions, users RESTART IDENTITY CASCADE`.execute(testDb);
 });
 
 afterEach(async () => {
