@@ -29,6 +29,10 @@ excalidraw.log
 # 2026-09-04 — planificacion vive en el Project de claude.ai, no en git)
 catavento-specs/
 
+# Otra iniciativa (concierge de WhatsApp), sin relacion con este repo
+SOUL.md
+design-refs/
+
 # Claude Code local state (machine-specific, not project config)
 .claude/settings.local.json
 .claude/worktrees/
