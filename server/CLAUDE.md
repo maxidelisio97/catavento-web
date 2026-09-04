@@ -238,6 +238,31 @@ Ver CLAUDE.md raíz — regla de todo el repo, no solo del backend.
   `create-user.ts` apuntando a esa base). No usar en producción; recrearlo
   si `migrate:up:test` alguna vez resetea la base.
 
+### Aislamiento entre archivos de test: limpieza de `users`/`sessions`
+- Todo test de integración que limpie `users` o `sessions` en su
+  `beforeEach` usa `TRUNCATE TABLE ... RESTART IDENTITY CASCADE`, nunca
+  `deleteFrom('users')`/`deleteFrom('sessions')` plano. Un DELETE sin
+  CASCADE revienta contra cualquier fila que otro módulo haya dejado
+  apuntando a `users` por FK entre archivos (`cash_movements.created_by`,
+  o la que exista mañana).
+- Es un bug de aislamiento, no de la lógica del test que falla: no
+  aparece corriendo el archivo solo, y una suite completa en verde
+  TAMPOCO lo descarta — el orden real de ejecución de vitest puede
+  tapar el problema por casualidad de qué archivo corre justo antes.
+  Solo se ve corriendo el par de archivos exacto en el orden exacto que
+  lo dispara.
+- Encontrado en `panelSettings.test.ts` (único archivo, de 35, que no
+  seguía este patrón) al agregar el módulo 10C: el archivo nuevo no
+  tocaba nada de `panelCashLedger.test.ts` ni de `panelSettings.test.ts`,
+  pero cambió el orden real de ejecución de vitest lo suficiente para
+  que quedaran adyacentes sin limpieza en el medio — main estaba verde
+  antes de agregarlo por casualidad de orden, no porque el problema no
+  existiera. Corregido (rama `fix-panelsettings-test-cleanup`,
+  mergeada a `main` antes de 10C) verificando el par exacto que fallaba
+  (`panelCashLedger.test.ts` seguido de `panelSettings.test.ts`) en rojo
+  antes del fix y en verde después — no solo que la suite completa
+  pasara.
+
 ### Tests de concurrencia
 - Todo fix de concurrencia (lock, FOR UPDATE, idempotencia) necesita un
   test que corra las operaciones en paralelo real (Promise.all), no
