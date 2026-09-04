@@ -627,6 +627,25 @@ describe('POST /panel/cash/movements — hybrid sale (§ 6, 10B)', () => {
       payload: { kind: 'income', amount_cents: 1000, occurred_on: '2026-08-30', sale_item_id: 999999, quantity: 1 },
     });
     expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ error: 'SALE_ITEM_NOT_FOUND' });
+  });
+
+  // Found in the 10B risk-review: the FK-violation handler used to label
+  // EVERY 23503 as 'SALE_ITEM_NOT_FOUND', so a bogus expense_category_id
+  // reported the wrong missing resource. Distinguishing by err.constraint
+  // (same pattern already used for the CHECK-violation map above) fixes it.
+  it('400s a nonexistent expense_category_id with its own error, not SALE_ITEM_NOT_FOUND', async () => {
+    const token = await tokenWith(['cash.expense']);
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/cash/movements',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'expense', amount_cents: 1000, occurred_on: '2026-08-30', expense_category_id: 999999 },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ error: 'EXPENSE_CATEGORY_NOT_FOUND' });
   });
 
   it('corrects a mis-picked quantity on an existing catalog sale via PATCH', async () => {

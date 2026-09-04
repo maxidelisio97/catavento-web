@@ -222,16 +222,27 @@ const CHECK_VIOLATION_MESSAGES: Record<string, string> = {
   cash_movements_sale_item_kind_check: 'SALE_ITEM_ID_NOT_ALLOWED_FOR_EXPENSE',
 };
 
+// Same reasoning as CHECK_VIOLATION_MESSAGES above, for FK (23503)
+// violations: cash_movements has two client-controllable FKs
+// (expense_category_id, sale_item_id — created_by is always server-set,
+// never from the request body, so it can never violate on a caller's
+// input). Found in the 10B risk-review: an unconditional 'SALE_ITEM_NOT_FOUND'
+// mislabeled a bogus expense_category_id as a missing sale item.
+const FK_VIOLATION_MESSAGES: Record<string, string> = {
+  cash_movements_expense_category_id_fkey: 'EXPENSE_CATEGORY_NOT_FOUND',
+  cash_movements_sale_item_id_fkey: 'SALE_ITEM_NOT_FOUND',
+};
+
 function rethrowAsCleanError(err: unknown): never {
   if (err && typeof err === 'object' && 'code' in err) {
     if (err.code === '23514' && 'constraint' in err && typeof err.constraint === 'string') {
       throw httpError(400, CHECK_VIOLATION_MESSAGES[err.constraint] ?? 'INVALID_MOVEMENT');
     }
-    // sale_item_id references cash_sale_items — a caller can pass an id
-    // that doesn't exist (typo, stale form). Same "no raw 500 from a DB
-    // constraint" rule as the CHECK violations above.
-    if (err.code === '23503') {
-      throw httpError(400, 'SALE_ITEM_NOT_FOUND');
+    // A caller can pass an expense_category_id or sale_item_id that doesn't
+    // exist (typo, stale form). Same "no raw 500 from a DB constraint" rule
+    // as the CHECK violations above.
+    if (err.code === '23503' && 'constraint' in err && typeof err.constraint === 'string') {
+      throw httpError(400, FK_VIOLATION_MESSAGES[err.constraint] ?? 'INVALID_REFERENCE');
     }
   }
   throw err;
