@@ -25,6 +25,7 @@ import { getEffectivePermissionInput } from '../permissions/permissionRepository
 import { formatDateUTC, parseDateUTC } from '../shared/dateUtils.js';
 import { getCashLedger } from '../panel/cashLedger.js';
 import { getSalesByItemReport } from '../panel/salesByItemReport.js';
+import { getExpensesByCategoryReport } from '../panel/expensesByCategoryReport.js';
 
 // Calendar-validating, not just format — § 8: "no repetir el bug del
 // dateSchema" (server/CLAUDE.md documents the regex-only version accepting
@@ -202,6 +203,22 @@ const saleItemReportResponseSchema = z.object({
   ),
 });
 
+// § 6 (10C) — expenses grouped by category. Same querystring shape as the
+// ledger and the per-product report.
+const expenseCategoryReportQuerySchema = ledgerQuerySchema;
+
+const expenseCategoryReportResponseSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+  categories: z.array(
+    z.object({
+      category_id: z.number().nullable(),
+      name: z.string(),
+      total_cents: z.number(),
+    }),
+  ),
+});
+
 const errorResponseSchema = z.object({ error: z.string() });
 
 function httpError(statusCode: number, message: string): FastifyError {
@@ -319,6 +336,23 @@ const panelCashPlugin: FastifyPluginAsync<PanelCashPluginOptions> = async (fasti
         { schema: { querystring: saleItemReportQuerySchema, response: { 200: saleItemReportResponseSchema } } },
         async (request) => {
           return getSalesByItemReport(db, request.query);
+        },
+      );
+
+      // § 6 (10C) — expenses grouped by category in a period. See
+      // panel/expensesByCategoryReport.ts for why an uncategorized expense
+      // is grouped as "Sem categoria" instead of dropped (must sum to the
+      // same expense_cents as the ledger's totals).
+      typedCategories.get(
+        '/panel/cash/expense-categories/report',
+        {
+          schema: {
+            querystring: expenseCategoryReportQuerySchema,
+            response: { 200: expenseCategoryReportResponseSchema },
+          },
+        },
+        async (request) => {
+          return getExpensesByCategoryReport(db, request.query);
         },
       );
     });
