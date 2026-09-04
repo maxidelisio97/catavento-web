@@ -8,8 +8,16 @@ import Badge, { type BadgeTone } from "../components/ui/Badge";
 import DatePicker from "../components/ui/DatePicker";
 import CashMovementFormPage from "./CashMovementFormPage";
 import CashCategoriesPage from "./CashCategoriesPage";
+import CashSaleItemsPage from "./CashSaleItemsPage";
+import CashSaleReportPage from "./CashSaleReportPage";
 
-type View = { mode: "ledger" } | { mode: "new-income" } | { mode: "new-expense" } | { mode: "categories" };
+type View =
+  | { mode: "ledger" }
+  | { mode: "new-income" }
+  | { mode: "new-expense" }
+  | { mode: "categories" }
+  | { mode: "sale-items" }
+  | { mode: "sale-report" };
 
 function firstOfMonthISO(): string {
   const today = parseDateUTC(todayISO());
@@ -107,6 +115,14 @@ export default function CashPage({ can }: CashPageProps) {
     return <CashCategoriesPage onDone={() => setView({ mode: "ledger" })} />;
   }
 
+  if (view.mode === "sale-items") {
+    return <CashSaleItemsPage onDone={() => setView({ mode: "ledger" })} />;
+  }
+
+  if (view.mode === "sale-report") {
+    return <CashSaleReportPage onDone={() => setView({ mode: "ledger" })} />;
+  }
+
   const totals = ledger?.totals;
   const netPositive = (totals?.net_cents ?? 0) >= 0;
 
@@ -133,6 +149,16 @@ export default function CashPage({ can }: CashPageProps) {
           {can("cash.expense") && (
             <Button variant="secondary" onClick={() => setView({ mode: "new-expense" })}>
               Novo egresso
+            </Button>
+          )}
+          {can("cash.view") && (
+            <Button variant="ghost" onClick={() => setView({ mode: "sale-report" })}>
+              Relatório por produto
+            </Button>
+          )}
+          {can("cash.manage") && (
+            <Button variant="ghost" onClick={() => setView({ mode: "sale-items" })}>
+              Catálogo
             </Button>
           )}
           {can("cash.manage") && (
