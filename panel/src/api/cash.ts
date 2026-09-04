@@ -27,6 +27,8 @@ export interface CreateMovementInput {
   occurred_on: string;
   description?: string;
   expense_category_id?: number;
+  sale_item_id?: number;
+  quantity?: number;
   method?: string;
 }
 
@@ -37,9 +39,52 @@ export interface CashMovement {
   occurred_on: string;
   description: string | null;
   expense_category_id: number | null;
+  sale_item_id: number | null;
+  quantity: number | null;
   method: string | null;
   created_by: number;
   created_at: string;
+}
+
+// § 6 (10B) — sale catalog. No delete: deactivating keeps past sales'
+// sale_item_id valid for the per-product report.
+export interface SaleItem {
+  id: number;
+  name: string;
+  default_price_cents: number | null;
+  active: boolean;
+}
+
+export function getSaleItems(): Promise<SaleItem[]> {
+  return apiFetch("/panel/cash/sale-items");
+}
+
+export function createSaleItem(input: { name: string; default_price_cents?: number }): Promise<SaleItem> {
+  return apiFetch("/panel/cash/sale-items", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function updateSaleItem(
+  id: number,
+  patch: { name?: string; default_price_cents?: number | null; active?: boolean },
+): Promise<SaleItem> {
+  return apiFetch(`/panel/cash/sale-items/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
+}
+
+export interface SaleItemReportEntry {
+  sale_item_id: number;
+  name: string;
+  quantity_sold: number;
+  total_cents: number;
+}
+
+export interface SaleItemReport {
+  from: string;
+  to: string;
+  items: SaleItemReportEntry[];
+}
+
+export function getSaleItemReport(from: string, to: string): Promise<SaleItemReport> {
+  return apiFetch(`/panel/cash/sale-items/report?from=${from}&to=${to}`);
 }
 
 export function createMovement(input: CreateMovementInput): Promise<CashMovement> {

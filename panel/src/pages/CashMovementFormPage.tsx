@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { createMovement, getExpenseCategories, type ExpenseCategory } from "../api/cash";
+import {
+  createMovement,
+  getExpenseCategories,
+  getSaleItems,
+  type ExpenseCategory,
+  type SaleItem,
+} from "../api/cash";
 import { ApiError } from "../api/client";
 import { describeCashError } from "../lib/cashErrorMessages";
 import { todayISO } from "../lib/dateUtils";
@@ -8,14 +14,16 @@ import Button from "../components/ui/Button";
 import { TextField, SelectField } from "../components/ui/Field";
 import DatePicker from "../components/ui/DatePicker";
 
-// § 5.2 — 10A only has the manual/free-form paths. The catalog-driven sale
-// (pick a product, quantity, suggested price) is 10B (cash_sale_items
-// doesn't exist yet) — this form never references it.
 const METHOD_OPTIONS: { value: string; label: string }[] = [
   { value: "cash", label: "Dinheiro" },
   { value: "pix_manual", label: "Pix" },
   { value: "external", label: "Outro" },
 ];
+
+// § 6 (10B) — an income can be a catalog sale (sale_item_id + quantity) or a
+// free concept (description only). Kept as an explicit mode so the form
+// never sends a half-filled mix of both.
+type SaleMode = "catalog" | "free";
 
 interface CashMovementFormPageProps {
   kind: "income" | "expense";
@@ -24,6 +32,17 @@ interface CashMovementFormPageProps {
 }
 
 export default function CashMovementFormPage({ kind, onSaved, onCancel }: CashMovementFormPageProps) {
+  const [saleMode, setSaleMode] = useState<SaleMode>("catalog");
+  const [saleItems, setSaleItems] = useState<SaleItem[] | null>(null);
+  const [saleItemsError, setSaleItemsError] = useState<string | null>(null);
+  const [selectedItemId, setSelectedItemId] = useState("");
+  const [quantity, setQuantity] = useState("1");
+  // Once the operator edits the amount by hand, quantity/item changes stop
+  // recalculating it — otherwise a manual discount silently gets clobbered
+  // by the next quantity tweak. Reset on item change (a new item starts a
+  // fresh auto-priced state) and via the "Recalcular" button.
+  const [priceManuallyEdited, setPriceManuallyEdited] = useState(false);
+
   const [amountReais, setAmountReais] = useState("");
   const [occurredOn, setOccurredOn] = useState(todayISO());
   const [description, setDescription] = useState("");
@@ -49,6 +68,49 @@ export default function CashMovementFormPage({ kind, onSaved, onCancel }: CashMo
     };
   }, [kind]);
 
+  useEffect(() => {
+    if (kind !== "income") return;
+    let cancelled = false;
+    getSaleItems()
+      .then((data) => {
+        if (!cancelled) setSaleItems(data);
+      })
+      .catch(() => {
+        if (!cancelled) setSaleItemsError("Não foi possível carregar o catálogo.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [kind]);
+
+  const selectedItem = saleItems?.find((item) => String(item.id) === selectedItemId) ?? null;
+
+  // Auto-price: recomputes amount from item price × quantity as long as the
+  // operator hasn't touched the amount field by hand.
+  useEffect(() => {
+    if (kind !== "income" || saleMode !== "catalog") return;
+    if (priceManuallyEdited) return;
+    if (!selectedItem || selectedItem.default_price_cents == null) return;
+    const qty = Number(quantity);
+    if (!Number.isFinite(qty) || qty <= 0) return;
+    setAmountReais(((selectedItem.default_price_cents * qty) / 100).toFixed(2));
+  }, [kind, saleMode, priceManuallyEdited, selectedItem, quantity]);
+
+  function handleSelectItem(id: string) {
+    setSelectedItemId(id);
+    setPriceManuallyEdited(false);
+    setQuantity("1");
+  }
+
+  function handleAmountInput(value: string) {
+    setAmountReais(value);
+    if (kind === "income" && saleMode === "catalog") setPriceManuallyEdited(true);
+  }
+
+  function handleRecalculate() {
+    setPriceManuallyEdited(false);
+  }
+
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     setError(null);
@@ -62,6 +124,19 @@ export default function CashMovementFormPage({ kind, onSaved, onCancel }: CashMo
       setError("Selecione uma categoria.");
       return;
     }
+    if (kind === "income" && saleMode === "catalog" && !selectedItemId) {
+      setError("Selecione um item do catálogo.");
+      return;
+    }
+    const quantityValue = Number(quantity);
+    if (kind === "income" && saleMode === "catalog" && (!Number.isInteger(quantityValue) || quantityValue <= 0)) {
+      setError("Informe uma quantidade válida.");
+      return;
+    }
+    if (kind === "income" && saleMode === "free" && !description.trim()) {
+      setError("Informe uma descrição para a venda.");
+      return;
+    }
 
     setSaving(true);
     try {
@@ -72,6 +147,8 @@ export default function CashMovementFormPage({ kind, onSaved, onCancel }: CashMo
         description: description || undefined,
         method: method || undefined,
         expense_category_id: kind === "expense" ? Number(expenseCategoryId) : undefined,
+        sale_item_id: kind === "income" && saleMode === "catalog" ? Number(selectedItemId) : undefined,
+        quantity: kind === "income" && saleMode === "catalog" ? quantityValue : undefined,
       });
       onSaved();
     } catch (err) {
@@ -82,10 +159,69 @@ export default function CashMovementFormPage({ kind, onSaved, onCancel }: CashMo
   }
 
   const activeCategories = (categories ?? []).filter((c) => c.active);
+  const activeSaleItems = (saleItems ?? []).filter((i) => i.active);
 
   return (
     <div className="max-w-md">
       <Card as="form" onSubmit={handleSubmit} className="p-6 flex flex-col gap-4">
+        {kind === "income" && (
+          <div className="flex flex-col gap-1">
+            <span className="text-[12.5px] font-medium text-panel-700">Tipo de venda</span>
+            <div className="inline-flex rounded-panel-sm border border-panel-300 overflow-hidden self-start">
+              <button
+                type="button"
+                onClick={() => setSaleMode("catalog")}
+                className={`px-3 py-1.5 text-[13px] font-medium transition-colors ${
+                  saleMode === "catalog" ? "bg-accent-500 text-white" : "bg-white text-panel-700 hover:bg-panel-100"
+                }`}
+              >
+                Produto do catálogo
+              </button>
+              <button
+                type="button"
+                onClick={() => setSaleMode("free")}
+                className={`px-3 py-1.5 text-[13px] font-medium transition-colors border-l border-panel-300 ${
+                  saleMode === "free" ? "bg-accent-500 text-white" : "bg-white text-panel-700 hover:bg-panel-100"
+                }`}
+              >
+                Conceito livre
+              </button>
+            </div>
+          </div>
+        )}
+
+        {kind === "income" && saleMode === "catalog" && (
+          <>
+            {saleItemsError && <p className="text-sm text-danger-500">{saleItemsError}</p>}
+            <SelectField
+              id="movement-sale-item"
+              label="Item"
+              required
+              disabled={!saleItems}
+              value={selectedItemId}
+              onChange={(e) => handleSelectItem(e.target.value)}
+            >
+              <option value="">{saleItems ? "Selecione..." : "Carregando..."}</option>
+              {activeSaleItems.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </SelectField>
+
+            <TextField
+              id="movement-quantity"
+              label="Quantidade"
+              type="number"
+              min={1}
+              step="1"
+              required
+              value={quantity}
+              onChange={(e) => setQuantity(e.target.value)}
+            />
+          </>
+        )}
+
         <TextField
           id="movement-amount"
           label="Valor (R$)"
@@ -94,8 +230,23 @@ export default function CashMovementFormPage({ kind, onSaved, onCancel }: CashMo
           step="0.01"
           required
           value={amountReais}
-          onChange={(e) => setAmountReais(e.target.value)}
+          onChange={(e) => handleAmountInput(e.target.value)}
         />
+
+        {kind === "income" && saleMode === "catalog" && priceManuallyEdited && (
+          <div className="flex items-center gap-2 -mt-2">
+            <span className="text-[11.5px] text-warning-700 bg-warning-50 rounded-full px-2.5 py-0.5 font-medium">
+              Valor ajustado manualmente
+            </span>
+            <button
+              type="button"
+              onClick={handleRecalculate}
+              className="text-[11.5px] text-accent-600 hover:text-accent-700 font-medium underline"
+            >
+              Recalcular
+            </button>
+          </div>
+        )}
 
         <div className="flex flex-col gap-1">
           <span className="text-[12.5px] font-medium text-panel-700">Data</span>
@@ -125,7 +276,8 @@ export default function CashMovementFormPage({ kind, onSaved, onCancel }: CashMo
 
         <TextField
           id="movement-description"
-          label="Descrição"
+          label={kind === "income" && saleMode === "free" ? "Descrição" : "Descrição (opcional)"}
+          required={kind === "income" && saleMode === "free"}
           value={description}
           onChange={(e) => setDescription(e.target.value)}
         />

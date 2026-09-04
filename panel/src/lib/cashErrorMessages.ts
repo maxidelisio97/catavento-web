@@ -6,6 +6,11 @@ const MESSAGES: Record<string, string> = {
   MOVEMENT_NOT_FOUND: "Movimento não encontrado.",
   EXPENSE_CATEGORY_ID_NOT_ALLOWED_FOR_INCOME: "Uma receita não pode ter categoria de despesa.",
   FORBIDDEN: "Você não tem permissão para essa ação.",
+  SALE_ITEM_NAME_ALREADY_EXISTS: "Já existe um item com esse nome.",
+  SALE_ITEM_NOT_FOUND: "Item não encontrado.",
+  EXPENSE_CATEGORY_NOT_FOUND: "Categoria não encontrada.",
+  SALE_ITEM_ID_AND_QUANTITY_MUST_BE_PAIRED: "Selecione o item e a quantidade.",
+  SALE_ITEM_ID_NOT_ALLOWED_FOR_EXPENSE: "Uma despesa não pode ter item de venda.",
 };
 
 export function describeCashError(code: string): string {
