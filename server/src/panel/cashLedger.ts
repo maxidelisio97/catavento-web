@@ -110,17 +110,29 @@ export async function getCashLedger(db: Kysely<DB>, input: { from: string; to: s
         AND (p.received_at AT TIME ZONE 'UTC')::date BETWEEN ${from}::date AND ${to}::date
     ),
     movements AS (
+      -- § 6 (10B): a catalog sale (sale_item_id set) doesn't require a
+      -- typed description — the item name (plus quantity) is a concept on
+      -- its own. LEFT JOIN because a free-concept sale and every expense
+      -- have no sale_item_id at all. Deactivating a sale item never hides
+      -- this: the join is on id, not on active, so a past sale keeps
+      -- showing the name of an item that's since been taken off the sell
+      -- picker (confirmed with Maxi — history, not a live catalog lookup).
       SELECT
         'cash_movement'::text AS source,
         cm.kind AS kind,
         cm.occurred_on AS date,
         cm.amount_cents AS amount_cents,
-        COALESCE(cm.description, '') AS concept,
+        COALESCE(
+          NULLIF(cm.description, ''),
+          CASE WHEN si.name IS NOT NULL THEN si.name || ' (x' || cm.quantity || ')' END,
+          ''
+        ) AS concept,
         cm.method AS method,
         cm.created_by AS registered_by,
         NULL::integer AS reservation_id,
         cm.id AS source_id
       FROM cash_movements cm
+      LEFT JOIN cash_sale_items si ON si.id = cm.sale_item_id
       WHERE cm.deleted_at IS NULL
         AND cm.occurred_on BETWEEN ${from}::date AND ${to}::date
     ),
