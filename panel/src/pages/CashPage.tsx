@@ -9,7 +9,7 @@ import DatePicker from "../components/ui/DatePicker";
 import CashMovementFormPage from "./CashMovementFormPage";
 import CashCategoriesPage from "./CashCategoriesPage";
 import CashSaleItemsPage from "./CashSaleItemsPage";
-import CashSaleReportPage from "./CashSaleReportPage";
+import CashReportsPage from "./CashReportsPage";
 
 type View =
   | { mode: "ledger" }
@@ -17,7 +17,7 @@ type View =
   | { mode: "new-expense" }
   | { mode: "categories" }
   | { mode: "sale-items" }
-  | { mode: "sale-report" };
+  | { mode: "reports" };
 
 function firstOfMonthISO(): string {
   const today = parseDateUTC(todayISO());
@@ -119,8 +119,8 @@ export default function CashPage({ can }: CashPageProps) {
     return <CashSaleItemsPage onDone={() => setView({ mode: "ledger" })} />;
   }
 
-  if (view.mode === "sale-report") {
-    return <CashSaleReportPage onDone={() => setView({ mode: "ledger" })} />;
+  if (view.mode === "reports") {
+    return <CashReportsPage onDone={() => setView({ mode: "ledger" })} />;
   }
 
   const totals = ledger?.totals;
@@ -152,8 +152,8 @@ export default function CashPage({ can }: CashPageProps) {
             </Button>
           )}
           {can("cash.view") && (
-            <Button variant="ghost" onClick={() => setView({ mode: "sale-report" })}>
-              Relatório por produto
+            <Button variant="ghost" onClick={() => setView({ mode: "reports" })}>
+              Relatórios
             </Button>
           )}
           {can("cash.manage") && (

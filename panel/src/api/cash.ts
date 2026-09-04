@@ -121,3 +121,22 @@ export interface Ledger {
 export function getLedger(from: string, to: string): Promise<Ledger> {
   return apiFetch(`/panel/cash/ledger?from=${from}&to=${to}`);
 }
+
+// § 6 (10C) — expenses grouped by category. `category_id: null` groups
+// every uncategorized expense under "Sem categoria" (server-side, not
+// dropped) — see server/src/panel/expensesByCategoryReport.ts.
+export interface ExpenseCategoryReportEntry {
+  category_id: number | null;
+  name: string;
+  total_cents: number;
+}
+
+export interface ExpenseCategoryReport {
+  from: string;
+  to: string;
+  categories: ExpenseCategoryReportEntry[];
+}
+
+export function getExpenseCategoryReport(from: string, to: string): Promise<ExpenseCategoryReport> {
+  return apiFetch(`/panel/cash/expense-categories/report?from=${from}&to=${to}`);
+}
