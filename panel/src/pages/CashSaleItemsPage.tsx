@@ -20,6 +20,7 @@ export default function CashSaleItemsPage({ onDone }: CashSaleItemsPageProps) {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<number | null>(null);
+  const [toggleError, setToggleError] = useState<string | null>(null);
 
   function reload() {
     getSaleItems()
@@ -55,9 +56,12 @@ export default function CashSaleItemsPage({ onDone }: CashSaleItemsPageProps) {
 
   async function handleToggleActive(item: SaleItem) {
     setTogglingId(item.id);
+    setToggleError(null);
     try {
       await updateSaleItem(item.id, { active: !item.active });
       reload();
+    } catch (err) {
+      setToggleError(err instanceof ApiError ? describeCashError(err.message) : "Erro inesperado ao atualizar.");
     } finally {
       setTogglingId(null);
     }
@@ -92,6 +96,7 @@ export default function CashSaleItemsPage({ onDone }: CashSaleItemsPageProps) {
         </Button>
       </Card>
       {createError && <p className="text-sm text-danger-500">{createError}</p>}
+      {toggleError && <p className="text-sm text-danger-500">{toggleError}</p>}
 
       {loadError && <p className="text-sm text-danger-500">{loadError}</p>}
       {!items && !loadError && <p className="text-sm text-panel-500">Carregando...</p>}
