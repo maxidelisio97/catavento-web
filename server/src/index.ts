@@ -21,6 +21,7 @@ import panelRolesPlugin from './plugins/panelRoles.js';
 import panelPermissionsPlugin from './plugins/panelPermissions.js';
 import panelCashPlugin from './plugins/panelCash.js';
 import panelChannexPlugin from './plugins/panelChannex.js';
+import webhooksChannexPlugin from './plugins/webhooksChannex.js';
 
 // trustProxy scoped to 127.0.0.1, not `true`: Nginx proxies here from
 // loopback (see nginx.conf.example / nginx-panel.conf.example), so only
@@ -48,6 +49,7 @@ app.get('/api/health', async () => ({ ok: true }));
 
 app.register(paymentsPlugin, { prefix: '/api' });
 app.register(webhooksPlugin, { prefix: '/api' });
+app.register(webhooksChannexPlugin, { prefix: '/api' });
 app.register(roomsPlugin, { prefix: '/api' });
 app.register(availabilityPlugin, { prefix: '/api' });
 app.register(reservationsPlugin, { prefix: '/api' });

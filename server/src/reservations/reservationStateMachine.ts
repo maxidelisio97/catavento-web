@@ -9,6 +9,13 @@
  *
  * `payment_conflict` is inherited from M4 and untouched by M7 (§ 0): it has
  * no outgoing transitions here, matching the spec's diagram.
+ *
+ * `ota_conflict` (SPEC-modulo-12B-reservas-entrantes.md § 0.1) is the same
+ * family as `payment_conflict` — a reservation with no `reservation_nights`
+ * assigned, excluded from disponibilidad — but unlike `payment_conflict` it
+ * DOES have outgoing transitions: manual retry can resolve it into
+ * `confirmed` once a unit frees up, and the OTA can cancel the underlying
+ * booking while it's still unresolved.
  */
 
 export type ReservationStatus =
@@ -18,16 +25,18 @@ export type ReservationStatus =
   | 'payment_conflict'
   | 'checked_in'
   | 'checked_out'
-  | 'no_show';
+  | 'no_show'
+  | 'ota_conflict';
 
 const VALID_TRANSITIONS: Record<ReservationStatus, readonly ReservationStatus[]> = {
   pending_payment: ['confirmed', 'cancelled'],
-  confirmed: ['checked_in', 'cancelled', 'no_show'],
+  confirmed: ['checked_in', 'cancelled', 'no_show', 'ota_conflict'],
   checked_in: ['checked_out'],
   cancelled: [],
   checked_out: [],
   no_show: [],
   payment_conflict: [],
+  ota_conflict: ['confirmed', 'cancelled'],
 };
 
 export class InvalidReservationTransitionError extends Error {

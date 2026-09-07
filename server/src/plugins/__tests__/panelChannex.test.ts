@@ -19,11 +19,16 @@ import { hashPassword } from '../../auth/hashPassword.js';
 import { createRoleWithPermissions, createSessionCookieForRole, getDueñoRoleId } from '../../test-support/permissionFixtures.js';
 import { SESSION_COOKIE_NAME } from '../../auth/cookie.js';
 
-const { getProperty, listRoomTypes } = vi.hoisted(() => ({ getProperty: vi.fn(), listRoomTypes: vi.fn() }));
+const { getProperty, listRoomTypes, fetchBookingRevisionsFeed, ackBookingRevision } = vi.hoisted(() => ({
+  getProperty: vi.fn(),
+  listRoomTypes: vi.fn(),
+  fetchBookingRevisionsFeed: vi.fn().mockResolvedValue([]),
+  ackBookingRevision: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock('../../channex/channexClient.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../channex/channexClient.js')>();
-  return { ...actual, getProperty, listRoomTypes };
+  return { ...actual, getProperty, listRoomTypes, fetchBookingRevisionsFeed, ackBookingRevision };
 });
 
 const panelChannexPlugin = (await import('../panelChannex.js')).default;
@@ -434,5 +439,90 @@ describe('authorization (ota.manage)', () => {
     });
 
     expect(response.statusCode).toBe(200);
+  });
+});
+
+describe('POST /panel/channex/pull-now', () => {
+  it('400s when property_id is not configured', async () => {
+    const token = await insertSessionCookie();
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/channex/pull-now',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(fetchBookingRevisionsFeed).not.toHaveBeenCalled();
+  });
+
+  it('pulls the feed, processes items, and reports how many were acked', async () => {
+    const token = await insertSessionCookie();
+    const app = buildApp();
+    await app.inject({
+      method: 'PATCH',
+      url: '/panel/channex/config',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { property_id: 'f6a1bdf1-cef7-4e16-bc4e-a4799510d23f', is_active: true },
+    });
+
+    // A revision that can't be parsed with the fields this fixture provides
+    // — proves the wiring end-to-end without depending on the raw Channex
+    // shape (see channexPayload.ts's docstring on that shape being unverified).
+    fetchBookingRevisionsFeed.mockResolvedValueOnce([{ id: 'feed-1' }]);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/channex/pull-now',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ total_feed_items: 1, processed: 1, acked: 0 });
+    expect(ackBookingRevision).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /panel/channex/conflicts/:reservationId/retry', () => {
+  it('404s for a reservation that does not exist', async () => {
+    const token = await insertSessionCookie();
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/channex/conflicts/999999/retry',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("409s for a reservation that isn't in ota_conflict", async () => {
+    const token = await insertSessionCookie();
+    const app = buildApp();
+    const roomId = await insertRoom('Casal');
+    await testDb.insertInto('room_rates').values({ room_id: roomId, occupancy: 2, weekday_cents: 10000, weekend_cents: 15000 }).execute();
+    const reservation = await testDb
+      .insertInto('reservations')
+      .values({
+        room_id: roomId,
+        check_in: '2026-09-10',
+        check_out: '2026-09-13',
+        guests: 2,
+        status: 'confirmed',
+        origin: 'ota',
+        total_cents: 30000,
+      })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/panel/channex/conflicts/${reservation.id}/retry`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+
+    expect(response.statusCode).toBe(409);
   });
 });

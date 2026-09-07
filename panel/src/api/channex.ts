@@ -71,3 +71,39 @@ export function setChannexRoomTypeMap(input: ChannexRoomTypeMapInput): Promise<v
 export function getChannexMappingStatus(): Promise<ChannexMappingStatus> {
   return apiFetch("/panel/channex/mapping-status");
 }
+
+export interface ChannexPullNowResult {
+  total_feed_items: number;
+  processed: number;
+  acked: number;
+}
+
+/** § 3.4/§ 9: manual trigger for the Booking Revisions Feed pull — no cron until 12D. */
+export function pullChannexNow(): Promise<ChannexPullNowResult> {
+  return apiFetch("/panel/channex/pull-now", { method: "POST" });
+}
+
+export interface ChannexRetryConflictResult {
+  resolved: boolean;
+}
+
+/** § 3.5: reassigns a unit for a reservation stuck in `ota_conflict`, if one is free now. */
+export function retryOtaConflict(reservationId: number): Promise<ChannexRetryConflictResult> {
+  return apiFetch(`/panel/channex/conflicts/${reservationId}/retry`, { method: "POST" });
+}
+
+export interface OtaConflictSummary {
+  id: number;
+  code: string | null;
+  room_name: string;
+  check_in: string;
+  check_out: string;
+  guests: number;
+  guest_name: string | null;
+  total_cents: number;
+}
+
+/** § 6: the tape chart can't show these (no reservation_nights rows) — this list is how an operator sees them. */
+export function getOtaConflicts(): Promise<OtaConflictSummary[]> {
+  return apiFetch("/panel/channex/conflicts");
+}

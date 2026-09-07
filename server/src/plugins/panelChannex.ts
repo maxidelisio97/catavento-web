@@ -11,6 +11,8 @@ import { getChannexConfig, updateChannexConfig } from '../channex/channexConfig.
 import { ChannexApiError, ChannexNotConfiguredError, getProperty, listRoomTypes } from '../channex/channexClient.js';
 import { getMappingStatus, listLocalRoomsWithMapping, setRoomTypeMap } from '../channex/channexRoomTypeMap.js';
 import { isChannexRoomTypeUniqueViolation } from '../channex/isChannexRoomTypeUniqueViolation.js';
+import { pullBookingRevisions } from '../channex/pullBookingRevisions.js';
+import { retryOtaConflict, listOtaConflicts, ReservationNotFoundError, ReservationNotInConflictError } from '../panel/otaConflicts.js';
 
 const channexConfigResponseSchema = z.object({
   connected: z.boolean(),
@@ -61,6 +63,27 @@ const mappingStatusResponseSchema = z.object({
   complete: z.boolean(),
   total_rooms: z.number(),
   mapped_rooms: z.number(),
+});
+
+const pullNowResponseSchema = z.object({
+  total_feed_items: z.number(),
+  processed: z.number(),
+  acked: z.number(),
+});
+
+const retryConflictResponseSchema = z.object({
+  resolved: z.boolean(),
+});
+
+const conflictSummaryResponseSchema = z.object({
+  id: z.number(),
+  code: z.string().nullable(),
+  room_name: z.string(),
+  check_in: z.string(),
+  check_out: z.string(),
+  guests: z.number(),
+  guest_name: z.string().nullable(),
+  total_cents: z.number(),
 });
 
 const errorResponseSchema = z.object({ error: z.string() });
@@ -218,6 +241,76 @@ const panelChannexPlugin: FastifyPluginAsync<PanelChannexPluginOptions> = async 
       async () => {
         const status = await getMappingStatus(db);
         return { complete: status.complete, total_rooms: status.totalRooms, mapped_rooms: status.mappedRooms };
+      },
+    );
+
+    // § 3.4/§ 9: manual trigger for the pull — no cron until 12D. Reuses the
+    // exact same processing function the webhook uses (§ 3.1).
+    typed.post(
+      '/panel/channex/pull-now',
+      { schema: { response: { 200: pullNowResponseSchema, 400: errorResponseSchema } } },
+      async () => {
+        const current = await getChannexConfig(db);
+        if (!current.propertyId) {
+          throw httpError(400, 'property_id não configurado');
+        }
+
+        const result = await pullBookingRevisions(db, current.propertyId);
+        return {
+          total_feed_items: result.totalFeedItems,
+          processed: result.items.length,
+          acked: result.items.filter((item) => item.acked).length,
+        };
+      },
+    );
+
+    // § 6: the tape chart has nowhere to render an ota_conflict reservation
+    // (it's keyed off reservation_nights, which this status has none of) —
+    // this is the actual listing an operator uses to see and act on them.
+    typed.get(
+      '/panel/channex/conflicts',
+      { schema: { response: { 200: z.array(conflictSummaryResponseSchema) } } },
+      async () => {
+        const conflicts = await listOtaConflicts(db);
+        return conflicts.map((c) => ({
+          id: c.id,
+          code: c.code,
+          room_name: c.roomName,
+          check_in: c.checkIn,
+          check_out: c.checkOut,
+          guests: c.guests,
+          guest_name: c.guestName,
+          total_cents: c.totalCents,
+        }));
+      },
+    );
+
+    // § 3.5: reassigns a unit for a reservation stuck in `ota_conflict`, if
+    // one is free now. Same reassignment transaction the modification path
+    // uses (channex/processBookingRevision.ts's reassignOtaReservation).
+    typed.post(
+      '/panel/channex/conflicts/:reservationId/retry',
+      {
+        schema: {
+          params: z.object({ reservationId: z.coerce.number().int().positive() }),
+          response: { 200: retryConflictResponseSchema, 404: errorResponseSchema, 409: errorResponseSchema },
+        },
+      },
+      async (request, reply) => {
+        try {
+          const result = await retryOtaConflict(db, request.params.reservationId);
+          return result;
+        } catch (error) {
+          if (error instanceof ReservationNotFoundError) {
+            reply.status(404).send({ error: 'reservation_not_found' });
+            return;
+          }
+          if (error instanceof ReservationNotInConflictError) {
+            reply.status(409).send({ error: `reservation_not_in_conflict: ${error.status}` });
+            return;
+          }
+          throw error;
+        }
       },
     );
   });

@@ -1,20 +1,10 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { timingSafeEqual } from 'node:crypto';
 import type { Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
 import { db as prodDb } from '../db/client.js';
 import { config } from '../config.js';
 import { processPaymentReceived } from '../availability/confirmPendingReservation.js';
-
-function isValidToken(receivedToken: unknown): boolean {
-  if (typeof receivedToken !== 'string') return false;
-
-  const expected = Buffer.from(config.asaas.webhookToken);
-  const received = Buffer.from(receivedToken);
-
-  if (expected.length !== received.length) return false;
-  return timingSafeEqual(expected, received);
-}
+import { isValidWebhookSecret } from './verifyWebhookSecret.js';
 
 interface AsaasWebhookBody {
   event?: string;
@@ -34,7 +24,7 @@ const webhooksPlugin: FastifyPluginAsync<WebhooksPluginOptions> = async (fastify
   fastify.post<{ Body: AsaasWebhookBody }>('/webhooks/asaas', async (request, reply) => {
     const token = request.headers['asaas-access-token'];
 
-    if (!isValidToken(token)) {
+    if (!isValidWebhookSecret(token, config.asaas.webhookToken)) {
       return reply.status(401).send({ error: 'invalid_webhook_token' });
     }
 

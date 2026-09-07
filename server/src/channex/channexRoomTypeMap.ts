@@ -58,6 +58,26 @@ export async function setRoomTypeMap(db: Kysely<DB>, input: SetRoomTypeMapInput)
     .execute();
 }
 
+/**
+ * Reverse lookup for SPEC-modulo-12B-reservas-entrantes.md § 3.1 step 1: a
+ * Booking Revision from Channex carries `channex_room_type_id`, and we need
+ * our local `room_id` to call `createReservation`. Returns `null` (not a
+ * thrown error) when there's no mapping — the caller decides how to treat
+ * an unmapped room type (§ 3.1: "tratar como error a loggear", not a crash).
+ */
+export async function findRoomIdByChannexRoomTypeId(
+  db: Kysely<DB>,
+  channexRoomTypeId: string,
+): Promise<number | null> {
+  const row = await db
+    .selectFrom('channex_room_type_map')
+    .select('room_id')
+    .where('channex_room_type_id', '=', channexRoomTypeId)
+    .executeTakeFirst();
+
+  return row?.room_id ?? null;
+}
+
 export interface MappingStatus {
   complete: boolean;
   totalRooms: number;

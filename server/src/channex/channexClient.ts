@@ -122,3 +122,24 @@ export async function listRoomTypes(propertyId: string): Promise<ChannexRoomType
   );
   return result.data.map((resource) => ({ id: resource.id, ...resource.attributes }));
 }
+
+/**
+ * GET /booking_revisions/feed?filter[property_id]=... — SPEC-modulo-12B
+ * § 1/§ 3.4. Returns raw items (not narrowed to a typed shape): the exact
+ * response schema hasn't been captured against the real staging API yet
+ * (see channexPayload.ts's docstring) — `parseChannexBookingRevision`
+ * normalizes each item, this function only fetches them.
+ */
+export async function fetchBookingRevisionsFeed(propertyId: string): Promise<unknown[]> {
+  const result = await channexRequest<{ data: unknown[] }>(`/booking_revisions/feed?filter[property_id]=${propertyId}`);
+  return result.data ?? [];
+}
+
+/**
+ * POST /booking_revisions/:id/ack — SPEC-modulo-12B § 1: required after
+ * processing a revision from the feed, or Channex keeps re-serving it and
+ * eventually emails a "não confirmado" notice (§ 1, 30 min without ack).
+ */
+export async function ackBookingRevision(revisionId: string): Promise<void> {
+  await channexRequest(`/booking_revisions/${revisionId}/ack`, { method: 'POST' });
+}
