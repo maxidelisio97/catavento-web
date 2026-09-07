@@ -8,6 +8,7 @@ import RateOverridesCalendar from "../components/settings/RateOverridesCalendar"
 import UsersListPage from "./UsersListPage";
 import RolesListPage from "./RolesListPage";
 import CashPage from "./CashPage";
+import OtaPage from "./OtaPage";
 
 interface PanelLayoutProps {
   user: PanelUser;
@@ -15,7 +16,7 @@ interface PanelLayoutProps {
   onLogoutAll: () => Promise<void>;
 }
 
-type PanelSection = "tape-chart" | "geral" | "precos" | "calendario" | "caixa" | "usuarios" | "papeis";
+type PanelSection = "tape-chart" | "geral" | "precos" | "calendario" | "caixa" | "otas" | "usuarios" | "papeis";
 
 // Flat items for now, grouped only by a visual divider — once there are
 // enough sections under "Configuração" to earn a real submenu, promote this
@@ -35,6 +36,7 @@ const SECTION_TITLES: Record<Exclude<PanelSection, "tape-chart">, string> = {
   precos: "Preços",
   calendario: "Calendário",
   caixa: "Caixa",
+  otas: "Canais/OTAs",
   usuarios: "Usuários",
   papeis: "Papéis",
 };
@@ -73,6 +75,7 @@ export default function PanelLayout({ user, onLogout, onLogoutAll }: PanelLayout
   // without admin.roles, or config.settings without config.calendar.
   const showMapa = permissions.has("reservations.view");
   const showCaixa = permissions.has("cash.view");
+  const showOtas = permissions.has("ota.manage");
   const showUsuarios = permissions.has("admin.users");
   const showPapeis = permissions.has("admin.roles");
   const visibleConfigSections = CONFIG_SECTIONS.filter(({ permission }) => permissions.has(permission));
@@ -85,6 +88,7 @@ export default function PanelLayout({ user, onLogout, onLogoutAll }: PanelLayout
     ...(showMapa ? (["tape-chart"] as const) : []),
     ...visibleConfigSections.map((s) => s.key),
     ...(showCaixa ? (["caixa"] as const) : []),
+    ...(showOtas ? (["otas"] as const) : []),
     ...(showUsuarios ? (["usuarios"] as const) : []),
     ...(showPapeis ? (["papeis"] as const) : []),
   ];
@@ -147,6 +151,15 @@ export default function PanelLayout({ user, onLogout, onLogoutAll }: PanelLayout
                 <span className="w-px h-5 bg-panel-200 mx-1" aria-hidden="true" />
                 <NavButton active={section === "caixa"} onClick={() => setSection("caixa")}>
                   Caixa
+                </NavButton>
+              </>
+            )}
+
+            {showOtas && (
+              <>
+                <span className="w-px h-5 bg-panel-200 mx-1" aria-hidden="true" />
+                <NavButton active={section === "otas"} onClick={() => setSection("otas")}>
+                  Canais/OTAs
                 </NavButton>
               </>
             )}
@@ -218,6 +231,7 @@ export default function PanelLayout({ user, onLogout, onLogoutAll }: PanelLayout
             {section === "precos" && <RoomRatesTable />}
             {section === "calendario" && <RateOverridesCalendar />}
             {section === "caixa" && <CashPage can={permissions.has} />}
+            {section === "otas" && <OtaPage />}
             {section === "usuarios" && <UsersListPage />}
             {section === "papeis" && <RolesListPage />}
           </div>
