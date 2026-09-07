@@ -11,6 +11,7 @@
     "test": "vitest run",
     "register-webhook": "tsx scripts/register-webhook.ts",
     "confirm-sandbox-payment": "tsx scripts/confirm-sandbox-payment.ts",
+    "test-channex-connection": "tsx scripts/test-channex-connection.ts",
     "migrate:up": "node-pg-migrate up -j ts",
     "migrate:down": "node-pg-migrate down -j ts",
     "migrate:up:test": "tsx scripts/migrateTestDb.ts",

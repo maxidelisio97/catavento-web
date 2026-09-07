@@ -2,6 +2,12 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
+    // Without this, Vitest's default glob (**/*.test.*) also picks up the
+    // compiled build in dist/ (gitignored, present locally after any
+    // `npm run build`), running every test twice — once as source .ts,
+    // once as compiled .js — doubling DB connections, open Fastify
+    // instances, and total suite runtime/memory.
+    exclude: ['**/node_modules/**', '**/dist/**'],
     // Several test files share catavento_db_test and TRUNCATE the same
     // tables between cases. Running files in parallel (Vitest's default)
     // causes real FK violations and deadlocks between them — force

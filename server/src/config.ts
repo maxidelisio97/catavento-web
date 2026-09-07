@@ -12,6 +12,10 @@ type AsaasEnv = 'sandbox' | 'production';
 
 const env: AsaasEnv = process.env.ASAAS_ENV === 'production' ? 'production' : 'sandbox';
 
+type ChannexEnv = 'staging' | 'production';
+
+const channexEnv: ChannexEnv = process.env.CHANNEX_ENV === 'production' ? 'production' : 'staging';
+
 export const config = {
   port: Number(process.env.PORT) || 3001,
   databaseUrl: process.env.DATABASE_URL as string,
@@ -34,5 +38,19 @@ export const config = {
       env === 'production'
         ? 'https://api.asaas.com'
         : 'https://api-sandbox.asaas.com',
+  },
+  channex: {
+    env: channexEnv,
+    // Deliberately NOT in `required` above (unlike ASAAS_API_KEY): M12 is
+    // brand new and Maxi loads this key by hand once 12A's test-connection
+    // is ready to try against the real staging property (SPEC-modulo-12A
+    // § 4) — the server, dev environment, and test suite must keep working
+    // before that happens. channexClient.ts throws a clear
+    // ChannexNotConfiguredError at call time instead of failing at boot.
+    apiKey: process.env.CHANNEX_API_KEY,
+    baseUrl:
+      channexEnv === 'production'
+        ? 'https://app.channex.io/api/v1'
+        : 'https://staging.channex.io/api/v1',
   },
 };

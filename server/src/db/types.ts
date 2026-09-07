@@ -55,6 +55,24 @@ export interface CashSaleItems {
   name: string;
 }
 
+export interface ChannexConfig {
+  created_at: Generated<Timestamp>;
+  environment: Generated<string>;
+  id: Generated<number>;
+  is_active: Generated<boolean>;
+  property_id: string | null;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface ChannexRoomTypeMap {
+  channex_rate_plan_id: string | null;
+  channex_room_type_id: string;
+  created_at: Generated<Timestamp>;
+  id: Generated<number>;
+  room_id: number;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface Payments {
   amount_cents: number;
   asaas_payment_id: string | null;
@@ -249,6 +267,8 @@ export interface DB {
   cash_expense_categories: CashExpenseCategories;
   cash_movements: CashMovements;
   cash_sale_items: CashSaleItems;
+  channex_config: ChannexConfig;
+  channex_room_type_map: ChannexRoomTypeMap;
   payments: Payments;
   permissions: Permissions;
   pgmigrations: Pgmigrations;

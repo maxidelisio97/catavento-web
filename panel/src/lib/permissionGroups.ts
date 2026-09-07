@@ -4,12 +4,13 @@ import type { Permission } from "../api/permissions";
 // row label itself comes straight from `permissions.description` (already
 // PT-BR, seeded in the M9 migration) — no separate label map needed, only
 // the group headers, which the catalog doesn't carry.
-const GROUP_ORDER = ["reservations", "payments", "config", "admin"] as const;
+const GROUP_ORDER = ["reservations", "payments", "config", "ota", "admin"] as const;
 
 const GROUP_LABELS: Record<(typeof GROUP_ORDER)[number], string> = {
   reservations: "Reservas",
   payments: "Financeiro",
   config: "Configuração",
+  ota: "Canais/OTAs",
   admin: "Administração",
 };
 
