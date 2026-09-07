@@ -20,6 +20,7 @@ import panelUsersPlugin from './plugins/panelUsers.js';
 import panelRolesPlugin from './plugins/panelRoles.js';
 import panelPermissionsPlugin from './plugins/panelPermissions.js';
 import panelCashPlugin from './plugins/panelCash.js';
+import panelChannexPlugin from './plugins/panelChannex.js';
 
 // trustProxy scoped to 127.0.0.1, not `true`: Nginx proxies here from
 // loopback (see nginx.conf.example / nginx-panel.conf.example), so only
@@ -62,6 +63,7 @@ app.register(panelUsersPlugin);
 app.register(panelRolesPlugin);
 app.register(panelPermissionsPlugin);
 app.register(panelCashPlugin);
+app.register(panelChannexPlugin);
 
 registerErrorHandler(app);
 
