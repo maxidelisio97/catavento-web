@@ -137,6 +137,32 @@ describe('POST /webhooks/channex — verificación de secreto', () => {
     expect(reservation.total_cents).toBe(30000);
   });
 
+  it('acepta el trigger genérico "booking" (dropdown single-select de la UI de Channex), no solo los tres específicos', async () => {
+    const room = await testDb
+      .insertInto('rooms')
+      .values({ name: 'Casal', capacity: 2, pets_allowed: false, default_min_stay: 1 })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+    await testDb.insertInto('room_rates').values({ room_id: room.id, occupancy: 2, weekday_cents: 10000, weekend_cents: 15000 }).execute();
+    await testDb.insertInto('room_units').values({ room_id: room.id, label: '101' }).execute();
+
+    const channexRoomTypeId = randomUUID();
+    await setRoomTypeMap(testDb, { roomId: room.id, channexRoomTypeId, channexRatePlanId: null });
+    getBookingRevision.mockResolvedValue(revisionResource(channexRoomTypeId));
+
+    const app = buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/webhooks/channex',
+      headers: { 'x-channex-webhook-secret': 'channex-test-secret' },
+      payload: webhookEnvelope({ event: 'booking' }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(getBookingRevision).toHaveBeenCalledWith('REV-WEBHOOK-1');
+    expect(ackBookingRevision).toHaveBeenCalledWith('REV-WEBHOOK-1');
+  });
+
   it('un envelope con un event desconocido no llama a getBookingRevision y responde 200', async () => {
     const app = buildApp();
     const response = await app.inject({

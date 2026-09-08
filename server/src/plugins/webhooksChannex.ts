@@ -42,7 +42,16 @@ import { shouldAck } from '../channex/pullBookingRevisions.js';
 // Property/Global Webhooks → headers).
 const WEBHOOK_SECRET_HEADER = 'x-channex-webhook-secret';
 
-const WEBHOOK_EVENTS = new Set(['booking_new', 'booking_modification', 'booking_cancellation']);
+// Channex's "Create Webhook" UI (staging, checked 2026-09-08) offers a
+// single-select "Trigger" dropdown, not a multi-select event_mask like the
+// API docs describe — so this accepts BOTH the generic "booking" trigger
+// (fires for any revision: new/modified/cancelled, per docs.channex.io's
+// Webhook Collection page) AND the three specific ones, in case a webhook
+// is ever configured either way. This handler doesn't branch on `event`
+// itself regardless — it always fetches the full revision by id and reads
+// ITS OWN `status` attribute, so accepting a broader set of trigger names
+// here is risk-free.
+const WEBHOOK_EVENTS = new Set(['booking', 'booking_new', 'booking_modification', 'booking_cancellation']);
 
 interface WebhookEnvelope {
   bookingId: string;
