@@ -54,6 +54,10 @@ const NOT_PAYABLE_STATUSES = new Set<ReservationStatus>([
   'no_show',
   'checked_out',
   'payment_conflict',
+  // SPEC-modulo-12B-reservas-entrantes.md § 0.1: same family as
+  // payment_conflict — no unit assigned, nothing real to attach money to
+  // until it's resolved (§ 3.5).
+  'ota_conflict',
 ]);
 
 export class ReservationNotFoundError extends Error {

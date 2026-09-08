@@ -8,7 +8,7 @@
  * the transaction, then decide.
  */
 
-import type { Kysely } from 'kysely';
+import type { Kysely, Transaction } from 'kysely';
 import type { DB } from '../db/types.js';
 import { calculateCombinedAvailability } from './combinedAvailability.js';
 import { fetchRoomStayData } from './repository.js';
@@ -65,9 +65,13 @@ export interface CreateReservationInput {
   /**
    * SPEC-modulo-7-gestion-operativa.md § 6A.4 / § 7.1: every current caller
    * IS the public web flow, hence the 'web' default. Manual reservations
-   * (módulo 7D) are the only other caller and always pass 'manual' explicitly.
+   * (módulo 7D) always pass 'manual' explicitly. SPEC-modulo-12B-reservas-
+   * entrantes.md § 0.2: OTA reservations pass 'ota' — this is also the flag
+   * that skips `unavailable_closed`/`unavailable_min_stay` below (an OTA
+   * sale already happened; those are local stop-sell rules, not a veto over
+   * a booking that exists regardless).
    */
-  origin?: 'web' | 'manual';
+  origin?: 'web' | 'manual' | 'ota';
   /**
    * Initial status. Defaults to 'pending_payment' (the web flow's only
    * value). Manual reservations (§ 7.1) pass 'confirmed' — they're created
@@ -97,6 +101,14 @@ export interface CreateReservationInput {
    * regardless of the override (see createReservation.ts's freeze comment).
    */
   overrideTotalCents?: number;
+  /**
+   * SPEC-modulo-12B-reservas-entrantes.md § 1.1/§ 4: identifies the OTA
+   * booking this reservation was created from (stable across revisions).
+   * `origin === 'ota'` only.
+   */
+  channexBookingId?: string;
+  /** Last Channex revision applied — idempotency key for the webhook/pull. `origin === 'ota'` only. */
+  channexLastRevisionId?: string;
 }
 
 export interface CreateReservationResult {
@@ -111,7 +123,23 @@ export async function createReservation(
   db: Kysely<DB>,
   input: CreateReservationInput,
 ): Promise<CreateReservationResult> {
-  return db.transaction().execute(async (trx) => {
+  // Reentrancy (SPEC-modulo-12B-reservas-entrantes.md § 3.1): processBookingRevision
+  // wraps its whole read-decide-write sequence in one transaction holding a
+  // per-booking advisory lock, then calls this function with that same
+  // transaction — Kysely throws if `.transaction()` is called again on an
+  // already-open Transaction (see confirmPendingReservation.ts's identical
+  // `db.isTransaction` pattern/comment), so detect that case and reuse `db`
+  // directly instead of nesting.
+  if (db.isTransaction) {
+    return runCreateReservation(db as Transaction<DB>, input);
+  }
+  return db.transaction().execute((trx) => runCreateReservation(trx, input));
+}
+
+async function runCreateReservation(
+  trx: Transaction<DB>,
+  input: CreateReservationInput,
+): Promise<CreateReservationResult> {
     const room = await trx
       .selectFrom('rooms')
       .select('id')
@@ -144,6 +172,11 @@ export async function createReservation(
       totalUnits: stayData.totalUnits,
       overrides: stayData.overrides,
       occupiedByDate: stayData.occupiedByDate,
+      // § 0.2: the aggregate calendar check (`cupo=0` for a closed night) is
+      // the ACTUAL gate a stop-sell enforces — calculatePrice's own closed
+      // check below is secondary bookkeeping for the price itself, not what
+      // blocks availability. Both must skip together for origin === 'ota'.
+      skipClosedCheck: input.origin === 'ota',
       units: stayData.roomUnits,
       unitReservations: stayData.unitReservations,
     });
@@ -173,7 +206,12 @@ export async function createReservation(
         closed: o.closed,
       })),
       roomDefaultMinStay: stayData.defaultMinStay,
-      allowBelowMinStay: input.allowBelowMinStay,
+      // § 0.2: acotado a origin === 'ota' — allowBelowMinStay from a manual
+      // caller's own forceCommercial flag is preserved untouched; an OTA
+      // caller never sets allowBelowMinStay itself, this is the only path
+      // that turns it on.
+      allowBelowMinStay: input.origin === 'ota' ? true : input.allowBelowMinStay,
+      skipClosedCheck: input.origin === 'ota',
     });
 
     if (price.status === 'unavailable_closed') {
@@ -223,6 +261,8 @@ export async function createReservation(
         origin: input.origin ?? 'web',
         created_by: input.createdBy ?? null,
         override_total_cents: input.overrideTotalCents ?? null,
+        channex_booking_id: input.channexBookingId ?? null,
+        channex_last_revision_id: input.channexLastRevisionId ?? null,
       })
       .returning(['id', 'code'])
       .executeTakeFirstOrThrow();
@@ -263,5 +303,4 @@ export async function createReservation(
     await assertReservationNightsConsistency(trx, reservation.id);
 
     return { id: reservation.id, totalCents, code: reservation.code, depositCents, petFeeCents };
-  });
 }

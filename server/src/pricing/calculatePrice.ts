@@ -40,6 +40,16 @@ export interface CalculatePriceInput {
    * web flow never sets this — min-stay stays a hard rejection there.
    */
   allowBelowMinStay?: boolean;
+  /**
+   * SPEC-modulo-12B-reservas-entrantes.md § 0.2: an OTA already sold this
+   * stay — `closed` (a local "stop-sell" override) can't apply retroactively
+   * to a sale that already happened. Distinct from `allowBelowMinStay`
+   * because manual reservations (§ 7.2) skip min-stay but NEVER skip
+   * `closed` — only `createReservation` sets this, and only for
+   * `origin === 'ota'`. A closed night still prices at its override price if
+   * one is set, otherwise the base rate.
+   */
+  skipClosedCheck?: boolean;
 }
 
 export interface PriceAvailable {
@@ -96,7 +106,8 @@ function findRoomRate(roomRates: RoomRateRow[], guests: number): RoomRateRow | u
 }
 
 export function calculatePrice(input: CalculatePriceInput): CalculatePriceResult {
-  const { checkIn, checkOut, guests, roomRates, rateOverrides, roomDefaultMinStay, allowBelowMinStay } = input;
+  const { checkIn, checkOut, guests, roomRates, rateOverrides, roomDefaultMinStay, allowBelowMinStay, skipClosedCheck } =
+    input;
 
   const checkInDate = parseDateUTC(checkIn);
   const checkOutDate = parseDateUTC(checkOut);
@@ -121,7 +132,7 @@ export function calculatePrice(input: CalculatePriceInput): CalculatePriceResult
     const nightDate = formatDateUTC(cursor);
     const override = overridesByDate.get(nightDate);
 
-    if (override?.closed) {
+    if (override?.closed && !skipClosedCheck) {
       return { status: 'unavailable_closed', closedDate: nightDate };
     }
 

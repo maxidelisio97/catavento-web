@@ -1,12 +1,14 @@
 import { useState } from "react";
 import OtaConnectionPage from "./OtaConnectionPage";
 import OtaRoomMappingPage from "./OtaRoomMappingPage";
+import OtaReservationsPage from "./OtaReservationsPage";
 
-type OtaTab = "conexao" | "mapeamento";
+type OtaTab = "conexao" | "mapeamento" | "reservas";
 
 const TABS: { key: OtaTab; label: string }[] = [
   { key: "conexao", label: "Conexão" },
   { key: "mapeamento", label: "Mapeamento" },
+  { key: "reservas", label: "Reservas" },
 ];
 
 export default function OtaPage() {
@@ -33,6 +35,7 @@ export default function OtaPage() {
 
       {tab === "conexao" && <OtaConnectionPage />}
       {tab === "mapeamento" && <OtaRoomMappingPage />}
+      {tab === "reservas" && <OtaReservationsPage />}
     </div>
   );
 }

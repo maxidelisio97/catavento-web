@@ -25,6 +25,14 @@ export interface CalculateAvailabilityInput {
   overrides: AvailabilityOverrideRow[];
   /** Count of active reservations per night ('YYYY-MM-DD' -> count). Missing = 0. */
   occupiedByDate: Record<string, number>;
+  /**
+   * SPEC-modulo-12B-reservas-entrantes.md § 0.2: an OTA already sold this
+   * stay — a local `closed` stop-sell can't apply retroactively. Only
+   * `createReservation` sets this, and only for `origin === 'ota'`; every
+   * other caller (public availability, tape chart, confirmPendingReservation's
+   * re-check) keeps `closed` zeroing `cupo` as it always has.
+   */
+  skipClosedCheck?: boolean;
 }
 
 export interface NightAvailability {
@@ -43,13 +51,13 @@ export interface CalculateAvailabilityResult {
 }
 
 export function calculateAvailability(input: CalculateAvailabilityInput): CalculateAvailabilityResult {
-  const { checkIn, checkOut, totalUnits, overrides, occupiedByDate } = input;
+  const { checkIn, checkOut, totalUnits, overrides, occupiedByDate, skipClosedCheck } = input;
 
   const overridesByDate = new Map(overrides.map((o) => [o.date, o]));
 
   const nights: NightAvailability[] = eachNightUTC(checkIn, checkOut).map((date) => {
     const override = overridesByDate.get(date);
-    const cupo = override?.closed ? 0 : (override?.unitsAvailable ?? totalUnits);
+    const cupo = override?.closed && !skipClosedCheck ? 0 : (override?.unitsAvailable ?? totalUnits);
     const ocupadas = occupiedByDate[date] ?? 0;
     const disponibles = Math.max(cupo - ocupadas, 0);
     return { date, cupo, ocupadas, disponibles };

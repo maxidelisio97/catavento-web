@@ -8,6 +8,7 @@ import {
   type PanelPaymentMethod,
   type RegisterPaymentResult,
 } from "../../api/reservationActions";
+import { retryOtaConflict } from "../../api/channex";
 import { ApiError } from "../../api/client";
 import { formatDateDisplay, formatMoneyCents } from "../../lib/dateUtils";
 import Button from "../ui/Button";
@@ -44,7 +45,7 @@ const ORIGIN_LABELS: Record<string, string> = { web: "Site", manual: "Manual", o
 // SPEC-modulo-7-gestion-operativa.md § 5 — states with no outgoing
 // transition that could ever need a new payment (mirrors the backend's
 // NOT_PAYABLE_STATUSES in panel/reservationActions.ts).
-const NOT_PAYABLE_STATUSES = new Set(["cancelled", "no_show", "checked_out", "payment_conflict"]);
+const NOT_PAYABLE_STATUSES = new Set(["cancelled", "no_show", "checked_out", "payment_conflict", "ota_conflict"]);
 
 const PAYMENT_METHOD_LABELS: Record<PanelPaymentMethod, string> = {
   asaas_pix: "PIX (Asaas)",
@@ -138,6 +139,22 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged, c
       reload();
     } catch (err) {
       setActionError(describeActionError(err, "Não foi possível fazer o check-out."));
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function handleRetryOtaConflict() {
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      const result = await retryOtaConflict(detail!.id);
+      if (!result.resolved) {
+        setActionError("Ainda não há unidade livre para esta reserva.");
+      }
+      reload();
+    } catch (err) {
+      setActionError(describeActionError(err, "Não foi possível tentar resolver o conflito."));
     } finally {
       setActionBusy(false);
     }
@@ -365,6 +382,17 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged, c
                 {!NOT_PAYABLE_STATUSES.has(detail.status) && (canCharge || canExtra) && (
                   <Button size="sm" onClick={() => (showPaymentForm ? closePaymentForm() : openPaymentForm())}>
                     Registrar pagamento
+                  </Button>
+                )}
+
+                {detail.status === "ota_conflict" && (
+                  <Button
+                    size="sm"
+                    onClick={handleRetryOtaConflict}
+                    disabled={actionBusy || !can("ota.manage")}
+                    title={!can("ota.manage") ? NO_PERMISSION_MESSAGE : undefined}
+                  >
+                    Tentar resolver
                   </Button>
                 )}
               </div>

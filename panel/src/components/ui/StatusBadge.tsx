@@ -10,6 +10,7 @@ const STATUS_TONE: Record<string, BadgeTone> = {
   cancelled: "neutral",
   payment_conflict: "danger",
   no_show: "danger",
+  ota_conflict: "danger",
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -20,6 +21,7 @@ const STATUS_LABELS: Record<string, string> = {
   checked_in: "Check-in feito",
   checked_out: "Check-out feito",
   no_show: "No-show",
+  ota_conflict: "Conflito de OTA",
 };
 
 interface StatusBadgeProps {

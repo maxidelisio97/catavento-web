@@ -52,5 +52,13 @@ export const config = {
       channexEnv === 'production'
         ? 'https://app.channex.io/api/v1'
         : 'https://staging.channex.io/api/v1',
+    // SPEC-modulo-12B-reservas-entrantes.md § 3.3: Channex doesn't sign
+    // webhooks with HMAC — this is a custom header value WE choose when
+    // configuring the webhook on Channex's side, verified with the same
+    // constant-time comparison as Asaas's token, but never the SAME secret
+    // (§ 7: "el secreto de Channex no se confunda ni se filtre junto al de
+    // Asaas"). Deliberately not in `required` above, same reasoning as
+    // CHANNEX_API_KEY: M12 is still being wired up by hand.
+    webhookSecret: process.env.CHANNEX_WEBHOOK_SECRET,
   },
 };

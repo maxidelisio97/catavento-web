@@ -145,6 +145,8 @@ export interface Reservations {
   cancel_reason: string | null;
   cancelled_at: Timestamp | null;
   cancelled_by: number | null;
+  channex_booking_id: string | null;
+  channex_last_revision_id: string | null;
   check_in: Timestamp;
   check_out: Timestamp;
   checked_in_at: Timestamp | null;
