@@ -41,36 +41,33 @@ export function shouldAck(outcome: PullItemOutcome): boolean {
   );
 }
 
-/** Best-effort feed-item id for the ack call — see channexPayload.ts's docstring on why this isn't verified against a real payload yet. */
-function extractFeedItemId(raw: unknown): string | undefined {
-  if (typeof raw !== 'object' || raw === null) return undefined;
-  const obj = raw as { id?: string; revision_id?: string; booking?: { revision_id?: string } };
-  return obj.id ?? obj.revision_id ?? obj.booking?.revision_id;
-}
-
 export async function pullBookingRevisions(db: Kysely<DB>, propertyId: string): Promise<PullBookingRevisionsResult> {
   const rawItems = await fetchBookingRevisionsFeed(propertyId);
   const items: PullResultItem[] = [];
 
   for (const raw of rawItems) {
-    const feedItemId = extractFeedItemId(raw);
-
     // Risk-review finding (pre-merge, fresh-context review): a single
     // problematic feed item (a genuine processing error — parseChannex-
     // BookingRevision itself never throws, see its own docstring) must not
     // abort the rest of this batch — every OTHER, unrelated booking's
     // create/modify/cancel in the same pull still needs to go through.
     let outcome: PullItemOutcome;
+    let revisionId: string | undefined;
     try {
       const parsed = parseChannexBookingRevision(raw);
+      revisionId = parsed?.revisionId;
       outcome = parsed ? await processBookingRevision(db, parsed) : { kind: 'unparseable' };
     } catch (err) {
       outcome = { kind: 'error', message: err instanceof Error ? err.message : 'unknown error' };
     }
 
+    // The revision's own id (parsed.revisionId, confirmed == the feed
+    // item's JSON:API resource id — see channexPayload.ts's docstring) is
+    // what `ackBookingRevision` expects. Nothing to ack if parsing failed
+    // before that id was even extracted.
     let acked = false;
-    if (shouldAck(outcome) && feedItemId) {
-      await ackBookingRevision(feedItemId);
+    if (shouldAck(outcome) && revisionId) {
+      await ackBookingRevision(revisionId);
       acked = true;
     }
 

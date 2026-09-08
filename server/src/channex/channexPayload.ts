@@ -1,52 +1,69 @@
 /**
- * Maps a raw Channex Booking Revision payload (webhook body or one feed
- * item) into `ChannexBookingRevisionInput` (processBookingRevision.ts) —
- * kept in this ONE file specifically so a field-name mismatch found against
- * a real payload is a one-file fix, not a hunt through transaction logic.
+ * Maps a Channex Booking Revision resource (already flattened from its
+ * JSON:API `{data: {id, attributes}}`/`{data: [{id, attributes}]}` shape by
+ * `channexClient.ts`'s `getBookingRevision`/`fetchBookingRevisionsFeed`)
+ * into `ChannexBookingRevisionInput` (processBookingRevision.ts).
  *
- * ⚠️ NOT VERIFIED AGAINST A REAL CHANNEX PAYLOAD. Field names below are
- * based on SPEC-modulo-12B-reservas-entrantes.md § 1 ("booking.id,
- * revision_id, status, rooms[].room_type_id") and Channex's published API
- * shape, but this repo has never received (or captured) a real webhook
- * delivery or feed response from Channex. Before relying on this in
- * production: trigger a real test booking against the staging property,
- * capture the actual webhook body AND a real `/booking_revisions/feed`
- * response, and adjust the field paths below to match — do not assume this
- * guess is correct just because it type-checks.
+ * VERIFIED LIVE against staging.channex.io on 2026-09-08: a real test
+ * booking was created via Channex's own "Booking CRS" app on the staging
+ * property (f6a1bdf1-cef7-4e16-bc4e-a4799510d23f), then fetched for real
+ * through GET /booking_revisions/feed AND GET /booking_revisions/:id, run
+ * through this exact parser and `processBookingRevision` end-to-end against
+ * catavento_db_test, and acked back to Channex for real. The reservation it
+ * produced matched the source booking field-for-field (guest name built
+ * from customer.name + customer.surname, dates, guest count, amount in
+ * cents). No field-name adjustments were needed — the shape below (already
+ * confirmed once against the published docs on 2026-09-07) held exactly.
+ *
+ * ```json
+ * {
+ *   "type": "booking_revision",
+ *   "id": "03dd7198-...",              // THIS is the revision id — there is
+ *   "attributes": {                     // no separate "revision_id" field.
+ *     "booking_id": "cfa33f3b-...",
+ *     "status": "new",                  // "new" | "modified" | "cancelled"
+ *     "rooms": [{ "room_type_id": "...", "checkin_date": "...", "checkout_date": "...", "amount": "200.00", "occupancy": {...} }],
+ *     "customer": { "name": "User", "surname": "Channex", "mail": "...", "phone": "..." },
+ *     "occupancy": { "adults": 2, "children": 0, "infants": 0 },
+ *     "arrival_date": "2019-04-26",     // booking-level dates — NOT "checkin_date"
+ *     "departure_date": "2019-04-27",   // ("checkin_date"/"checkout_date" only exist per-room)
+ *     "amount": "220.00",               // total for the stay, as a decimal STRING
+ *     "currency": "GBP"
+ *   }
+ * }
+ * ```
+ *
+ * The webhook itself does NOT carry any of this — Channex's docs are
+ * explicit that `booking_new`/`booking_modification`/`booking_cancellation`
+ * webhook deliveries only carry `{event, payload: {booking_id, revision_id}}`
+ * and exist "to trigger a Pull booking revision operation from the PMS":
+ * the PMS is expected to call `GET /booking_revisions/:id` with that
+ * `revision_id` to fetch the shape above. `webhooksChannex.ts` does that
+ * fetch before ever calling this parser — this file only ever sees the full
+ * revision resource, from either that fetch or a feed item, never the raw
+ * webhook envelope.
  */
 import type { ChannexBookingRevisionInput } from './processBookingRevision.js';
 
-interface RawChannexRoom {
-  room_type_id?: string;
-  channex_room_type_id?: string;
-  [key: string]: unknown;
-}
-
-interface RawChannexBooking {
+/** The flattened shape channexClient.ts produces: `{ id: <resource id>, ...attributes }`. */
+export interface FlatChannexBookingRevision {
   id?: string;
   booking_id?: string;
-  revision_id?: string;
   status?: string;
-  rooms?: RawChannexRoom[];
-  checkin_date?: string;
-  checkout_date?: string;
+  rooms?: { room_type_id?: string }[];
+  customer?: { name?: string; surname?: string; mail?: string; phone?: string };
+  occupancy?: { adults?: number; children?: number; infants?: number };
   arrival_date?: string;
   departure_date?: string;
-  occupancy?: { adults?: number; children?: number };
+  /** Total for the stay, as Channex reports it — a decimal string (e.g. "220.00"), per the docs example. */
   amount?: number | string;
-  amount_cents?: number;
-  customer?: { name?: string; mail?: string; phone?: string };
   [key: string]: unknown;
 }
 
 const STATUS_MAP: Record<string, ChannexBookingRevisionInput['status']> = {
   new: 'new',
-  created: 'new',
   modified: 'modified',
-  modification: 'modified',
-  updated: 'modified',
   cancelled: 'cancelled',
-  canceled: 'cancelled',
 };
 
 function toDateOnly(value: string | undefined): string | undefined {
@@ -59,25 +76,25 @@ function toCents(amount: number | string | undefined): number | undefined {
   if (amount === undefined) return undefined;
   const asNumber = typeof amount === 'string' ? Number(amount) : amount;
   if (!Number.isFinite(asNumber)) return undefined;
-  // Channex typically reports amounts as decimal currency units (e.g. 350.00),
-  // same convention as Asaas's API — converted to cents like the rest of this
-  // codebase (server/CLAUDE.md: "Dinero: centavos como INTEGER").
+  // Confirmed decimal-string convention (docs example: "220.00") — same
+  // conversion the rest of this codebase uses (server/CLAUDE.md: "Dinero:
+  // centavos como INTEGER").
   return Math.round(asNumber * 100);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
 }
 
 /**
  * Returns `null` for anything that isn't a processable revision: missing
  * required fields, or a shape this parser doesn't recognize at all.
  *
- * Risk-review finding (pre-merge, fresh-context review): the raw shape is,
- * by this file's own docstring, UNVERIFIED against a real Channex payload —
- * so this wraps the actual parsing in a try/catch and never lets a
- * malformed/unexpected-type field (e.g. `status` arriving as a number
- * instead of a string) throw out to the caller. Both the webhook
- * (§ 3.2: "responder 200 aunque haya overbooking del lado del PMS", i.e.
- * never let a body-shape surprise become a 5xx to Channex) and the pull
- * (one bad feed item must not abort the rest of the batch) depend on this
- * function never throwing.
+ * Wraps the actual parsing in a try/catch and never lets a
+ * malformed/unexpected-type field throw out to the caller — both the
+ * webhook (never a non-200 to Channex over a body-shape surprise) and the
+ * pull (one bad feed item must not abort the rest of the batch) depend on
+ * this function never throwing.
  */
 export function parseChannexBookingRevision(raw: unknown): ChannexBookingRevisionInput | null {
   try {
@@ -87,20 +104,15 @@ export function parseChannexBookingRevision(raw: unknown): ChannexBookingRevisio
   }
 }
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0;
-}
-
 function parseChannexBookingRevisionUnsafe(raw: unknown): ChannexBookingRevisionInput | null {
   if (typeof raw !== 'object' || raw === null) return null;
+  const flat = raw as FlatChannexBookingRevision;
 
-  const body = raw as { booking?: RawChannexBooking } & RawChannexBooking;
-  const booking = body.booking ?? body;
-  if (typeof booking !== 'object' || booking === null) return null;
-
-  const bookingId = booking.booking_id ?? booking.id;
-  const revisionId = booking.revision_id;
-  const rawStatus = booking.status;
+  // The revision id IS the resource's own `id` — confirmed there is no
+  // separate `revision_id` attribute (see this file's docstring example).
+  const revisionId = flat.id;
+  const bookingId = flat.booking_id;
+  const rawStatus = flat.status;
 
   if (!isNonEmptyString(bookingId) || !isNonEmptyString(revisionId) || !isNonEmptyString(rawStatus)) return null;
 
@@ -111,16 +123,21 @@ function parseChannexBookingRevisionUnsafe(raw: unknown): ChannexBookingRevision
     return { bookingId, revisionId, status };
   }
 
-  const rooms = Array.isArray(booking.rooms) ? booking.rooms : [];
+  const rooms = Array.isArray(flat.rooms) ? flat.rooms : [];
   if (rooms.length > 1) {
     return { bookingId, revisionId, status, multiRoom: true };
   }
 
   const room = rooms[0];
-  const channexRoomTypeId = room?.room_type_id ?? room?.channex_room_type_id;
-  const checkIn = toDateOnly(booking.checkin_date ?? booking.arrival_date);
-  const checkOut = toDateOnly(booking.checkout_date ?? booking.departure_date);
-  const guests = (booking.occupancy?.adults ?? 0) + (booking.occupancy?.children ?? 0);
+  const channexRoomTypeId = room?.room_type_id;
+  // Booking-level dates — confirmed field names are arrival_date/departure_date,
+  // NOT checkin_date/checkout_date (those only exist per-room in `rooms[]`).
+  const checkIn = toDateOnly(flat.arrival_date);
+  const checkOut = toDateOnly(flat.departure_date);
+  const guests = (flat.occupancy?.adults ?? 0) + (flat.occupancy?.children ?? 0);
+
+  // Confirmed: customer.name and customer.surname are separate fields.
+  const guestName = [flat.customer?.name, flat.customer?.surname].filter(isNonEmptyString).join(' ') || undefined;
 
   return {
     bookingId,
@@ -130,9 +147,9 @@ function parseChannexBookingRevisionUnsafe(raw: unknown): ChannexBookingRevision
     checkIn,
     checkOut,
     guests: guests > 0 ? guests : undefined,
-    guestName: booking.customer?.name,
-    guestEmail: booking.customer?.mail,
-    guestPhone: booking.customer?.phone,
-    amountCents: toCents(booking.amount_cents ?? booking.amount),
+    guestName,
+    guestEmail: flat.customer?.mail,
+    guestPhone: flat.customer?.phone,
+    amountCents: toCents(flat.amount),
   };
 }

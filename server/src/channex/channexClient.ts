@@ -125,14 +125,35 @@ export async function listRoomTypes(propertyId: string): Promise<ChannexRoomType
 
 /**
  * GET /booking_revisions/feed?filter[property_id]=... — SPEC-modulo-12B
- * § 1/§ 3.4. Returns raw items (not narrowed to a typed shape): the exact
- * response schema hasn't been captured against the real staging API yet
- * (see channexPayload.ts's docstring) — `parseChannexBookingRevision`
- * normalizes each item, this function only fetches them.
+ * § 1/§ 3.4. VERIFIED against Channex's published docs (docs.channex.io,
+ * "Bookings Collection" § Booking Revisions Feed, checked 2026-09-07): each
+ * item is a JSON:API resource `{ type, id, attributes: {...} }`, flattened
+ * here to `{ id, ...attributes }` (same convention as `getProperty`/
+ * `listRoomTypes` above) so `channexPayload.ts`'s parser has one flat shape
+ * to read regardless of whether it came from the feed or from
+ * `getBookingRevision` below. The revision's own `id` IS what `ackBookingRevision`
+ * expects — confirmed there is no separate `revision_id` attribute.
  */
 export async function fetchBookingRevisionsFeed(propertyId: string): Promise<unknown[]> {
-  const result = await channexRequest<{ data: unknown[] }>(`/booking_revisions/feed?filter[property_id]=${propertyId}`);
-  return result.data ?? [];
+  const result = await channexRequest<ChannexJsonApiCollection<Record<string, unknown>>>(
+    `/booking_revisions/feed?filter[property_id]=${propertyId}`,
+  );
+  return (result.data ?? []).map((resource) => ({ id: resource.id, ...resource.attributes }));
+}
+
+/**
+ * GET /booking_revisions/:id — SPEC-modulo-12B § 3.2. The webhook itself
+ * carries only `{event, payload: {booking_id, revision_id}}` (confirmed via
+ * Channex's Webhook Collection docs, checked 2026-09-07: "This event was
+ * originally designed to trigger a Pull booking revision operation from the
+ * PMS... we expect the PMS will call `api/v1/booking_revisions/:id`, to
+ * pull the new revision and ack it") — no room/date/guest/amount details
+ * are embedded in the webhook body. This is that pull-by-id call. Same
+ * JSON:API single-resource shape/flattening as `getProperty`.
+ */
+export async function getBookingRevision(revisionId: string): Promise<unknown> {
+  const result = await channexRequest<ChannexJsonApiSingle<Record<string, unknown>>>(`/booking_revisions/${revisionId}`);
+  return { id: result.data.id, ...result.data.attributes };
 }
 
 /**

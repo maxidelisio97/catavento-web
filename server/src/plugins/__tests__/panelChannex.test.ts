@@ -467,9 +467,9 @@ describe('POST /panel/channex/pull-now', () => {
       payload: { property_id: 'f6a1bdf1-cef7-4e16-bc4e-a4799510d23f', is_active: true },
     });
 
-    // A revision that can't be parsed with the fields this fixture provides
-    // — proves the wiring end-to-end without depending on the raw Channex
-    // shape (see channexPayload.ts's docstring on that shape being unverified).
+    // Missing booking_id/status on purpose — this proves the wiring
+    // end-to-end (pull-now -> pullBookingRevisions -> the endpoint's
+    // response shape) without needing a full valid revision fixture here.
     fetchBookingRevisionsFeed.mockResolvedValueOnce([{ id: 'feed-1' }]);
 
     const response = await app.inject({
