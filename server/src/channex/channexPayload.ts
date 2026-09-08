@@ -1,13 +1,19 @@
 /**
  * Maps a Channex Booking Revision resource (already flattened from its
- * JSON:API `{data: {id, attributes}}`/`{data: [{id, attributes}]}` shape by
- * `channexClient.ts`'s `getBookingRevision`/`fetchBookingRevisionsFeed`)
- * into `ChannexBookingRevisionInput` (processBookingRevision.ts).
+ * JSON:API `{data: [{id, attributes}]}` shape by `channexClient.ts`'s
+ * `fetchBookingRevisionsFeed`) into `ChannexBookingRevisionInput`
+ * (processBookingRevision.ts). Both the webhook (webhooksChannex.ts) and
+ * the manual pull reach this parser through the feed — the webhook's real
+ * payload carries no identifier to fetch a single revision by id (see
+ * webhooksChannex.ts's docstring), so there is no separate by-id path.
  *
  * VERIFIED LIVE against staging.channex.io on 2026-09-08: a real test
  * booking was created via Channex's own "Booking CRS" app on the staging
  * property (f6a1bdf1-cef7-4e16-bc4e-a4799510d23f), then fetched for real
- * through GET /booking_revisions/feed AND GET /booking_revisions/:id, run
+ * through GET /booking_revisions/feed (the shape below is identical whether
+ * read via the feed or via GET /booking_revisions/:id, also checked at the
+ * time — the by-id call was later dropped from the design, see this file's
+ * closing paragraph, but its response shape matched the feed's exactly), run
  * through this exact parser and `processBookingRevision` end-to-end against
  * catavento_db_test, and acked back to Channex for real. The reservation it
  * produced matched the source booking field-for-field (guest name built
@@ -33,15 +39,14 @@
  * }
  * ```
  *
- * The webhook itself does NOT carry any of this — Channex's docs are
- * explicit that `booking_new`/`booking_modification`/`booking_cancellation`
- * webhook deliveries only carry `{event, payload: {booking_id, revision_id}}`
- * and exist "to trigger a Pull booking revision operation from the PMS":
- * the PMS is expected to call `GET /booking_revisions/:id` with that
- * `revision_id` to fetch the shape above. `webhooksChannex.ts` does that
- * fetch before ever calling this parser — this file only ever sees the full
- * revision resource, from either that fetch or a feed item, never the raw
- * webhook envelope.
+ * The webhook itself does NOT carry any of this — confirmed by a real live
+ * delivery (2026-09-08): the "booking" trigger sends only
+ * `{event, property_id, user_id, timestamp}`, no booking_id or revision_id
+ * at all. So `webhooksChannex.ts` doesn't fetch a single revision by id —
+ * it triggers a full `pullBookingRevisions` call, which reaches this parser
+ * through `fetchBookingRevisionsFeed` above, same as a manual pull. This
+ * file only ever sees a full revision resource from that feed, never the
+ * raw webhook envelope.
  */
 import type { ChannexBookingRevisionInput } from './processBookingRevision.js';
 

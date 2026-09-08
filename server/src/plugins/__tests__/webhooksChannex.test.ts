@@ -1,15 +1,13 @@
 /**
  * Integration tests for SPEC-modulo-12B-reservas-entrantes.md § 3.2/§ 3.3 —
  * POST /webhooks/channex. Focus: secret verification (never mixed up with
- * Asaas's), and that a valid delivery pulls the full revision by id and
- * reaches processBookingRevision + acks. Mirrors panelChannex.test.ts's
- * app-building/mocking conventions.
+ * Asaas's), and that a valid delivery triggers a full feed pull.
  *
- * The webhook body used here (`webhookEnvelope`) and the fetched revision
- * (`revisionResource`) both match the real shapes confirmed against
- * Channex's published docs (see webhooksChannex.ts/channexPayload.ts's own
- * docstrings, checked 2026-09-07) — NOT the older, incorrect assumption
- * that the webhook body carried full booking details directly.
+ * The webhook body used here (`webhookEnvelope`) matches the REAL shape
+ * confirmed by a live delivery from staging.channex.io on 2026-09-08 (see
+ * webhooksChannex.ts's own docstring): `{event, property_id, user_id,
+ * timestamp}` — no booking_id/revision_id anywhere, which is why this
+ * handler triggers a full pull instead of fetching one revision by id.
  */
 import Fastify from 'fastify';
 import { sql } from 'kysely';
@@ -18,13 +16,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 process.env.CHANNEX_WEBHOOK_SECRET = 'channex-test-secret';
 
-const { getBookingRevision, ackBookingRevision } = vi.hoisted(() => ({
-  getBookingRevision: vi.fn(),
+const { fetchBookingRevisionsFeed, ackBookingRevision } = vi.hoisted(() => ({
+  fetchBookingRevisionsFeed: vi.fn().mockResolvedValue([]),
   ackBookingRevision: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('../../channex/channexClient.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../channex/channexClient.js')>();
-  return { ...actual, getBookingRevision, ackBookingRevision };
+  return { ...actual, fetchBookingRevisionsFeed, ackBookingRevision };
 });
 
 const { testDb } = await import('../../db/testClient.js');
@@ -45,25 +43,26 @@ async function resetDb(): Promise<void> {
   );
 }
 
+const PROPERTY_ID = 'f6a1bdf1-cef7-4e16-bc4e-a4799510d23f';
+
 beforeEach(async () => {
   await resetDb();
-  getBookingRevision.mockReset();
+  fetchBookingRevisionsFeed.mockReset().mockResolvedValue([]);
   ackBookingRevision.mockClear();
 });
 
-/** Confirmed real shape (Channex Webhook Collection docs): only identifiers, no booking details. */
+/** Confirmed real shape (live capture, 2026-09-08) — no payload/booking_id/revision_id. */
 function webhookEnvelope(overrides: Record<string, unknown> = {}) {
   return {
-    event: 'booking_new',
-    payload: { booking_id: 'BK-WEBHOOK-1', property_id: 'f6a1bdf1-cef7-4e16-bc4e-a4799510d23f', revision_id: 'REV-WEBHOOK-1' },
-    property_id: 'f6a1bdf1-cef7-4e16-bc4e-a4799510d23f',
+    event: 'booking',
+    property_id: PROPERTY_ID,
     user_id: null,
-    timestamp: '2026-09-07T00:00:00.000Z',
+    timestamp: '2026-09-08T00:00:00.000Z',
     ...overrides,
   };
 }
 
-/** Confirmed real shape (Channex Bookings Collection docs § Booking Revisions Feed), already flattened as channexClient.ts's getBookingRevision returns it. */
+/** Same flattened shape channexClient.ts's fetchBookingRevisionsFeed produces. */
 function revisionResource(channexRoomTypeId: string) {
   return {
     id: 'REV-WEBHOOK-1',
@@ -84,7 +83,7 @@ describe('POST /webhooks/channex — verificación de secreto', () => {
     const app = buildApp();
     const response = await app.inject({ method: 'POST', url: '/webhooks/channex', payload: webhookEnvelope() });
     expect(response.statusCode).toBe(401);
-    expect(getBookingRevision).not.toHaveBeenCalled();
+    expect(fetchBookingRevisionsFeed).not.toHaveBeenCalled();
   });
 
   it('rechaza con un secreto incorrecto', async () => {
@@ -96,10 +95,12 @@ describe('POST /webhooks/channex — verificación de secreto', () => {
       payload: webhookEnvelope(),
     });
     expect(response.statusCode).toBe(401);
-    expect(getBookingRevision).not.toHaveBeenCalled();
+    expect(fetchBookingRevisionsFeed).not.toHaveBeenCalled();
   });
+});
 
-  it('con el secreto correcto: trae la revisión completa por id, procesa y ackea', async () => {
+describe('POST /webhooks/channex — dispara un pull completo del feed', () => {
+  it('con el secreto correcto: llama a fetchBookingRevisionsFeed con el property_id del envelope, procesa y ackea', async () => {
     const room = await testDb
       .insertInto('rooms')
       .values({ name: 'Casal', capacity: 2, pets_allowed: false, default_min_stay: 1 })
@@ -110,7 +111,7 @@ describe('POST /webhooks/channex — verificación de secreto', () => {
 
     const channexRoomTypeId = randomUUID();
     await setRoomTypeMap(testDb, { roomId: room.id, channexRoomTypeId, channexRatePlanId: null });
-    getBookingRevision.mockResolvedValue(revisionResource(channexRoomTypeId));
+    fetchBookingRevisionsFeed.mockResolvedValue([revisionResource(channexRoomTypeId)]);
 
     const app = buildApp();
     const response = await app.inject({
@@ -121,9 +122,7 @@ describe('POST /webhooks/channex — verificación de secreto', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    // The webhook body itself never carries the revision — this is the
-    // pull-by-id call the real Channex docs require before any processing.
-    expect(getBookingRevision).toHaveBeenCalledWith('REV-WEBHOOK-1');
+    expect(fetchBookingRevisionsFeed).toHaveBeenCalledWith(PROPERTY_ID);
     expect(ackBookingRevision).toHaveBeenCalledWith('REV-WEBHOOK-1');
 
     const reservation = await testDb
@@ -137,19 +136,20 @@ describe('POST /webhooks/channex — verificación de secreto', () => {
     expect(reservation.total_cents).toBe(30000);
   });
 
-  it('acepta el trigger genérico "booking" (dropdown single-select de la UI de Channex), no solo los tres específicos', async () => {
-    const room = await testDb
-      .insertInto('rooms')
-      .values({ name: 'Casal', capacity: 2, pets_allowed: false, default_min_stay: 1 })
-      .returning('id')
-      .executeTakeFirstOrThrow();
-    await testDb.insertInto('room_rates').values({ room_id: room.id, occupancy: 2, weekday_cents: 10000, weekend_cents: 15000 }).execute();
-    await testDb.insertInto('room_units').values({ room_id: room.id, label: '101' }).execute();
+  it('un envelope con un event desconocido no dispara el pull y responde 200', async () => {
+    const app = buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/webhooks/channex',
+      headers: { 'x-channex-webhook-secret': 'channex-test-secret' },
+      payload: { event: 'something_else', property_id: PROPERTY_ID },
+    });
 
-    const channexRoomTypeId = randomUUID();
-    await setRoomTypeMap(testDb, { roomId: room.id, channexRoomTypeId, channexRatePlanId: null });
-    getBookingRevision.mockResolvedValue(revisionResource(channexRoomTypeId));
+    expect(response.statusCode).toBe(200);
+    expect(fetchBookingRevisionsFeed).not.toHaveBeenCalled();
+  });
 
+  it('acepta el trigger genérico "booking" (confirmado en vivo), no solo los tres específicos de la API docs', async () => {
     const app = buildApp();
     const response = await app.inject({
       method: 'POST',
@@ -159,25 +159,11 @@ describe('POST /webhooks/channex — verificación de secreto', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(getBookingRevision).toHaveBeenCalledWith('REV-WEBHOOK-1');
-    expect(ackBookingRevision).toHaveBeenCalledWith('REV-WEBHOOK-1');
+    expect(fetchBookingRevisionsFeed).toHaveBeenCalledWith(PROPERTY_ID);
   });
 
-  it('un envelope con un event desconocido no llama a getBookingRevision y responde 200', async () => {
-    const app = buildApp();
-    const response = await app.inject({
-      method: 'POST',
-      url: '/webhooks/channex',
-      headers: { 'x-channex-webhook-secret': 'channex-test-secret' },
-      payload: { event: 'something_else', payload: {} },
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(getBookingRevision).not.toHaveBeenCalled();
-  });
-
-  it('una falla al traer la revisión (API de Channex caída) responde 200 igual, sin ackear', async () => {
-    getBookingRevision.mockRejectedValue(new Error('network error'));
+  it('una falla en el pull (API de Channex caída) responde 200 igual', async () => {
+    fetchBookingRevisionsFeed.mockRejectedValue(new Error('network error'));
 
     const app = buildApp();
     const response = await app.inject({
@@ -188,6 +174,5 @@ describe('POST /webhooks/channex — verificación de secreto', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(ackBookingRevision).not.toHaveBeenCalled();
   });
 });
