@@ -26,6 +26,7 @@ import {
 import { assertNotOverpayingWithPendingAsaas, OverpaymentError } from './overpaymentGuard.js';
 import { isPendingPaymentUniqueViolation } from './isPendingPaymentUniqueViolation.js';
 import { config } from '../config.js';
+import { schedulePushAvailabilityForReservation } from '../channex/pushAvailability.js';
 
 export type PaymentMethod = 'pix' | 'card';
 
@@ -113,7 +114,7 @@ export async function createOrReuseAsaasPayment(
   db: Kysely<DB>,
   input: CreateOrReuseAsaasPaymentInput,
 ): Promise<PaymentDetails> {
-  return db.transaction().execute(async (trx) => {
+  const result = await db.transaction().execute(async (trx) => {
     await sql`SELECT pg_advisory_xact_lock(${input.reservationId})`.execute(trx);
 
     const existing = await trx
@@ -233,4 +234,16 @@ export async function createOrReuseAsaasPayment(
 
     return buildDetails(input.method, payment);
   });
+
+  // SPEC-modulo-12C § 3.2 (gap found in fresh-context risk review, not one
+  // of the spec's 6 named triggers): `assertNotOverpayingWithPendingAsaas`
+  // above can silently confirm this reservation via
+  // `reconcileStalePendingAsaas` -> `processPaymentReceived(trx, ...)`
+  // (reentrant, so it does NOT push itself — the outer transaction owner
+  // is responsible, same convention as every other reentrant call in this
+  // module). That reentrant confirm and this function's own writes share
+  // ONE transaction, so pushing unconditionally after it commits is always
+  // safe (a no-op re-sync when nothing actually changed, correct when it did).
+  schedulePushAvailabilityForReservation(db, [input.reservationId]);
+  return result;
 }

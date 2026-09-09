@@ -107,3 +107,13 @@ export interface OtaConflictSummary {
 export function getOtaConflicts(): Promise<OtaConflictSummary[]> {
   return apiFetch("/panel/channex/conflicts");
 }
+
+export interface ChannexResyncResult {
+  rooms_pushed: number;
+  rooms_skipped: number;
+}
+
+/** § 3.3/§ 6: full ARI resync (6-month horizon) for every mapped room type — corrects drift the incremental push may have missed. */
+export function resyncChannexAvailability(): Promise<ChannexResyncResult> {
+  return apiFetch("/panel/channex/resync", { method: "POST" });
+}

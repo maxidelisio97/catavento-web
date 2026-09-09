@@ -31,6 +31,7 @@ import { eachNightUTC } from '../shared/dateUtils.js';
 import { generateReservationCode } from '../reservations/generateCode.js';
 import { findRoomIdByChannexRoomTypeId } from './channexRoomTypeMap.js';
 import { assertValidTransition, isValidTransition, type ReservationStatus } from '../reservations/reservationStateMachine.js';
+import { schedulePushAvailability, schedulePushAvailabilityForReservation, type AvailabilityPushRange } from './pushAvailability.js';
 
 /**
  * Normalized shape this module actually needs — deliberately NOT the raw
@@ -63,20 +64,38 @@ export type ProcessBookingRevisionOutcome =
   | { kind: 'unmapped_room_type' }
   | { kind: 'cancelled_unknown_booking' }
   | { kind: 'created'; reservationId: number }
-  | { kind: 'modified'; reservationId: number }
+  /**
+   * `previousRange` (SPEC-modulo-12C § 3.2): set only when the existing
+   * reservation was previously `confirmed` (had real reservation_nights
+   * occupying a room/range) — a modification can change dates and/or room
+   * type, so the OLD range must also get pushed as newly-free, not just the
+   * new one as newly-occupied.
+   */
+  | { kind: 'modified'; reservationId: number; previousRange?: AvailabilityPushRange }
   | { kind: 'cancelled'; reservationId: number }
-  | { kind: 'conflict'; reservationId: number };
+  /** Same `previousRange` reasoning as 'modified' — a reassignment that lands in conflict still frees the old range unconditionally (reassignOtaReservation always releases before trying to reassign). */
+  | { kind: 'conflict'; reservationId: number; previousRange?: AvailabilityPushRange };
 
 interface ExistingReservationRow {
   id: number;
   status: string;
   channex_last_revision_id: string | null;
+  room_id: number;
+  check_in: string;
+  check_out: string;
 }
 
 async function findExistingByBookingId(db: Kysely<DB>, bookingId: string): Promise<ExistingReservationRow | undefined> {
   return db
     .selectFrom('reservations')
-    .select(['id', 'status', 'channex_last_revision_id'])
+    .select([
+      'id',
+      'status',
+      'channex_last_revision_id',
+      'room_id',
+      sql<string>`check_in::text`.as('check_in'),
+      sql<string>`check_out::text`.as('check_out'),
+    ])
     .where('channex_booking_id', '=', bookingId)
     .executeTakeFirst();
 }
@@ -113,7 +132,32 @@ export async function processBookingRevision(
   // reservationId already locked elsewhere. The two-int form is a
   // completely separate lock space from the single-bigint form, which
   // eliminates that cross-domain collision risk outright.
-  return db.transaction().execute((trx) => runProcessBookingRevision(trx, input));
+  const outcome = await db.transaction().execute((trx) => runProcessBookingRevision(trx, input));
+  schedulePushForOutcome(db, outcome);
+  return outcome;
+}
+
+/** SPEC-modulo-12C § 3.2 — fire-and-forget, strictly after this function's own transaction committed above. */
+function schedulePushForOutcome(db: Kysely<DB>, outcome: ProcessBookingRevisionOutcome): void {
+  switch (outcome.kind) {
+    case 'created':
+    case 'cancelled':
+      schedulePushAvailabilityForReservation(db, [outcome.reservationId]);
+      break;
+    case 'modified':
+      // New range now occupied (current row state) + old range freed.
+      schedulePushAvailabilityForReservation(db, [outcome.reservationId]);
+      schedulePushAvailability(db, [outcome.previousRange]);
+      break;
+    case 'conflict':
+      // Nothing new got assigned — only the old range (if any) was freed.
+      schedulePushAvailability(db, [outcome.previousRange]);
+      break;
+    default:
+      // noop_idempotent / multi_room_unsupported / unmapped_room_type /
+      // cancelled_unknown_booking — nothing local changed, nothing to push.
+      break;
+  }
 }
 
 async function runProcessBookingRevision(
@@ -439,6 +483,16 @@ async function processModification(
     return { kind: existing.status === 'cancelled' ? 'cancelled' : 'modified', reservationId: existing.id };
   }
 
+  // § 3.2: captured BEFORE reassignOtaReservation overwrites the row — this
+  // is the range that's about to be freed (reassignOtaReservation always
+  // releases the reservation's current nights before trying to reassign),
+  // which only ever applies starting from 'confirmed' (an 'ota_conflict'
+  // existing reservation has no reservation_nights to free).
+  const previousRange: AvailabilityPushRange | undefined =
+    existing.status === 'confirmed'
+      ? { roomId: existing.room_id, checkIn: existing.check_in, checkOut: existing.check_out }
+      : undefined;
+
   const { available } = await reassignOtaReservation(trx, {
     reservationId: existing.id,
     roomId,
@@ -452,5 +506,7 @@ async function processModification(
     channexRevisionId: input.revisionId,
   });
 
-  return { kind: available ? 'modified' : 'conflict', reservationId: existing.id };
+  return available
+    ? { kind: 'modified', reservationId: existing.id, previousRange }
+    : { kind: 'conflict', reservationId: existing.id, previousRange };
 }

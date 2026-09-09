@@ -28,7 +28,8 @@ vi.mock('../channexRateLimiter.js', () => ({
   },
 }));
 
-const { ChannexApiError, ChannexNotConfiguredError, getProperty, listRoomTypes } = await import('../channexClient.js');
+const { ChannexApiError, ChannexNotConfiguredError, getProperty, listRoomTypes, pushAvailability, pushRestrictions } =
+  await import('../channexClient.js');
 
 function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}) {
   return {
@@ -108,6 +109,30 @@ describe('getProperty', () => {
     expect(JSON.stringify(error)).not.toContain(SECRET);
     expect(Object.keys(error)).not.toContain('headers');
   });
+
+  it('aborts a hung request after the timeout instead of waiting forever (SPEC-modulo-12C: bounds every in-flight push)', async () => {
+    vi.useFakeTimers();
+    try {
+      // Simulates a real hung TCP connection: fetch's promise never settles
+      // on its own — only reacts if the AbortSignal this client passes it
+      // actually fires. If channexClient ever stopped wiring the signal
+      // through, this test would hang instead of failing fast — that's the
+      // point: it proves the abort wiring, not just that SOME error path exists.
+      const fetchMock = vi.fn().mockImplementation((_url: string, init: { signal: AbortSignal }) => {
+        return new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')));
+        });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const result = getProperty('prop-1');
+      const assertion = expect(result).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(15_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('listRoomTypes', () => {
@@ -130,5 +155,92 @@ describe('listRoomTypes', () => {
     ]);
     const [url] = fetchMock.mock.calls[0];
     expect(url).toBe('https://staging.channex.test/api/v1/room_types?filter[property_id]=prop-1');
+  });
+});
+
+describe('pushAvailability', () => {
+  it('POSTs one grouped request to /availability with every value mapped to snake_case', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { data: [{ id: 'task-1', type: 'task' }], meta: { message: 'Success', warnings: [] } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await pushAvailability([
+      { propertyId: 'prop-1', roomTypeId: 'rt-1', date: '2026-07-16', availability: 2 },
+      { propertyId: 'prop-1', roomTypeId: 'rt-1', date: '2026-07-17', availability: 1 },
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('https://staging.channex.test/api/v1/availability');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({
+      values: [
+        { property_id: 'prop-1', room_type_id: 'rt-1', date: '2026-07-16', availability: 2 },
+        { property_id: 'prop-1', room_type_id: 'rt-1', date: '2026-07-17', availability: 1 },
+      ],
+    });
+  });
+
+  it('never calls fetch for an empty values array', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await pushAvailability([]);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('propagates ChannexApiError on a non-OK response, same as getProperty', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(422, { errors: { code: 'unprocessable' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const error = await pushAvailability([{ propertyId: 'p', roomTypeId: 'rt', date: '2026-07-16', availability: 1 }]).catch(
+      (e) => e,
+    );
+
+    expect(error).toBeInstanceOf(ChannexApiError);
+    expect(error.status).toBe(422);
+  });
+});
+
+describe('pushRestrictions', () => {
+  it('POSTs one grouped request to /restrictions with rates/min_stay/stop_sell in snake_case', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { data: [{ id: 'task-1', type: 'task' }], meta: { message: 'Success', warnings: [] } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await pushRestrictions([
+      {
+        propertyId: 'prop-1',
+        ratePlanId: 'rp-1',
+        date: '2026-07-16',
+        rates: [{ occupancy: 2, rate: 20000 }],
+        minStay: 1,
+        stopSell: false,
+      },
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('https://staging.channex.test/api/v1/restrictions');
+    expect(JSON.parse(init.body)).toEqual({
+      values: [
+        {
+          property_id: 'prop-1',
+          rate_plan_id: 'rp-1',
+          date: '2026-07-16',
+          rates: [{ occupancy: 2, rate: 20000 }],
+          min_stay: 1,
+          stop_sell: false,
+        },
+      ],
+    });
+  });
+
+  it('never calls fetch for an empty values array', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await pushRestrictions([]);
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

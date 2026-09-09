@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import {
   getChannexConfig,
+  resyncChannexAvailability,
   testChannexConnection,
   updateChannexConfig,
   type ChannexConfig,
+  type ChannexResyncResult,
   type ChannexTestConnectionResult,
 } from "../api/channex";
 import { ApiError } from "../api/client";
@@ -32,6 +34,10 @@ export default function OtaConnectionPage() {
   const [testResult, setTestResult] = useState<ChannexTestConnectionResult | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
+
+  const [resyncResult, setResyncResult] = useState<ChannexResyncResult | null>(null);
+  const [resyncError, setResyncError] = useState<string | null>(null);
+  const [resyncing, setResyncing] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -82,6 +88,20 @@ export default function OtaConnectionPage() {
       setTestError(err instanceof ApiError ? err.message : "Erro inesperado ao testar a conexão.");
     } finally {
       setTesting(false);
+    }
+  }
+
+  async function handleResync() {
+    setResyncError(null);
+    setResyncResult(null);
+    setResyncing(true);
+    try {
+      const result = await resyncChannexAvailability();
+      setResyncResult(result);
+    } catch (err) {
+      setResyncError(err instanceof ApiError ? err.message : "Erro inesperado ao ressincronizar.");
+    } finally {
+      setResyncing(false);
     }
   }
 
@@ -167,6 +187,35 @@ export default function OtaConnectionPage() {
             {testResult.ok
               ? `Conexão OK — ${testResult.property?.title ?? testResult.property?.id}`
               : (testResult.error ?? "Falha ao testar a conexão.")}
+          </p>
+        )}
+      </Card>
+
+      <Card className="p-6 flex flex-col gap-3">
+        <div>
+          <h2 className="text-[15px] font-semibold text-panel-900">Ressincronizar disponibilidade</h2>
+          <p className="text-[12.5px] text-panel-500 mt-0.5">
+            Recalcula e envia disponibilidade e tarifas dos próximos 6 meses para todos os tipos de quarto mapeados.
+          </p>
+        </div>
+
+        <Button
+          variant="secondary"
+          disabled={resyncing || !config.connected}
+          onClick={() => void handleResync()}
+        >
+          {resyncing ? "Ressincronizando..." : "Ressincronizar disponibilidade"}
+        </Button>
+
+        {resyncError && (
+          <p role="alert" className="text-sm text-danger-500">
+            {resyncError}
+          </p>
+        )}
+        {resyncResult && !resyncError && (
+          <p className="text-sm text-success-700">
+            {resyncResult.rooms_pushed} quarto(s) sincronizado(s)
+            {resyncResult.rooms_skipped > 0 ? `, ${resyncResult.rooms_skipped} sem mapeamento (ignorado(s))` : ""}.
           </p>
         )}
       </Card>

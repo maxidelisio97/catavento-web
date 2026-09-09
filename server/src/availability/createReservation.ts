@@ -19,6 +19,7 @@ import { eachNightUTC } from '../shared/dateUtils.js';
 import { calculatePrice } from '../pricing/calculatePrice.js';
 import { calculateDeposit } from '../pricing/calculateDeposit.js';
 import { calculatePetFee } from '../pricing/calculatePetFee.js';
+import { schedulePushAvailability } from '../channex/pushAvailability.js';
 
 export class NoAvailabilityError extends Error {
   readonly code = 'NO_AVAILABILITY' as const;
@@ -131,9 +132,17 @@ export async function createReservation(
   // `db.isTransaction` pattern/comment), so detect that case and reuse `db`
   // directly instead of nesting.
   if (db.isTransaction) {
+    // Reentrant call (processBookingRevision, via createReservationWithCode)
+    // — the OUTER transaction owns the commit boundary and its own trigger
+    // point (§ 3.2) is responsible for the push, so nothing fires here.
     return runCreateReservation(db as Transaction<DB>, input);
   }
-  return db.transaction().execute((trx) => runCreateReservation(trx, input));
+
+  const result = await db.transaction().execute((trx) => runCreateReservation(trx, input));
+  // SPEC-modulo-12C § 3.1/§ 3.2: fire-and-forget, strictly AFTER commit —
+  // never awaited, never allowed to affect this function's own result.
+  schedulePushAvailability(db, [{ roomId: input.roomId, checkIn: input.checkIn, checkOut: input.checkOut }]);
+  return result;
 }
 
 async function runCreateReservation(

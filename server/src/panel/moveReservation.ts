@@ -33,6 +33,7 @@ import { isReservationActive } from '../availability/isReservationActive.js';
 import { assertReservationNightsConsistency } from '../availability/checkReservationNightsConsistency.js';
 import { isUnitNightUniqueViolation } from '../availability/isUnitNightUniqueViolation.js';
 import { addDaysUTC, formatDateUTC, parseDateUTC } from '../shared/dateUtils.js';
+import { schedulePushAvailability } from '../channex/pushAvailability.js';
 
 const MOVABLE_STATUSES = new Set(['pending_payment', 'confirmed', 'checked_in']);
 
@@ -101,6 +102,7 @@ export class CommercialWarningError extends Error {
 interface ReservationRow {
   id: number;
   status: string;
+  room_id: number;
   guests: number;
   children: number;
   babies: number;
@@ -115,6 +117,7 @@ async function fetchReservationByCode(db: Kysely<DB>, code: string): Promise<Res
     .select([
       'id',
       'status',
+      'room_id',
       'guests',
       'children',
       'babies',
@@ -132,6 +135,11 @@ async function fetchDestinationUnit(db: Kysely<DB>, toUnitId: number) {
     .innerJoin('rooms', 'rooms.id', 'room_units.room_id')
     .select([
       'room_units.id as id',
+      // SPEC-modulo-12C § 3.2: a move can land in a unit of a DIFFERENT
+      // room type than the reservation's own `room_id` (nothing here
+      // restricts `toUnitId` to the same type) — needed so both room
+      // types' Channex availability get pushed, not just the origin's.
+      'rooms.id as roomId',
       'rooms.capacity as capacity',
       'rooms.adults_only as adults_only',
       'rooms.pets_allowed as pets_allowed',
@@ -290,6 +298,14 @@ export async function moveNight(db: Kysely<DB>, input: MoveNightInput): Promise<
 
     await insertNightOrThrowConflict(trx, reservation.id, input.night, input.toUnitId);
   });
+
+  // SPEC-modulo-12C § 3.2: push the origin room type always, and the
+  // destination too when it's a different room type (see fetchDestinationUnit's
+  // comment) — reservations.room_id itself is never updated by a move.
+  schedulePushAvailability(db, [
+    { roomId: reservation.room_id, checkIn: input.night, checkOut: nextNight },
+    destination.roomId !== reservation.room_id ? { roomId: destination.roomId, checkIn: input.night, checkOut: nextNight } : null,
+  ]);
 }
 
 export interface MoveStayInput {
@@ -332,4 +348,12 @@ export async function moveStay(db: Kysely<DB>, input: MoveStayInput): Promise<vo
       await insertNightOrThrowConflict(trx, reservation.id, night, input.toUnitId);
     }
   });
+
+  // SPEC-modulo-12C § 3.2 — same reasoning as moveNight above.
+  schedulePushAvailability(db, [
+    { roomId: reservation.room_id, checkIn: reservation.check_in, checkOut: reservation.check_out },
+    destination.roomId !== reservation.room_id
+      ? { roomId: destination.roomId, checkIn: reservation.check_in, checkOut: reservation.check_out }
+      : null,
+  ]);
 }

@@ -24,6 +24,7 @@ import { assertNotOverpaying, assertNotOverpayingWithPendingAsaas } from '../res
 import { releaseReservationNights } from '../availability/releaseReservationNights.js';
 import { assertReservationNightsConsistency } from '../availability/checkReservationNightsConsistency.js';
 import { todayISO } from '../shared/dateUtils.js';
+import { schedulePushAvailabilityForReservation } from '../channex/pushAvailability.js';
 
 export type PanelPaymentMethod = 'asaas_pix' | 'asaas_card' | 'cash' | 'external' | 'pix_manual';
 
@@ -177,7 +178,7 @@ export async function registerPayment(db: Kysely<DB>, input: RegisterPaymentInpu
   const idempotencyKey = input.idempotencyKey;
   const method = input.method as 'cash' | 'external' | 'pix_manual';
 
-  return db.transaction().execute(async (trx) => {
+  const result = await db.transaction().execute(async (trx) => {
     // Advisory lock (same reservationId, same mechanism as
     // createOrReuseAsaasPayment) serializes concurrent requests for this
     // reservation so the dedupe lookup below is reliable — without it, two
@@ -222,6 +223,14 @@ export async function registerPayment(db: Kysely<DB>, input: RegisterPaymentInpu
 
     return { method, paymentId: row.id, status: 'received' as const, replayed: false };
   });
+
+  // SPEC-modulo-12C § 3.2 (gap found in fresh-context risk review): same
+  // reasoning as createOrReusePayment.ts — assertNotOverpayingWithPendingAsaas
+  // above can silently confirm the reservation via a reentrant
+  // processPaymentReceived(trx, ...) call, sharing this same transaction.
+  // Unconditional push after commit is a safe no-op when nothing changed.
+  schedulePushAvailabilityForReservation(db, [reservation.id]);
+  return result;
 }
 
 export interface CheckInInput {
@@ -381,6 +390,10 @@ export async function cancelReservation(db: Kysely<DB>, input: CancelInput): Pro
     await releaseReservationNights(trx, reservation.id);
     await assertReservationNightsConsistency(trx, reservation.id);
   });
+
+  // SPEC-modulo-12C § 3.2: fire-and-forget, after commit — a cancel frees
+  // the unit-nights, so Channex needs to see them available again.
+  schedulePushAvailabilityForReservation(db, [found.id]);
 }
 
 export interface NoShowInput {

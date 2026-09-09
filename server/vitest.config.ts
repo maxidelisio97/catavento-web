@@ -8,6 +8,10 @@ export default defineConfig({
     // once as compiled .js — doubling DB connections, open Fastify
     // instances, and total suite runtime/memory.
     exclude: ['**/node_modules/**', '**/dist/**'],
+    // SPEC-modulo-12C: drains the fire-and-forget Channex push after every
+    // test — see test-support/flushChannexPushes.ts's docstring for the
+    // exact hook-timeout flake this closes.
+    setupFiles: ['./src/test-support/flushChannexPushes.ts'],
     // Several test files share catavento_db_test and TRUNCATE the same
     // tables between cases. Running files in parallel (Vitest's default)
     // causes real FK violations and deadlocks between them — force

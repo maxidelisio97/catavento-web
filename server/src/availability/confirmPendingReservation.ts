@@ -32,6 +32,7 @@ import { fetchRoomStayData } from './repository.js';
 import { releaseReservationNights } from './releaseReservationNights.js';
 import { eachNightUTC } from '../shared/dateUtils.js';
 import { assertReservationNightsConsistency } from './checkReservationNightsConsistency.js';
+import { schedulePushAvailabilityForReservation } from '../channex/pushAvailability.js';
 
 export type ConfirmOutcome =
   /** Payment row didn't exist locally — nothing to do (ack the webhook anyway). */
@@ -68,9 +69,20 @@ export async function processPaymentReceived(
   // the reconciliation: if it fails, that operation rolls back too, instead
   // of silently leaving the ledger half-fixed.
   if (db.isTransaction) {
+    // Reentrant call (overpaymentGuard.ts) — the outer caller owns the
+    // commit boundary; only the top-level call below pushes.
     return runProcessPaymentReceived(db as Transaction<DB>, input);
   }
-  return db.transaction().execute((trx) => runProcessPaymentReceived(trx, input));
+
+  const outcome = await db.transaction().execute((trx) => runProcessPaymentReceived(trx, input));
+  // SPEC-modulo-12C § 3.2: only 'confirmed'/'payment_conflict' actually
+  // changed disponibilidad (assigned or released reservation_nights) —
+  // 'payment_marked_received_only'/'noop_idempotent'/'unknown_payment'
+  // touched money bookkeeping at most, nothing Channex needs to hear about.
+  if (outcome.kind === 'confirmed' || outcome.kind === 'payment_conflict') {
+    schedulePushAvailabilityForReservation(db, [outcome.reservationId]);
+  }
+  return outcome;
 }
 
 async function runProcessPaymentReceived(

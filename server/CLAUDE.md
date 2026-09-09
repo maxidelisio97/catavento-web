@@ -206,6 +206,70 @@ hallazgo puede esperar.
   las acciones reales estén definidas. No invertir en pulido visual
   del panel mobile hasta entonces.
 
+## Módulo 12C — disponibilidad saliente (push ARI a Channex)
+
+### Two separate ARI endpoints — there is no combined one
+- Confirmed against docs.channex.io/api-v.1-documentation/ari.md
+  (2026-09-08): Channex has NO combined ARI endpoint. `POST /availability`
+  takes `room_type_id` (free-unit count per night). `POST /restrictions`
+  takes `rate_plan_id` (per-occupancy rate via `rates: [{occupancy, rate}]`,
+  `min_stay`, `stop_sell`). Both accept a `values` array — group every
+  night of one push into a single array, one HTTP request, never one
+  request per night.
+- `rate` is an INTEGER in cents (e.g. `20000` = R$200,00) — confirmed by
+  the doc's own field note ("integer (20000 for $200.00)"). Never convert
+  to a decimal string, never divide by 100.
+- Local `closed` maps to `stop_sell` (full stop-sell), NOT to
+  `closed_to_arrival`/`closed_to_departure` (finer-grained check-in/out
+  restrictions this codebase doesn't need).
+
+### Gap found: Asaas payment reconciliation can silently confirm a reservation outside the 6 documented push triggers
+- `assertNotOverpayingWithPendingAsaas` (reservations/overpaymentGuard.ts)
+  can reconcile a stale Asaas payment and confirm the reservation via a
+  reentrant `processPaymentReceived(trx, ...)` call — this happens INSIDE
+  the transaction of `createOrReusePayment.ts` or `registerPayment`'s cash
+  branch (panel/reservationActions.ts), neither of which is one of
+  SPEC-modulo-12C § 3.2's 6 documented trigger points.
+- Fix applied: unconditional push (not gated on whether reconciliation
+  actually fired) after commit in BOTH call sites. Cheap and safe because
+  the push is idempotent — if nothing changed, it just re-confirms current
+  state.
+- As of 12C, this exact path (reconciling a DIFFERENT `kind` while the
+  reservation is still `pending_payment`) isn't reachable by any real
+  caller today — every `pending_payment` reservation is `origin: 'web'`
+  and only ever gets a `deposit` charge before confirmation; the same-kind
+  variant hits the pre-existing rollback bug already in "Deuda conocida".
+  Kept anyway as defense-in-depth in case a future flow allows a
+  pre-confirmation charge of a different kind.
+
+### Fire-and-forget async work and the test suite: never add an un-awaited op without a drain hook
+- `channex/pushAvailability.ts` fires a Channex push, unawaited, after
+  each of the 6 trigger points — by design (SPEC-modulo-12C § 0.1, never
+  block the local operation). That added an unawaited DB read to dozens
+  of pre-existing tests that never expected it.
+- With `fileParallelism: false` (vitest.config.ts), that stray query could
+  still be in flight when the NEXT test file's `beforeEach` ran its
+  `TRUNCATE`, causing an intermittent hook-timeout in an unrelated file.
+  Confirmed by real A/B: `main` without this module ran the full suite
+  471/471 clean in one pass; this branch, unfixed, failed that exact
+  class of error.
+- Fix: `pushAvailability.ts` tracks every fire-and-forget push in a
+  `Set` (`waitForPendingPushes`), and a global vitest hook
+  (`test-support/flushChannexPushes.ts`, via `setupFiles`) drains it after
+  every test — no existing test file touched, no change to production
+  behavior (the real caller still never awaits the push). Any future
+  module that fires un-awaited async work from code the test suite
+  exercises must follow this same pattern, not re-investigate from zero.
+
+### The Channex client now has a request timeout — it never had one
+- `channexClient.ts`'s `fetch` call had no `AbortController`/timeout.
+  Found while designing the in-flight tracking above: a hung request
+  (network partition) would leave that promise — and the `Set` entry
+  pinning it in memory — unresolved forever in a long-running server.
+- Fix: `REQUEST_TIMEOUT_MS = 15_000` with `AbortController`, applied to
+  the WHOLE client (not just the push path) — `getProperty`/
+  `listRoomTypes`/pull/ack are bounded now too.
+
 ## Flujo de ramas
 Ver CLAUDE.md raíz — regla de todo el repo, no solo del backend.
 

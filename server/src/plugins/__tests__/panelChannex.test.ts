@@ -19,16 +19,19 @@ import { hashPassword } from '../../auth/hashPassword.js';
 import { createRoleWithPermissions, createSessionCookieForRole, getDueñoRoleId } from '../../test-support/permissionFixtures.js';
 import { SESSION_COOKIE_NAME } from '../../auth/cookie.js';
 
-const { getProperty, listRoomTypes, fetchBookingRevisionsFeed, ackBookingRevision } = vi.hoisted(() => ({
-  getProperty: vi.fn(),
-  listRoomTypes: vi.fn(),
-  fetchBookingRevisionsFeed: vi.fn().mockResolvedValue([]),
-  ackBookingRevision: vi.fn().mockResolvedValue(undefined),
-}));
+const { getProperty, listRoomTypes, fetchBookingRevisionsFeed, ackBookingRevision, pushAvailability, pushRestrictions } =
+  vi.hoisted(() => ({
+    getProperty: vi.fn(),
+    listRoomTypes: vi.fn(),
+    fetchBookingRevisionsFeed: vi.fn().mockResolvedValue([]),
+    ackBookingRevision: vi.fn().mockResolvedValue(undefined),
+    pushAvailability: vi.fn().mockResolvedValue(undefined),
+    pushRestrictions: vi.fn().mockResolvedValue(undefined),
+  }));
 
 vi.mock('../../channex/channexClient.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../channex/channexClient.js')>();
-  return { ...actual, getProperty, listRoomTypes, fetchBookingRevisionsFeed, ackBookingRevision };
+  return { ...actual, getProperty, listRoomTypes, fetchBookingRevisionsFeed, ackBookingRevision, pushAvailability, pushRestrictions };
 });
 
 const panelChannexPlugin = (await import('../panelChannex.js')).default;
@@ -481,6 +484,55 @@ describe('POST /panel/channex/pull-now', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ total_feed_items: 1, processed: 1, acked: 0 });
     expect(ackBookingRevision).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /panel/channex/resync', () => {
+  it('401s without a session cookie', async () => {
+    const app = buildApp();
+    const response = await app.inject({ method: 'POST', url: '/panel/channex/resync' });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('pushes only mapped rooms and reports how many were skipped', async () => {
+    const token = await insertSessionCookie();
+    const app = buildApp();
+    await app.inject({
+      method: 'PATCH',
+      url: '/panel/channex/config',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { property_id: 'f6a1bdf1-cef7-4e16-bc4e-a4799510d23f', is_active: true },
+    });
+
+    const mappedRoomId = await insertRoom('Casal');
+    await app.inject({
+      method: 'PUT',
+      url: '/panel/channex/room-type-map',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: {
+        room_id: mappedRoomId,
+        channex_room_type_id: '7f1fe757-cf66-4878-82fe-ae25920e8d1f',
+        channex_rate_plan_id: null,
+      },
+    });
+    await insertRoom('Triplo'); // left unmapped on purpose
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/channex/resync',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ rooms_pushed: 1, rooms_skipped: 1 });
+    expect(pushAvailability).toHaveBeenCalledTimes(1);
+    // Unmapped room's rate plan is also null, so restrictions never fire either.
+    expect(pushRestrictions).not.toHaveBeenCalled();
+
+    // § 4: the full 6-month horizon (183 nights), grouped into ONE call —
+    // never one request per night, and never a fraction of the horizon.
+    const [values] = pushAvailability.mock.calls[0] as [{ date: string }[]];
+    expect(values).toHaveLength(183);
   });
 });
 

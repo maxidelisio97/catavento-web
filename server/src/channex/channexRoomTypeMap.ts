@@ -78,6 +78,28 @@ export async function findRoomIdByChannexRoomTypeId(
   return row?.room_id ?? null;
 }
 
+/**
+ * Forward lookup for SPEC-modulo-12C § 3.1 step 3: the push function knows
+ * the LOCAL `room_id` (from the reservation/availability it's pushing for)
+ * and needs the Channex ids to address the ARI endpoints. Returns `null`
+ * (not a thrown error) when there's no mapping — same contract as
+ * `findRoomIdByChannexRoomTypeId`, the caller decides how to treat an
+ * unmapped room (§ 3.1: log and skip, don't push).
+ */
+export async function findRoomTypeMapByRoomId(
+  db: Kysely<DB>,
+  roomId: number,
+): Promise<{ channexRoomTypeId: string; channexRatePlanId: string | null } | null> {
+  const row = await db
+    .selectFrom('channex_room_type_map')
+    .select(['channex_room_type_id', 'channex_rate_plan_id'])
+    .where('room_id', '=', roomId)
+    .executeTakeFirst();
+
+  if (!row) return null;
+  return { channexRoomTypeId: row.channex_room_type_id, channexRatePlanId: row.channex_rate_plan_id };
+}
+
 export interface MappingStatus {
   complete: boolean;
   totalRooms: number;

@@ -8,6 +8,7 @@
 import { sql, type Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
 import { reassignOtaReservation } from '../channex/processBookingRevision.js';
+import { schedulePushAvailabilityForReservation } from '../channex/pushAvailability.js';
 
 export class ReservationNotFoundError extends Error {
   constructor() {
@@ -99,6 +100,12 @@ export async function retryOtaConflict(db: Kysely<DB>, reservationId: number): P
     guestEmail: reservation.guest_email,
     guestPhone: reservation.guest_phone,
   });
+
+  // SPEC-modulo-12C § 3.2: only pushes if the retry actually assigned a
+  // unit (`available`) — an unresolved retry left nothing changed to push.
+  if (available) {
+    schedulePushAvailabilityForReservation(db, [reservation.id]);
+  }
 
   return { resolved: available };
 }

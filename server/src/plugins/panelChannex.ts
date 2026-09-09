@@ -12,6 +12,7 @@ import { ChannexApiError, ChannexNotConfiguredError, getProperty, listRoomTypes 
 import { getMappingStatus, listLocalRoomsWithMapping, setRoomTypeMap } from '../channex/channexRoomTypeMap.js';
 import { isChannexRoomTypeUniqueViolation } from '../channex/isChannexRoomTypeUniqueViolation.js';
 import { pullBookingRevisions } from '../channex/pullBookingRevisions.js';
+import { resyncAvailability } from '../channex/resyncAvailability.js';
 import { retryOtaConflict, listOtaConflicts, ReservationNotFoundError, ReservationNotInConflictError } from '../panel/otaConflicts.js';
 
 const channexConfigResponseSchema = z.object({
@@ -73,6 +74,11 @@ const pullNowResponseSchema = z.object({
 
 const retryConflictResponseSchema = z.object({
   resolved: z.boolean(),
+});
+
+const resyncResponseSchema = z.object({
+  rooms_pushed: z.number(),
+  rooms_skipped: z.number(),
 });
 
 const conflictSummaryResponseSchema = z.object({
@@ -261,6 +267,18 @@ const panelChannexPlugin: FastifyPluginAsync<PanelChannexPluginOptions> = async 
           processed: result.items.length,
           acked: result.items.filter((item) => item.acked).length,
         };
+      },
+    );
+
+    // SPEC-modulo-12C § 3.3/§ 6: manual full resync — pushes ARI for every
+    // mapped room type across the whole 6-month horizon, correcting any
+    // drift the fire-and-forget incremental push (§ 3.2) may have missed.
+    typed.post(
+      '/panel/channex/resync',
+      { schema: { response: { 200: resyncResponseSchema } } },
+      async () => {
+        const result = await resyncAvailability(db);
+        return { rooms_pushed: result.roomsPushed, rooms_skipped: result.roomsSkipped };
       },
     );
 
