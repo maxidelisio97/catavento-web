@@ -523,6 +523,22 @@ Ver CLAUDE.md raíz — regla de todo el repo, no solo del backend.
   `!Number.isNaN(Date.parse(...))`), aplicado parejo a los seis
   endpoints — barrido propio, no mezclar con otro cambio.
 
+- **Timeout puntual en un test de `COMMERCIAL_WARNING` del panel, bajo
+  carga de suite completa — distinto del mecanismo ya resuelto en julio.**
+  Visto 1 vez en 2 corridas completas de la rama `modulo-12d-robustez-
+  certificacion` (`panelMoveReservation.test.ts`, "422 COMMERCIAL_WARNING
+  when destination capacity is too small... 200 after retry with
+  force_commercial", `Test timed out in 15000ms`). No reprodujo en
+  aislamiento (2/2 limpio) ni en la otra corrida completa de la misma
+  rama (514/514). No toca ningún archivo del diff de 12D. No es la misma
+  entrada que la de arriba ("RESUELTO 2026-07"): esa es una carrera de
+  concurrencia con `ArtificialRaceWindowPlugin`/`DETERMINISTIC race-window`;
+  esto es un timeout llano sin ningún mecanismo de lock/race involucrado.
+  Anotado como flakiness bajo carga de suite completa, sin causa raíz
+  identificada. Si vuelve a aparecer, investigar desde acá (ya se descartó
+  que sea determinístico o esté ligado a un diff concreto) en vez de
+  repetir el análisis de cero.
+
 ## Plan de módulos (orden; se puede parar en cualquier punto)
 1. Cuartos y tarifas (spec: SPEC-modulo-1-cuartos-y-tarifas.md)
 2. Disponibilidad (anti-overbooking)

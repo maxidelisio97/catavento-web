@@ -22,6 +22,8 @@ import panelPermissionsPlugin from './plugins/panelPermissions.js';
 import panelCashPlugin from './plugins/panelCash.js';
 import panelChannexPlugin from './plugins/panelChannex.js';
 import webhooksChannexPlugin from './plugins/webhooksChannex.js';
+import { startChannexPullCron } from './channex/channexPullCron.js';
+import { db } from './db/client.js';
 
 // trustProxy scoped to 127.0.0.1, not `true`: Nginx proxies here from
 // loopback (see nginx.conf.example / nginx-panel.conf.example), so only
@@ -75,4 +77,11 @@ app.listen({ port: config.port, host: '127.0.0.1' }, (err) => {
     process.exit(1);
   }
   app.log.info(`Payments server (${config.asaas.env}) listening on :${config.port}`);
+
+  // SPEC-modulo-12D-robustez-certificacion.md § 1.1 — automated Booking
+  // Revisions pull, every 15-20 min. Started only once the server is
+  // actually listening, not at import time.
+  startChannexPullCron(db, {
+    onRunError: (err) => app.log.error({ err }, 'channex pull cron: unexpected error'),
+  });
 });

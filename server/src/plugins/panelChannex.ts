@@ -11,8 +11,9 @@ import { getChannexConfig, updateChannexConfig } from '../channex/channexConfig.
 import { ChannexApiError, ChannexNotConfiguredError, getProperty, listRoomTypes } from '../channex/channexClient.js';
 import { getMappingStatus, listLocalRoomsWithMapping, setRoomTypeMap } from '../channex/channexRoomTypeMap.js';
 import { isChannexRoomTypeUniqueViolation } from '../channex/isChannexRoomTypeUniqueViolation.js';
-import { pullBookingRevisions } from '../channex/pullBookingRevisions.js';
+import { runChannexPullLocked } from '../channex/runChannexPull.js';
 import { resyncAvailability } from '../channex/resyncAvailability.js';
+import { getChannexPullStatus } from '../channex/channexPullStatus.js';
 import { retryOtaConflict, listOtaConflicts, ReservationNotFoundError, ReservationNotInConflictError } from '../panel/otaConflicts.js';
 
 const channexConfigResponseSchema = z.object({
@@ -76,6 +77,13 @@ const retryConflictResponseSchema = z.object({
   resolved: z.boolean(),
 });
 
+const pullStatusResponseSchema = z.object({
+  last_run_at: z.string().nullable(),
+  last_success_at: z.string().nullable(),
+  last_error: z.string().nullable(),
+  stale: z.boolean(),
+});
+
 const resyncResponseSchema = z.object({
   rooms_pushed: z.number(),
   rooms_skipped: z.number(),
@@ -93,6 +101,11 @@ const conflictSummaryResponseSchema = z.object({
 });
 
 const errorResponseSchema = z.object({ error: z.string() });
+
+// SPEC-modulo-12D § 2 — "más de 1 hora sin corrida exitosa", chosen because
+// the cron's own interval is 15-20 min (channexPullCron.ts): 1h is several
+// missed ticks, not noise from one slow run.
+const PULL_STALE_THRESHOLD_MS = 60 * 60 * 1000;
 
 function httpError(statusCode: number, message: string): FastifyError {
   const err = new Error(message) as FastifyError;
@@ -250,22 +263,53 @@ const panelChannexPlugin: FastifyPluginAsync<PanelChannexPluginOptions> = async 
       },
     );
 
-    // § 3.4/§ 9: manual trigger for the pull — no cron until 12D. Reuses the
-    // exact same processing function the webhook uses (§ 3.1).
+    // § 3.4/§ 9: manual trigger for the pull. Reuses the exact same
+    // processing function the webhook uses (§ 3.1), through the same locked
+    // entry point (runChannexPullLocked) the 12D cron uses — SPEC-modulo-12D
+    // § 5: this button and the cron must never process the feed at once.
     typed.post(
       '/panel/channex/pull-now',
-      { schema: { response: { 200: pullNowResponseSchema, 400: errorResponseSchema } } },
-      async () => {
+      { schema: { response: { 200: pullNowResponseSchema, 400: errorResponseSchema, 409: errorResponseSchema } } },
+      async (_request, reply) => {
         const current = await getChannexConfig(db);
         if (!current.propertyId) {
           throw httpError(400, 'property_id não configurado');
         }
 
-        const result = await pullBookingRevisions(db, current.propertyId);
+        const outcome = await runChannexPullLocked(db, current.propertyId);
+        if (outcome.kind === 'skipped_locked') {
+          reply.status(409).send({ error: 'Já existe uma busca em andamento (manual ou automática)' });
+          return;
+        }
+        if (outcome.kind === 'failed') {
+          throw new Error(outcome.message);
+        }
+
+        const result = outcome.result;
         return {
           total_feed_items: result.totalFeedItems,
           processed: result.items.length,
           acked: result.items.filter((item) => item.acked).length,
+        };
+      },
+    );
+
+    // § 1.2/§ 2: last-run bookkeeping for the automated pull (channexPullCron.ts)
+    // — `stale` is computed here, at request time, rather than stored, so the
+    // indicator never needs its own refresh job to stay accurate.
+    typed.get(
+      '/panel/channex/pull-status',
+      { schema: { response: { 200: pullStatusResponseSchema } } },
+      async () => {
+        const status = await getChannexPullStatus(db);
+        const stale =
+          status.lastSuccessAt === null || Date.now() - status.lastSuccessAt.getTime() > PULL_STALE_THRESHOLD_MS;
+
+        return {
+          last_run_at: status.lastRunAt?.toISOString() ?? null,
+          last_success_at: status.lastSuccessAt?.toISOString() ?? null,
+          last_error: status.lastError,
+          stale,
         };
       },
     );

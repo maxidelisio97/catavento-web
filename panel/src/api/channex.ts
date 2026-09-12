@@ -78,9 +78,21 @@ export interface ChannexPullNowResult {
   acked: number;
 }
 
-/** § 3.4/§ 9: manual trigger for the Booking Revisions Feed pull — no cron until 12D. */
+/** § 3.4/§ 9: manual trigger for the Booking Revisions Feed pull. */
 export function pullChannexNow(): Promise<ChannexPullNowResult> {
   return apiFetch("/panel/channex/pull-now", { method: "POST" });
+}
+
+export interface ChannexPullStatus {
+  last_run_at: string | null;
+  last_success_at: string | null;
+  last_error: string | null;
+  stale: boolean;
+}
+
+/** SPEC-modulo-12D § 1.2/§ 2: last-run status of the automated Booking Revisions pull cron. */
+export function getChannexPullStatus(): Promise<ChannexPullStatus> {
+  return apiFetch("/panel/channex/pull-status");
 }
 
 export interface ChannexRetryConflictResult {

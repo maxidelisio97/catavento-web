@@ -81,12 +81,20 @@ beforeEach(async () => {
   await sql`TRUNCATE TABLE sessions, users RESTART IDENTITY CASCADE`.execute(testDb);
   await sql`TRUNCATE TABLE rooms RESTART IDENTITY CASCADE`.execute(testDb);
   await testDb.deleteFrom('channex_config').execute();
+  await testDb.deleteFrom('channex_pull_status').execute();
   getProperty.mockReset();
   listRoomTypes.mockReset();
+  // SPEC-modulo-12D work found these two were never reset here (pre-existing
+  // gap) — a call count from an earlier pull-now/pull-status test was
+  // silently leaking into `expect(...).not.toHaveBeenCalled()` assertions in
+  // later tests.
+  fetchBookingRevisionsFeed.mockReset().mockResolvedValue([]);
+  ackBookingRevision.mockReset().mockResolvedValue(undefined);
 });
 
 afterEach(async () => {
   await testDb.deleteFrom('channex_config').execute();
+  await testDb.deleteFrom('channex_pull_status').execute();
   await sql`TRUNCATE TABLE rooms RESTART IDENTITY CASCADE`.execute(testDb);
 });
 
@@ -445,6 +453,52 @@ describe('authorization (ota.manage)', () => {
   });
 });
 
+describe('GET /panel/channex/pull-status', () => {
+  it('401s without a session cookie', async () => {
+    const app = buildApp();
+    const response = await app.inject({ method: 'GET', url: '/panel/channex/pull-status' });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('reports stale (no data) when the cron has never run', async () => {
+    const token = await insertSessionCookie();
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/panel/channex/pull-status',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ last_run_at: null, last_success_at: null, last_error: null, stale: true });
+  });
+
+  it('reports not-stale right after a successful pull', async () => {
+    const token = await insertSessionCookie();
+    const app = buildApp();
+    await app.inject({
+      method: 'PATCH',
+      url: '/panel/channex/config',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { property_id: 'f6a1bdf1-cef7-4e16-bc4e-a4799510d23f', is_active: true },
+    });
+    fetchBookingRevisionsFeed.mockResolvedValueOnce([]);
+    await app.inject({ method: 'POST', url: '/panel/channex/pull-now', cookies: { [SESSION_COOKIE_NAME]: token } });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/panel/channex/pull-status',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+
+    const body = response.json();
+    expect(body.stale).toBe(false);
+    expect(body.last_success_at).not.toBeNull();
+    expect(body.last_error).toBeNull();
+  });
+});
+
 describe('POST /panel/channex/pull-now', () => {
   it('400s when property_id is not configured', async () => {
     const token = await insertSessionCookie();
@@ -484,6 +538,49 @@ describe('POST /panel/channex/pull-now', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ total_feed_items: 1, processed: 1, acked: 0 });
     expect(ackBookingRevision).not.toHaveBeenCalled();
+  });
+
+  // SPEC-modulo-12D § 5: this button and the automated cron share one lock
+  // (runChannexPull.ts) — a click while a pull is already in flight (cron or
+  // another manual click) must 409, never process the feed a second time.
+  it('409s when a pull is already in progress instead of running a second one in parallel', async () => {
+    const token = await insertSessionCookie();
+    const app = buildApp();
+    await app.inject({
+      method: 'PATCH',
+      url: '/panel/channex/config',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { property_id: 'f6a1bdf1-cef7-4e16-bc4e-a4799510d23f', is_active: true },
+    });
+
+    let releaseFirstFetch!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseFirstFetch = resolve;
+    });
+    fetchBookingRevisionsFeed.mockImplementationOnce(async () => {
+      await gate;
+      return [];
+    });
+    fetchBookingRevisionsFeed.mockResolvedValueOnce([]);
+
+    const firstRequest = app.inject({
+      method: 'POST',
+      url: '/panel/channex/pull-now',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+
+    await vi.waitFor(() => expect(fetchBookingRevisionsFeed).toHaveBeenCalledTimes(1));
+
+    const secondResponse = await app.inject({
+      method: 'POST',
+      url: '/panel/channex/pull-now',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+    expect(secondResponse.statusCode).toBe(409);
+
+    releaseFirstFetch();
+    const firstResponse = await firstRequest;
+    expect(firstResponse.statusCode).toBe(200);
   });
 });
 

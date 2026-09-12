@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import {
+  getChannexPullStatus,
   getOtaConflicts,
   pullChannexNow,
   retryOtaConflict,
+  type ChannexPullStatus,
   type OtaConflictSummary,
   type ChannexPullNowResult,
 } from "../api/channex";
@@ -17,8 +19,13 @@ import Badge from "../components/ui/Badge";
  * entirely off `reservation_nights` (unit × night) — an `ota_conflict`
  * reservation has none by design (§ 0.1), so it has nowhere to render
  * there. This page is the only place an operator sees and resolves them,
- * plus the manual pull trigger (§ 3.4/§ 9 — no cron until 12D).
+ * plus the manual pull trigger and the automated-pull status indicator
+ * (SPEC-modulo-12D § 1/§ 2).
  */
+function formatPullTimestamp(iso: string): string {
+  return new Date(iso).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
 export default function OtaReservationsPage() {
   const [conflicts, setConflicts] = useState<OtaConflictSummary[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -30,10 +37,17 @@ export default function OtaReservationsPage() {
   const [retryingId, setRetryingId] = useState<number | null>(null);
   const [retryError, setRetryError] = useState<string | null>(null);
 
+  const [pullStatus, setPullStatus] = useState<ChannexPullStatus | null>(null);
+
   function reload() {
     getOtaConflicts()
       .then(setConflicts)
       .catch(() => setLoadError("Não foi possível carregar os conflitos de OTA."));
+    getChannexPullStatus()
+      .then(setPullStatus)
+      .catch(() => {
+        // Non-critical: the indicator just stays hidden if the status can't load.
+      });
   }
 
   useEffect(() => {
@@ -77,10 +91,23 @@ export default function OtaReservationsPage() {
         <div>
           <h2 className="text-[15px] font-semibold text-panel-900">Buscar reservas agora</h2>
           <p className="text-[12.5px] text-panel-500 mt-0.5">
-            Verifica manualmente novas reservas/alterações/cancelamentos no Channex. Ainda não há busca automática
-            (prevista para uma entrega futura) — use este botão enquanto isso.
+            Verifica manualmente novas reservas/alterações/cancelamentos no Channex. Há também uma busca automática
+            a cada 15-20 min — use este botão para verificar imediatamente.
           </p>
         </div>
+
+        {pullStatus && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[12.5px] font-medium text-panel-700">Busca automática</span>
+            <Badge tone={pullStatus.stale ? "danger" : "success"}>
+              {pullStatus.last_success_at ? `última: ${formatPullTimestamp(pullStatus.last_success_at)}` : "ainda não rodou"}
+            </Badge>
+          </div>
+        )}
+
+        {pullStatus?.stale && pullStatus.last_error && (
+          <p className="text-[12.5px] text-danger-500">Última tentativa falhou: {pullStatus.last_error}</p>
+        )}
 
         <Button variant="secondary" disabled={pulling} onClick={() => void handlePullNow()} className="self-start">
           {pulling ? "Buscando..." : "Buscar reservas agora"}

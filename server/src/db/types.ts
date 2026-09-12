@@ -64,6 +64,14 @@ export interface ChannexConfig {
   updated_at: Generated<Timestamp>;
 }
 
+export interface ChannexPullStatus {
+  id: Generated<number>;
+  last_error: string | null;
+  last_run_at: Timestamp | null;
+  last_success_at: Timestamp | null;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface ChannexRoomTypeMap {
   channex_rate_plan_id: string | null;
   channex_room_type_id: string;
@@ -270,6 +278,7 @@ export interface DB {
   cash_movements: CashMovements;
   cash_sale_items: CashSaleItems;
   channex_config: ChannexConfig;
+  channex_pull_status: ChannexPullStatus;
   channex_room_type_map: ChannexRoomTypeMap;
   payments: Payments;
   permissions: Permissions;
