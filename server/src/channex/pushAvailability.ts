@@ -77,56 +77,85 @@ export async function waitForPendingPushes(): Promise<void> {
   await Promise.allSettled(Array.from(inFlight));
 }
 
-async function pushRange(db: Kysely<DB>, range: AvailabilityPushRange): Promise<void> {
-  try {
-    const channexConfig = await getChannexConfig(db);
-    if (!channexConfig.propertyId || !channexConfig.isActive) return;
-    const propertyId = channexConfig.propertyId;
+export interface RangeAriValues {
+  availabilityValues: ChannexAvailabilityValue[];
+  restrictionValues: ChannexRestrictionValue[];
+}
 
-    const mapping = await findRoomTypeMapByRoomId(db, range.roomId);
-    if (!mapping) return; // § 3.1 step 3: unmapped room type — nothing to push, not an error.
+/**
+ * Builds the ARI payload for one room/range without pushing it — the shared
+ * core reused by `pushRange` (one room, pushed immediately, § 3.2 triggers)
+ * and `resyncAvailability.ts` (every mapped room, accumulated into two
+ * flat arrays and pushed once each, so the certification's "2 calls total"
+ * full-sync requirement holds regardless of how many room types are mapped).
+ * Returns `null` when there's nothing to push (unmapped room type, or the
+ * room is inactive/not found) — same "log and skip, don't push" contract
+ * `findRoomTypeMapByRoomId` already documents.
+ */
+export async function buildRangeAriValues(
+  db: Kysely<DB>,
+  propertyId: string,
+  range: AvailabilityPushRange,
+): Promise<RangeAriValues | null> {
+  const mapping = await findRoomTypeMapByRoomId(db, range.roomId);
+  if (!mapping) return null; // § 3.1 step 3: unmapped room type — nothing to push, not an error.
 
-    const stayData = await fetchRoomStayData(db, range.roomId, range.checkIn, range.checkOut);
-    if (!stayData) return; // room inactive/not found — nothing to push.
+  const stayData = await fetchRoomStayData(db, range.roomId, range.checkIn, range.checkOut);
+  if (!stayData) return null; // room inactive/not found — nothing to push.
 
-    const availability = calculateAvailability({
-      checkIn: range.checkIn,
-      checkOut: range.checkOut,
-      totalUnits: stayData.totalUnits,
-      overrides: stayData.overrides,
-      occupiedByDate: stayData.occupiedByDate,
-    });
+  const availability = calculateAvailability({
+    checkIn: range.checkIn,
+    checkOut: range.checkOut,
+    totalUnits: stayData.totalUnits,
+    overrides: stayData.overrides,
+    occupiedByDate: stayData.occupiedByDate,
+  });
 
-    const availabilityValues: ChannexAvailabilityValue[] = availability.nights.map((night) => ({
-      propertyId,
-      roomTypeId: mapping.channexRoomTypeId,
-      date: night.date,
-      availability: night.disponibles,
-    }));
-    await pushAvailabilityToChannex(availabilityValues);
+  const availabilityValues: ChannexAvailabilityValue[] = availability.nights.map((night) => ({
+    propertyId,
+    roomTypeId: mapping.channexRoomTypeId,
+    date: night.date,
+    availability: night.disponibles,
+  }));
 
-    // § 1.2: rates/restrictions only go out when a rate plan is mapped too —
-    // a room can have its room type mapped (availability pushable) before
-    // its rate plan is (getMappingStatus's "complete" requires both).
-    if (mapping.channexRatePlanId) {
-      const ratePlanId = mapping.channexRatePlanId;
-      const nightlyRates = calculateNightlyRates({
+  // § 1.2: rates/restrictions only go out when a rate plan is mapped too —
+  // a room can have its room type mapped (availability pushable) before
+  // its rate plan is (getMappingStatus's "complete" requires both).
+  const restrictionValues: ChannexRestrictionValue[] = mapping.channexRatePlanId
+    ? calculateNightlyRates({
         checkIn: range.checkIn,
         checkOut: range.checkOut,
         roomRates: stayData.roomRates,
         rateOverrides: stayData.overrides,
         roomDefaultMinStay: stayData.defaultMinStay,
-      });
-
-      const restrictionValues: ChannexRestrictionValue[] = nightlyRates.map((night) => ({
+      }).map((night) => ({
         propertyId,
-        ratePlanId,
+        ratePlanId: mapping.channexRatePlanId as string,
         date: night.date,
         rates: night.ratesByOccupancy.map((r) => ({ occupancy: r.occupancy, rate: r.priceCents })),
         minStay: night.minStay,
         stopSell: night.closed,
-      }));
-      await pushRestrictions(restrictionValues);
+      }))
+    : [];
+
+  return { availabilityValues, restrictionValues };
+}
+
+async function pushRange(db: Kysely<DB>, range: AvailabilityPushRange): Promise<void> {
+  try {
+    const channexConfig = await getChannexConfig(db);
+    if (!channexConfig.propertyId || !channexConfig.isActive) return;
+
+    const ariValues = await buildRangeAriValues(db, channexConfig.propertyId, range);
+    if (!ariValues) return;
+
+    await pushAvailabilityToChannex(ariValues.availabilityValues);
+    // Only call when a rate plan is actually mapped — an empty array here
+    // would still register as a call against a test's mock (the real
+    // channexClient.pushRestrictions no-ops on an empty array, but callers
+    // must not rely on that to decide whether restrictions were pushed).
+    if (ariValues.restrictionValues.length > 0) {
+      await pushRestrictions(ariValues.restrictionValues);
     }
   } catch (err) {
     logPushError(`room ${range.roomId} [${range.checkIn}..${range.checkOut})`, err);
