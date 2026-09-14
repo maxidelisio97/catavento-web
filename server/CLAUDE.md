@@ -270,6 +270,26 @@ hallazgo puede esperar.
   the WHOLE client (not just the push path) — `getProperty`/
   `listRoomTypes`/pull/ack are bounded now too.
 
+### `POST /restrictions` es asíncrono del lado de Channex — un GET inmediato después puede dar falso negativo
+- Verificado en vivo contra staging.channex.io el 2026-09-13 (certificación
+  M12D, property de certificación, rate plan de "Suite Casal"): `POST
+  /restrictions` responde `200` con `{"data":[{"id":"...","type":"task"}]}`
+  — NO aplica la restricción al instante, la encola como task en
+  background. Un `GET /restrictions` para la misma noche, llamado
+  inmediatamente después del POST, siguió devolviendo la tarifa VIEJA;
+  recién se vio el valor nuevo esperando ~8-10s.
+- `pushRestrictions` (`channexClient.ts`) resuelve apenas Channex acepta la
+  task, no cuando se aplica — no es un bug de este código (el push en
+  producción es fire-and-forget, § 0.1, nunca espera nada), pero toda
+  verificación manual o scripteada que empuje un cambio y lo confirme con
+  un GET inmediato después debe esperar ~8-10s antes de leer, o va a leer
+  un falso negativo y sospechar de un push que en realidad sí funcionó.
+- No confirmado si `POST /availability` tiene el mismo comportamiento
+  asíncrono — en esta misma sesión el cambio de disponibilidad (vía una
+  reserva real) ya se reflejó sin espera extra, pero esa medición no fue
+  lo bastante aislada/cronometrada para afirmarlo. No asumir que es
+  sincrónica sin probarlo de nuevo, con el mismo rigor que acá.
+
 ## Flujo de ramas
 Ver CLAUDE.md raíz — regla de todo el repo, no solo del backend.
 

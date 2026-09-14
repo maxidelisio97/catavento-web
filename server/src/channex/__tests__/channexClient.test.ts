@@ -159,6 +159,30 @@ describe('listRoomTypes', () => {
 });
 
 describe('pushAvailability', () => {
+  it('logs (never throws) when Channex accepts the request but rejects some values via meta.warnings', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        data: [],
+        meta: {
+          message: 'Success',
+          warnings: [{ warning: 'Not found room_type for this change', date: '2026-07-16' }],
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(
+      pushAvailability([{ propertyId: 'prop-1', roomTypeId: 'rt-1', date: '2026-07-16', availability: 2 }]),
+    ).resolves.toBeUndefined();
+
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    const [message, warningsJson] = errorSpy.mock.calls[0]!;
+    expect(message).toContain('pushAvailability');
+    expect(message).toContain('rejected 1 value');
+    expect(warningsJson).toContain('Not found room_type for this change');
+  });
+
   it('POSTs one grouped request to /availability with every value mapped to snake_case', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { data: [{ id: 'task-1', type: 'task' }], meta: { message: 'Success', warnings: [] } }));
     vi.stubGlobal('fetch', fetchMock);
@@ -203,7 +227,7 @@ describe('pushAvailability', () => {
 });
 
 describe('pushRestrictions', () => {
-  it('POSTs one grouped request to /restrictions with rates/min_stay/stop_sell in snake_case', async () => {
+  it('POSTs one grouped request to /restrictions with rates/min_stay_arrival/stop_sell in snake_case', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { data: [{ id: 'task-1', type: 'task' }], meta: { message: 'Success', warnings: [] } }));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -228,7 +252,7 @@ describe('pushRestrictions', () => {
           rate_plan_id: 'rp-1',
           date: '2026-07-16',
           rates: [{ occupancy: 2, rate: 20000 }],
-          min_stay: 1,
+          min_stay_arrival: 1,
           stop_sell: false,
         },
       ],
@@ -242,5 +266,53 @@ describe('pushRestrictions', () => {
     await pushRestrictions([]);
 
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // Mandatory regression test (M12D certificación, 2026-09-13): a plain
+  // `min_stay` was silently rejected by a property configured for
+  // `min_stay_arrival`/`min_stay_through` — Channex answered 200 with
+  // `data: []` (zero tasks) and a warning per night. Confirms the fix
+  // surfaces this as a logged problem instead of a silent success.
+  it('logs (never throws) when Channex accepts the request but rejects some values via meta.warnings', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        data: [],
+        meta: {
+          message: 'Success',
+          warnings: [
+            {
+              warning: {
+                min_stay: ["property doesn't support `min_stay` restriction, please use `min_stay_through` or `min_stay_arrival`"],
+              },
+              date: '2026-07-16',
+            },
+          ],
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(
+      pushRestrictions([{ propertyId: 'prop-1', ratePlanId: 'rp-1', date: '2026-07-16', minStay: 1 }]),
+    ).resolves.toBeUndefined();
+
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    const [message, warningsJson] = errorSpy.mock.calls[0]!;
+    expect(message).toContain('pushRestrictions');
+    expect(message).toContain('rejected 1 value');
+    expect(warningsJson).toContain('min_stay_through');
+  });
+
+  it('does not log when meta.warnings is empty', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { data: [{ id: 'task-1', type: 'task' }], meta: { message: 'Success', warnings: [] } }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await pushRestrictions([{ propertyId: 'prop-1', ratePlanId: 'rp-1', date: '2026-07-16', minStay: 1 }]);
+
+    expect(errorSpy).not.toHaveBeenCalled();
   });
 });
