@@ -192,6 +192,46 @@ export async function ackBookingRevision(revisionId: string): Promise<void> {
  * — confirms the docs' field note ("integer (20000 for $200.00)") for real,
  * not just from reading the docs.
  */
+
+/**
+ * Channex's real response shape for both ARI POSTs: `200` with a `task` per
+ * accepted value AND/OR a `meta.warnings` array for entries it rejected —
+ * found live on 2026-09-13 (M12D certificación) pushing `min_stay` against a
+ * property configured for `min_stay_arrival`/`min_stay_through`: Channex
+ * answered `200` with `data: []` (zero tasks — nothing was actually queued)
+ * and a `warnings` entry per rejected night. A caller that only checks
+ * `response.ok` sees this as success.
+ */
+interface ChannexPushResponse {
+  data?: { id: string; type: string }[];
+  meta?: { message?: string; warnings?: unknown[] };
+}
+
+/**
+ * Logs (never throws) when Channex accepts the HTTP request but rejects some
+ * or all of the pushed values via `meta.warnings` — same "fire-and-forget,
+ * but a failure must be visible" discipline as `pushAvailability.ts`'s
+ * `logPushError`. Callers (the 6 trigger points, § 3.2) don't need to react
+ * to this yet (SPEC-modulo-12D robustez-certificación finding) — this only
+ * closes the "silent success" gap: before this fix, `pushAvailability`/
+ * `pushRestrictions` discarded the response body entirely, so this exact
+ * class of rejection was invisible even though the HTTP call itself
+ * "succeeded" (`response.ok`).
+ *
+ * Logs `warnings` as-is from Channex without capping size or narrowing
+ * type — safe today because the content is validation messages, but if
+ * this helper is ever reused for an endpoint that handles guest data,
+ * review what gets logged before dumping it raw.
+ */
+function logIfWarnings(context: string, response: ChannexPushResponse): void {
+  const warnings = response.meta?.warnings ?? [];
+  if (warnings.length === 0) return;
+  console.error(
+    `[channex-client] ${context}: Channex accepted the request but rejected ${warnings.length} value(s) — ${(response.data ?? []).length} task(s) created:`,
+    JSON.stringify(warnings),
+  );
+}
+
 export interface ChannexAvailabilityValue {
   propertyId: string;
   roomTypeId: string;
@@ -204,7 +244,7 @@ export interface ChannexAvailabilityValue {
 export async function pushAvailability(values: ChannexAvailabilityValue[]): Promise<void> {
   if (values.length === 0) return;
 
-  await channexRequest('/availability', {
+  const response = await channexRequest<ChannexPushResponse>('/availability', {
     method: 'POST',
     body: {
       values: values.map((v) => ({
@@ -215,6 +255,7 @@ export async function pushAvailability(values: ChannexAvailabilityValue[]): Prom
       })),
     },
   });
+  logIfWarnings('pushAvailability', response);
 }
 
 export interface ChannexRestrictionValue {
@@ -230,16 +271,28 @@ export interface ChannexRestrictionValue {
    * "dinero: centavos como INTEGER" convention with zero conversion needed.
    */
   rates?: { occupancy: number; rate: number }[];
+  /**
+   * Sent as `min_stay_arrival` (never the generic `min_stay`) — VERIFIED
+   * LIVE against staging.channex.io on 2026-09-13 (M12D certificación,
+   * property configured with `min_stay_type: "both"`): a plain `min_stay`
+   * was rejected outright ("property doesn't support `min_stay`
+   * restriction, please use `min_stay_through` or `min_stay_arrival`").
+   * `min_stay_arrival` (not `_through`) matches this codebase's own
+   * confirmed behavior — `calculatePrice.ts` checks min-stay ONLY against
+   * the reservation's check-in date, never against every night a stay
+   * passes through (see server/CLAUDE.md's `POST /restrictions`
+   * async-task note for the same certification session).
+   */
   minStay?: number;
   /** Full stop-sell — the closest match to this codebase's local `closed` (SPEC § 3.1). */
   stopSell?: boolean;
 }
 
-/** POST /restrictions — pushes per-occupancy rate + min_stay + stop_sell for a rate plan/night. */
+/** POST /restrictions — pushes per-occupancy rate + min_stay_arrival + stop_sell for a rate plan/night. */
 export async function pushRestrictions(values: ChannexRestrictionValue[]): Promise<void> {
   if (values.length === 0) return;
 
-  await channexRequest('/restrictions', {
+  const response = await channexRequest<ChannexPushResponse>('/restrictions', {
     method: 'POST',
     body: {
       values: values.map((v) => ({
@@ -247,9 +300,10 @@ export async function pushRestrictions(values: ChannexRestrictionValue[]): Promi
         rate_plan_id: v.ratePlanId,
         date: v.date,
         ...(v.rates ? { rates: v.rates } : {}),
-        ...(v.minStay !== undefined ? { min_stay: v.minStay } : {}),
+        ...(v.minStay !== undefined ? { min_stay_arrival: v.minStay } : {}),
         ...(v.stopSell !== undefined ? { stop_sell: v.stopSell } : {}),
       })),
     },
   });
+  logIfWarnings('pushRestrictions', response);
 }
