@@ -7,13 +7,23 @@ import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from '@fa
 import cookiePlugin from '@fastify/cookie';
 import { sql } from 'kysely';
 import { createHash, randomBytes } from 'node:crypto';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { testDb } from '../../db/testClient.js';
 import { registerErrorHandler } from '../../errorHandler.js';
 import panelRoomRatesPlugin from '../panelRoomRates.js';
 import { hashPassword } from '../../auth/hashPassword.js';
 import { createRoleWithPermissions, createSessionCookieForRole, getDueñoRoleId } from '../../test-support/permissionFixtures.js';
 import { SESSION_COOKIE_NAME } from '../../auth/cookie.js';
+import { updateChannexConfig } from '../../channex/channexConfig.js';
+import { setRoomTypeMap } from '../../channex/channexRoomTypeMap.js';
+
+const pushAvailabilityMock = vi.fn().mockResolvedValue(undefined);
+const pushRestrictionsMock = vi.fn().mockResolvedValue(undefined);
+
+vi.mock('../../channex/channexClient.js', () => ({
+  pushAvailability: (...args: unknown[]) => pushAvailabilityMock(...args),
+  pushRestrictions: (...args: unknown[]) => pushRestrictionsMock(...args),
+}));
 
 function buildApp() {
   const app = Fastify().withTypeProvider<ZodTypeProvider>();
@@ -64,13 +74,14 @@ async function insertTestRoom(name: string, sortOrder: number): Promise<number> 
 }
 
 beforeEach(async () => {
-  await sql`TRUNCATE TABLE reservations, rate_overrides, room_rates, rooms, users, sessions RESTART IDENTITY CASCADE`.execute(
+  await sql`TRUNCATE TABLE reservations, rate_overrides, room_units, room_rates, channex_room_type_map, channex_config, rooms, users, sessions RESTART IDENTITY CASCADE`.execute(
     testDb,
   );
 });
 
 afterEach(async () => {
-  await sql`TRUNCATE TABLE reservations, rate_overrides, room_rates, rooms, users, sessions RESTART IDENTITY CASCADE`.execute(
+  vi.clearAllMocks();
+  await sql`TRUNCATE TABLE reservations, rate_overrides, room_units, room_rates, channex_room_type_map, channex_config, rooms, users, sessions RESTART IDENTITY CASCADE`.execute(
     testDb,
   );
 });
@@ -249,5 +260,33 @@ describe('authorization (config.settings)', () => {
     });
 
     expect(response.statusCode).toBe(200);
+  });
+});
+
+describe('7th ARI push trigger — a base rate edit pushes the whole horizon for that room', () => {
+  it('pushes automatically after a successful PATCH, without any manual resync', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertTestRoom('Casal', 1);
+    const rate = await testDb
+      .insertInto('room_rates')
+      .values({ room_id: roomId, occupancy: 2, weekday_cents: 18000, weekend_cents: 22000 })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+    await updateChannexConfig(testDb, { propertyId: 'f6a1bdf1-cef7-4e16-bc4e-a4799510d23f', isActive: true });
+    await setRoomTypeMap(testDb, { roomId, channexRoomTypeId: '7f1fe757-cf66-4878-82fe-ae25920e8d1f', channexRatePlanId: null });
+
+    const app = buildApp();
+    const response = await app.inject({
+      method: 'PATCH',
+      url: `/panel/room-rates/${rate.id}`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { weekday_cents: 19000 },
+    });
+
+    expect(response.statusCode).toBe(200);
+    // Proves the push was genuinely attempted — this codebase's other 6
+    // triggers (createReservation, cancelReservation, etc.) are proven the
+    // same way (see pushAvailability.triggers.test.ts).
+    await vi.waitFor(() => expect(pushAvailabilityMock).toHaveBeenCalledTimes(1));
   });
 });
