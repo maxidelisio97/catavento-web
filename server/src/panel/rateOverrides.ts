@@ -33,11 +33,19 @@
  * `units_available` drift out of sync with reality the moment the night is
  * reopened, which is exactly the inconsistent state the guard exists to
  * prevent.
+ *
+ * 7th ARI push trigger (Channex certification Stage 1 requires pushing on
+ * every local price/restriction change, not just reservation events — a
+ * manual "Ressincronizar" click doesn't satisfy it): both `putRateOverride`
+ * and `applyRateOverridesRange` fire `schedulePushAvailability` for exactly
+ * the edited room/range, strictly after their own transaction commits — same
+ * fire-and-forget contract as the other 6 triggers (SPEC-modulo-12C § 3.2).
  */
 import { sql, type Kysely, type Transaction } from 'kysely';
 import type { DB } from '../db/types.js';
 import { isReservationActive } from '../availability/isReservationActive.js';
 import { addDaysUTC, eachNightUTC, formatDateUTC, parseDateUTC } from '../shared/dateUtils.js';
+import { schedulePushAvailability } from '../channex/pushAvailability.js';
 
 export class RoomNotFoundError extends Error {
   constructor() {
@@ -157,7 +165,7 @@ export interface PutRateOverrideInput extends RateOverridePatch {
 }
 
 export async function putRateOverride(db: Kysely<DB>, input: PutRateOverrideInput): Promise<RateOverrideRow> {
-  return db.transaction().execute(async (trx) => {
+  const result = await db.transaction().execute(async (trx) => {
     const room = await trx.selectFrom('rooms').select('id').where('id', '=', input.roomId).forUpdate().executeTakeFirst();
     if (!room) throw new RoomNotFoundError();
 
@@ -195,6 +203,13 @@ export async function putRateOverride(db: Kysely<DB>, input: PutRateOverrideInpu
 
     return toRow(input.date, next);
   });
+
+  // Fire-and-forget, strictly after commit (see module doc comment above) —
+  // never awaited, never allowed to affect this function's own result.
+  const nextDay = formatDateUTC(addDaysUTC(parseDateUTC(input.date), 1));
+  schedulePushAvailability(db, [{ roomId: input.roomId, checkIn: input.date, checkOut: nextDay }]);
+
+  return result;
 }
 
 export interface ApplyRateOverridesRangeInput extends RateOverridePatch {
@@ -221,7 +236,7 @@ export async function applyRateOverridesRange(
   const touchesUnitsAvailable = 'units_available' in input;
   const touchesOthers = 'price_cents' in input || 'min_stay' in input || 'closed' in input;
 
-  return db.transaction().execute(async (trx) => {
+  const result = await db.transaction().execute(async (trx) => {
     const room = await trx.selectFrom('rooms').select('id').where('id', '=', input.roomId).forUpdate().executeTakeFirst();
     if (!room) throw new RoomNotFoundError();
 
@@ -279,4 +294,13 @@ export async function applyRateOverridesRange(
       unitsAvailable: touchesUnitsAvailable ? { appliedCount: unitsAvailableAppliedCount, failures } : null,
     };
   });
+
+  // Fire-and-forget, strictly after commit — one push for the WHOLE edited
+  // range (never one per night), same "2-calls-total" discipline as the
+  // full resync (see module doc comment above).
+  schedulePushAvailability(db, [
+    { roomId: input.roomId, checkIn: input.from, checkOut: formatDateUTC(addDaysUTC(parseDateUTC(input.to), 1)) },
+  ]);
+
+  return result;
 }

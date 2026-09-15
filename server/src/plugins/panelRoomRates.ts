@@ -7,6 +7,9 @@ import { db as prodDb } from '../db/client.js';
 import { requireAuth } from '../auth/requireAuth.js';
 import { blockIfMustChangePassword } from '../auth/blockIfMustChangePassword.js';
 import { requirePermission } from '../auth/requirePermission.js';
+import { schedulePushAvailability } from '../channex/pushAvailability.js';
+import { RESYNC_HORIZON_DAYS } from '../channex/resyncAvailability.js';
+import { addDaysUTC, formatDateUTC, parseDateUTC, todayISO } from '../shared/dateUtils.js';
 
 const roomRateRowSchema = z.object({
   id: z.number(),
@@ -105,14 +108,24 @@ const panelRoomRatesPlugin: FastifyPluginAsync<PanelRoomRatesPluginOptions> = as
           .updateTable('room_rates')
           .set(request.body)
           .where('id', '=', request.params.id)
-          .returning(['id', 'occupancy', 'weekday_cents', 'weekend_cents'])
+          .returning(['id', 'room_id', 'occupancy', 'weekday_cents', 'weekend_cents'])
           .executeTakeFirst();
 
         if (!updated) {
           throw httpError(404, 'Room rate not found');
         }
 
-        return updated;
+        // 7th ARI push trigger (SPEC-modulo-12C § 3.2 extension, Channex
+        // certification Stage 1): a base rate has no date of its own, so
+        // push the WHOLE sync horizon for just this room — same single
+        // "2-calls-total" push resyncAvailability.ts makes, scoped to one
+        // room instead of every mapped room. Fire-and-forget, after commit.
+        const checkIn = todayISO();
+        const checkOut = formatDateUTC(addDaysUTC(parseDateUTC(checkIn), RESYNC_HORIZON_DAYS));
+        schedulePushAvailability(db, [{ roomId: updated.room_id, checkIn, checkOut }]);
+
+        const { room_id: _roomId, ...row } = updated;
+        return row;
       },
     );
   });

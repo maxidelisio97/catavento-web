@@ -211,7 +211,7 @@ interface ChannexPushResponse {
  * Logs (never throws) when Channex accepts the HTTP request but rejects some
  * or all of the pushed values via `meta.warnings` — same "fire-and-forget,
  * but a failure must be visible" discipline as `pushAvailability.ts`'s
- * `logPushError`. Callers (the 6 trigger points, § 3.2) don't need to react
+ * `logPushError`. Callers (the trigger points, § 3.2) don't need to react
  * to this yet (SPEC-modulo-12D robustez-certificación finding) — this only
  * closes the "silent success" gap: before this fix, `pushAvailability`/
  * `pushRestrictions` discarded the response body entirely, so this exact

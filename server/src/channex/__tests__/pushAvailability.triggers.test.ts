@@ -17,6 +17,7 @@ import { createReservation } from '../../availability/createReservation.js';
 import { cancelReservation } from '../../panel/reservationActions.js';
 import { generateReservationCode } from '../../reservations/generateCode.js';
 import { hashPassword } from '../../auth/hashPassword.js';
+import { applyRateOverridesRange, putRateOverride } from '../../panel/rateOverrides.js';
 
 const pushAvailabilityMock = vi.fn().mockRejectedValue(new Error('Channex is down'));
 const pushRestrictionsMock = vi.fn().mockRejectedValue(new Error('Channex is down'));
@@ -113,5 +114,38 @@ describe('push failures never block the local operation that triggers them', () 
     expect(reservation.status).toBe('cancelled');
 
     await vi.waitFor(() => expect(pushAvailabilityMock).toHaveBeenCalledTimes(1));
+  });
+
+  it('putRateOverride still succeeds when the Channex push rejects', async () => {
+    const roomId = await insertRoom();
+    await connectAndMapRoom(roomId);
+
+    const row = await putRateOverride(testDb, { roomId, date: '2026-07-20', price_cents: 30000 });
+    expect(row.price_cents).toBe(30000);
+
+    // Proves the push was genuinely attempted (7th trigger, SPEC-modulo-12C
+    // § 3.2 extension) — same "fire-and-forget, never blocks the save"
+    // contract as the other 6 triggers.
+    await vi.waitFor(() => expect(pushAvailabilityMock).toHaveBeenCalledTimes(1));
+  });
+
+  it('applyRateOverridesRange pushes exactly once for the whole range, never once per night', async () => {
+    const roomId = await insertRoom();
+    await connectAndMapRoom(roomId);
+
+    const result = await applyRateOverridesRange(testDb, {
+      roomId,
+      from: '2026-08-01',
+      to: '2026-08-05',
+      price_cents: 22000,
+    });
+    expect(result.nights).toBe(5);
+
+    await vi.waitFor(() => expect(pushAvailabilityMock).toHaveBeenCalledTimes(1));
+    // The single call's `values` array must cover all 5 nights — proves this
+    // is one batched push, not a per-night loop (same "2-calls-total"
+    // discipline resyncAvailability.ts's certification requirement enforces).
+    const values = pushAvailabilityMock.mock.calls[0]?.[0] as unknown[];
+    expect(values).toHaveLength(5);
   });
 });
