@@ -626,10 +626,11 @@ describe('POST /panel/channex/resync', () => {
     // Unmapped room's rate plan is also null, so restrictions never fire either.
     expect(pushRestrictions).not.toHaveBeenCalled();
 
-    // § 4: the full 6-month horizon (183 nights), grouped into ONE call —
-    // never one request per night, and never a fraction of the horizon.
+    // Channex certification's "Test case #1. Full Sync" horizon (500 days),
+    // grouped into ONE call — never one request per night, and never a
+    // fraction of the horizon.
     const [values] = pushAvailability.mock.calls[0] as [{ date: string }[]];
-    expect(values).toHaveLength(183);
+    expect(values).toHaveLength(500);
   });
 });
 

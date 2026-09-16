@@ -20,7 +20,7 @@ vi.mock('../channexClient.js', () => ({
   pushRestrictions: (...args: unknown[]) => pushRestrictionsMock(...args),
 }));
 
-const { resyncAvailability, RESYNC_HORIZON_DAYS } = await import('../resyncAvailability.js');
+const { resyncAvailability, FULL_SYNC_HORIZON_DAYS } = await import('../resyncAvailability.js');
 
 const PROPERTY_ID = 'f6a1bdf1-cef7-4e16-bc4e-a4799510d23f';
 
@@ -78,10 +78,16 @@ describe('resyncAvailability', () => {
     expect(pushRestrictionsMock).toHaveBeenCalledTimes(1);
 
     // One call, but carrying every room type's nights — not a fraction of them.
-    const [availabilityValues] = pushAvailabilityMock.mock.calls[0] as [{ roomTypeId: string }[]];
+    const [availabilityValues] = pushAvailabilityMock.mock.calls[0] as [{ roomTypeId: string; date: string }[]];
     const [restrictionValues] = pushRestrictionsMock.mock.calls[0] as [{ ratePlanId: string }[]];
-    expect(availabilityValues).toHaveLength(3 * RESYNC_HORIZON_DAYS);
-    expect(restrictionValues).toHaveLength(3 * RESYNC_HORIZON_DAYS);
+    // Hard-coded 500, not derived from the constant — a regression that
+    // silently changes FULL_SYNC_HORIZON_DAYS must fail this, not just move
+    // the expectation along with it (Channex certification's "Test case #1.
+    // Full Sync" requires exactly 500 days, not "whatever the code says").
+    expect(FULL_SYNC_HORIZON_DAYS).toBe(500);
+    expect(availabilityValues).toHaveLength(3 * 500);
+    expect(restrictionValues).toHaveLength(3 * 500);
+    expect(new Set(availabilityValues.filter((v) => v.roomTypeId === ROOM_TYPE_CASAL).map((v) => v.date)).size).toBe(500);
     expect(new Set(availabilityValues.map((v) => v.roomTypeId))).toEqual(
       new Set([ROOM_TYPE_CASAL, ROOM_TYPE_TRIPLO, ROOM_TYPE_QUADRUPLO]),
     );

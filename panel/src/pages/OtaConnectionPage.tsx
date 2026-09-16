@@ -195,7 +195,7 @@ export default function OtaConnectionPage() {
         <div>
           <h2 className="text-[15px] font-semibold text-panel-900">Ressincronizar disponibilidade</h2>
           <p className="text-[12.5px] text-panel-500 mt-0.5">
-            Recalcula e envia disponibilidade e tarifas dos próximos 6 meses para todos os tipos de quarto mapeados.
+            Recalcula e envia disponibilidade e tarifas dos próximos 500 dias para todos os tipos de quarto mapeados.
           </p>
         </div>
 

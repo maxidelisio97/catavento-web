@@ -1,22 +1,24 @@
 /**
  * §3.3 — manual full resync: recalculates and pushes ARI for every mapped
- * room type across the whole sync horizon (§ 4, 6 months). Independent of
- * the incremental push (§ 3.2) — corrects drift accumulated from a lost
- * push, doesn't replace it. No cron here (12D adds the schedule).
+ * room type across the whole sync horizon. Independent of the incremental
+ * push (§ 3.2) — corrects drift accumulated from a lost push, doesn't
+ * replace it. No cron here (12D adds the schedule for the reservation pull
+ * only — Channex certification explicitly rejects a full sync fired on a
+ * timer, "Test case #1. Full Sync").
  *
  * Channex's certification guide (docs.channex.io) requires a full sync to be
- * EXACTLY 2 API calls total: one `POST /availability` covering every mapped
- * room type, one `POST /restrictions` covering every mapped rate plan — a
- * per-room-type call is flagged as a certification failure. This builds each
- * room's `values` via `buildRangeAriValues` (pushAvailability.ts's § 3.1
- * core, shared with the per-event trigger path) WITHOUT pushing per room,
- * accumulates every room's values into two flat arrays, and pushes each
- * array exactly once after the loop — regardless of how many room types are
- * mapped. This endpoint simply awaits the whole sequence and lets the
- * request take as long as it takes (documented choice, SPEC § 3.3 — "a
- * criterio de implementación") rather than returning a background "en
- * curso" status: the pousada's real volume makes this a few seconds, not
- * worth the extra polling machinery.
+ * EXACTLY 2 API calls total, each covering 500 days: one `POST /availability`
+ * covering every mapped room type, one `POST /restrictions` covering every
+ * mapped rate plan — a per-room-type call, or a horizon short of 500 days, is
+ * flagged as a certification failure. This builds each room's `values` via
+ * `buildRangeAriValues` (pushAvailability.ts's § 3.1 core, shared with the
+ * per-event trigger path) WITHOUT pushing per room, accumulates every room's
+ * values into two flat arrays, and pushes each array exactly once after the
+ * loop — regardless of how many room types are mapped. This endpoint simply
+ * awaits the whole sequence and lets the request take as long as it takes
+ * (documented choice, SPEC § 3.3 — "a criterio de implementación") rather
+ * than returning a background "en curso" status: the pousada's real volume
+ * makes this a few seconds, not worth the extra polling machinery.
  */
 import type { Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
@@ -31,8 +33,14 @@ import {
   type ChannexRestrictionValue,
 } from './channexClient.js';
 
-/** SPEC-modulo-12C § 4: 6 meses a futuro. */
-export const RESYNC_HORIZON_DAYS = 183;
+/**
+ * Channex certification's "Test case #1. Full Sync" requires exactly 500
+ * days. This is the number declared to Channex as what the PMS supports —
+ * independent of `panelRoomRates.ts`'s own horizon for the 7th incremental
+ * trigger (a business tradeoff, not a certified capability), which has its
+ * own constant so a future change to either doesn't silently move the other.
+ */
+export const FULL_SYNC_HORIZON_DAYS = 500;
 
 export interface ResyncAvailabilityResult {
   roomsPushed: number;
@@ -50,7 +58,7 @@ export async function resyncAvailability(db: Kysely<DB>): Promise<ResyncAvailabi
   const propertyId = channexConfig.propertyId;
 
   const checkIn = todayISO();
-  const checkOut = formatDateUTC(addDaysUTC(parseDateUTC(checkIn), RESYNC_HORIZON_DAYS));
+  const checkOut = formatDateUTC(addDaysUTC(parseDateUTC(checkIn), FULL_SYNC_HORIZON_DAYS));
 
   let roomsPushed = 0;
   let roomsSkipped = 0;
