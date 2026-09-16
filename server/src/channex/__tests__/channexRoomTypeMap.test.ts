@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { testDb } from '../../db/testClient.js';
 import { getMappingStatus, listLocalRoomsWithMapping, setRoomTypeMap } from '../channexRoomTypeMap.js';
 import { isChannexRoomTypeUniqueViolation } from '../isChannexRoomTypeUniqueViolation.js';
+import { isChannexRatePlanUniqueViolation } from '../isChannexRatePlanUniqueViolation.js';
 
 async function insertRoom(name: string, active = true): Promise<number> {
   const room = await testDb
@@ -93,6 +94,38 @@ describe('setRoomTypeMap', () => {
     }).catch((e) => e);
 
     expect(isChannexRoomTypeUniqueViolation(error)).toBe(true);
+  });
+
+  it('rejects a second local room claiming a Channex rate plan another room already owns (1:1 mapping)', async () => {
+    const roomA = await insertRoom('Casal');
+    const roomB = await insertRoom('Triplo');
+    await setRoomTypeMap(testDb, {
+      roomId: roomA,
+      channexRoomTypeId: '7f1fe757-cf66-4878-82fe-ae25920e8d1f',
+      channexRatePlanId: '7e5f22ca-2c19-45a4-a96f-770312dc3d45',
+    });
+
+    const error = await setRoomTypeMap(testDb, {
+      roomId: roomB,
+      channexRoomTypeId: '9c2c1e4a-6f1a-4b3a-9d4e-1a2b3c4d5e6f',
+      channexRatePlanId: '7e5f22ca-2c19-45a4-a96f-770312dc3d45',
+    }).catch((e) => e);
+
+    expect(isChannexRatePlanUniqueViolation(error)).toBe(true);
+  });
+
+  it('allows two local rooms to have a null rate plan at the same time', async () => {
+    const roomA = await insertRoom('Casal');
+    const roomB = await insertRoom('Triplo');
+    await setRoomTypeMap(testDb, { roomId: roomA, channexRoomTypeId: '7f1fe757-cf66-4878-82fe-ae25920e8d1f', channexRatePlanId: null });
+
+    await expect(
+      setRoomTypeMap(testDb, {
+        roomId: roomB,
+        channexRoomTypeId: '9c2c1e4a-6f1a-4b3a-9d4e-1a2b3c4d5e6f',
+        channexRatePlanId: null,
+      }),
+    ).resolves.not.toThrow();
   });
 });
 
