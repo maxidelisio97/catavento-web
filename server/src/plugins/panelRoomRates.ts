@@ -8,8 +8,17 @@ import { requireAuth } from '../auth/requireAuth.js';
 import { blockIfMustChangePassword } from '../auth/blockIfMustChangePassword.js';
 import { requirePermission } from '../auth/requirePermission.js';
 import { schedulePushAvailability } from '../channex/pushAvailability.js';
-import { RESYNC_HORIZON_DAYS } from '../channex/resyncAvailability.js';
 import { addDaysUTC, formatDateUTC, parseDateUTC, todayISO } from '../shared/dateUtils.js';
+
+/**
+ * Horizon for the 7th ARI push trigger (base rate edit) — independent of
+ * `resyncAvailability.ts`'s `FULL_SYNC_HORIZON_DAYS` (that one is a number
+ * declared to Channex's certification, this one is just "how far ahead is it
+ * worth recalculating rates after a single price edit"). Same 183-day value
+ * this trigger always used; kept as its own constant so it doesn't move if
+ * the full-sync number ever changes for certification reasons.
+ */
+const RATE_EDIT_PUSH_HORIZON_DAYS = 183;
 
 const roomRateRowSchema = z.object({
   id: z.number(),
@@ -121,7 +130,7 @@ const panelRoomRatesPlugin: FastifyPluginAsync<PanelRoomRatesPluginOptions> = as
         // "2-calls-total" push resyncAvailability.ts makes, scoped to one
         // room instead of every mapped room. Fire-and-forget, after commit.
         const checkIn = todayISO();
-        const checkOut = formatDateUTC(addDaysUTC(parseDateUTC(checkIn), RESYNC_HORIZON_DAYS));
+        const checkOut = formatDateUTC(addDaysUTC(parseDateUTC(checkIn), RATE_EDIT_PUSH_HORIZON_DAYS));
         schedulePushAvailability(db, [{ roomId: updated.room_id, checkIn, checkOut }]);
 
         const { room_id: _roomId, ...row } = updated;

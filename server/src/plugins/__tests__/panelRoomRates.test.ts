@@ -288,5 +288,13 @@ describe('7th ARI push trigger — a base rate edit pushes the whole horizon for
     // triggers (createReservation, cancelReservation, etc.) are proven the
     // same way (see pushAvailability.triggers.test.ts).
     await vi.waitFor(() => expect(pushAvailabilityMock).toHaveBeenCalledTimes(1));
+
+    // This trigger's own horizon (RATE_EDIT_PUSH_HORIZON_DAYS) stays 183,
+    // independent of resyncAvailability.ts's FULL_SYNC_HORIZON_DAYS (500,
+    // Channex certification's "Test case #1. Full Sync") — hard-coded here,
+    // not derived from either constant, so a regression that accidentally
+    // couples the two again fails this test instead of moving with it.
+    const values = pushAvailabilityMock.mock.calls[0]?.[0] as unknown[];
+    expect(values).toHaveLength(183);
   });
 });
