@@ -11,6 +11,7 @@ import { getChannexConfig, updateChannexConfig } from '../channex/channexConfig.
 import { ChannexApiError, ChannexNotConfiguredError, getProperty, listRoomTypes } from '../channex/channexClient.js';
 import { getMappingStatus, listLocalRoomsWithMapping, setRoomTypeMap } from '../channex/channexRoomTypeMap.js';
 import { isChannexRoomTypeUniqueViolation } from '../channex/isChannexRoomTypeUniqueViolation.js';
+import { isChannexRatePlanUniqueViolation } from '../channex/isChannexRatePlanUniqueViolation.js';
 import { runChannexPullLocked } from '../channex/runChannexPull.js';
 import { resyncAvailability } from '../channex/resyncAvailability.js';
 import { getChannexPullStatus } from '../channex/channexPullStatus.js';
@@ -245,6 +246,10 @@ const panelChannexPlugin: FastifyPluginAsync<PanelChannexPluginOptions> = async 
         } catch (error) {
           if (isChannexRoomTypeUniqueViolation(error)) {
             reply.status(409).send({ error: 'Este Room Type do Channex já está associado a outro quarto' });
+            return;
+          }
+          if (isChannexRatePlanUniqueViolation(error)) {
+            reply.status(409).send({ error: 'Este Rate Plan do Channex já está associado a outro quarto' });
             return;
           }
           throw error;

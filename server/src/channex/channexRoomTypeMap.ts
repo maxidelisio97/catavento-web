@@ -35,11 +35,11 @@ export interface SetRoomTypeMapInput {
 /**
  * Upserts the mapping for one local room. `room_id` is UNIQUE (§ 3) so this
  * is the single row per room — a second call for the same room replaces its
- * mapping rather than adding a duplicate. The `channex_room_type_id` UNIQUE
- * constraint is left to the database: a caller trying to claim a Channex
- * room type another local room already owns gets a Postgres unique
- * violation, which the plugin translates to a 409 (SPEC § 8: mapping must be
- * 1:1, no orphans).
+ * mapping rather than adding a duplicate. The `channex_room_type_id` and
+ * `channex_rate_plan_id` UNIQUE constraints are left to the database: a
+ * caller trying to claim a Channex room type or rate plan another local
+ * room already owns gets a Postgres unique violation, which the plugin
+ * translates to a 409 (SPEC § 8: mapping must be 1:1, no orphans).
  */
 export async function setRoomTypeMap(db: Kysely<DB>, input: SetRoomTypeMapInput): Promise<void> {
   await db
