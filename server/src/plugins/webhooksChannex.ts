@@ -32,6 +32,18 @@
  * with it. The one thing that still returns non-200 is a bad secret (never
  * a body/processing detail, and NOT a failure of the pull itself below —
  * that's just as much "our problem" as any other processing failure).
+ *
+ * property_id validation (added after a real incident, not theoretical):
+ * this handler used to pull for WHATEVER property_id the envelope carried,
+ * never checking it against `channex_config.property_id`. Confirmed live on
+ * 2026-09-16/17 (server/CLAUDE.md's "Módulo 12B" section has the full
+ * incident): a M12D certification property, never registered in
+ * `channex_config`, sent real webhooks here, and this handler pulled and
+ * processed them anyway — including acking a `cancelled_unknown_booking`
+ * for a booking that only ever existed in `catavento_db_test`. That ack is
+ * global on Channex's side, so it permanently starved the test
+ * environment's own manual pull of that same revision. A `property_id`
+ * that doesn't match the configured one is now ignored (200, no pull).
  */
 import type { FastifyPluginAsync } from 'fastify';
 import type { Kysely } from 'kysely';
@@ -40,6 +52,7 @@ import { db as prodDb } from '../db/client.js';
 import { config } from '../config.js';
 import { isValidWebhookSecret } from './verifyWebhookSecret.js';
 import { pullBookingRevisions } from '../channex/pullBookingRevisions.js';
+import { getChannexConfig } from '../channex/channexConfig.js';
 
 // Header name is ours to choose (§ 3.3: Channex doesn't sign webhooks, it
 // just echoes back whatever custom header we configure on their side) — set
@@ -92,6 +105,19 @@ const webhooksChannexPlugin: FastifyPluginAsync<WebhooksChannexPluginOptions> = 
       fastify.log.warn(
         { topLevelKeys: typeof request.body === 'object' && request.body !== null ? Object.keys(request.body) : typeof request.body },
         'channex webhook: envelope could not be parsed',
+      );
+      return reply.status(200).send({ received: true });
+    }
+
+    const currentConfig = await getChannexConfig(db);
+
+    if (envelope.propertyId !== currentConfig.propertyId) {
+      // Still 200 (§ 3.2) — this is Channex's delivery working correctly,
+      // just for a property we're not configured to process (see this
+      // file's docstring for the real incident this prevents).
+      fastify.log.warn(
+        { receivedPropertyId: envelope.propertyId, configuredPropertyId: currentConfig.propertyId },
+        'channex webhook: property_id does not match channex_config, ignoring',
       );
       return reply.status(200).send({ received: true });
     }

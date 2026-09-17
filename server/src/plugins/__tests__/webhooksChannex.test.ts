@@ -28,6 +28,7 @@ vi.mock('../../channex/channexClient.js', async (importOriginal) => {
 const { testDb } = await import('../../db/testClient.js');
 const { registerErrorHandler } = await import('../../errorHandler.js');
 const { setRoomTypeMap } = await import('../../channex/channexRoomTypeMap.js');
+const { updateChannexConfig } = await import('../../channex/channexConfig.js');
 const webhooksChannexPlugin = (await import('../webhooksChannex.js')).default;
 
 function buildApp() {
@@ -49,6 +50,7 @@ beforeEach(async () => {
   await resetDb();
   fetchBookingRevisionsFeed.mockReset().mockResolvedValue([]);
   ackBookingRevision.mockClear();
+  await updateChannexConfig(testDb, { propertyId: PROPERTY_ID, isActive: true });
 });
 
 /** Confirmed real shape (live capture, 2026-09-08) — no payload/booking_id/revision_id. */
@@ -160,6 +162,20 @@ describe('POST /webhooks/channex — dispara un pull completo del feed', () => {
 
     expect(response.statusCode).toBe(200);
     expect(fetchBookingRevisionsFeed).toHaveBeenCalledWith(PROPERTY_ID);
+  });
+
+  it('un property_id que no coincide con channex_config.property_id no dispara el pull y responde 200', async () => {
+    const app = buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/webhooks/channex',
+      headers: { 'x-channex-webhook-secret': 'channex-test-secret' },
+      payload: webhookEnvelope({ property_id: randomUUID() }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(fetchBookingRevisionsFeed).not.toHaveBeenCalled();
+    expect(ackBookingRevision).not.toHaveBeenCalled();
   });
 
   it('una falla en el pull (API de Channex caída) responde 200 igual', async () => {

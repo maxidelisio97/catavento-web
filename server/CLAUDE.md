@@ -290,6 +290,51 @@ hallazgo puede esperar.
   lo bastante aislada/cronometrada para afirmarlo. No asumir que es
   sincrónica sin probarlo de nuevo, con el mismo rigor que acá.
 
+## Módulo 12B — reservas entrantes (webhook y pull)
+
+### Hallazgo de diseño: el webhook procesa cualquier property_id que Channex le mande, sin validar contra channex_config
+- `webhooksChannex.ts` parsea el envelope, toma `property_id` tal cual
+  viene en el body, y llama `pullBookingRevisions(db, envelope.propertyId)`
+  sin comparar ese valor contra `channex_config.property_id`. Cualquier
+  property de nuestra cuenta Channex que tenga este mismo secret
+  configurado como webhook dispara un pull y ack reales en producción,
+  aunque esa property no sea la que `channex_config` marca como activa.
+- Confirmado en vivo (no teórico): la property de certificación de M12D
+  (`46294792-...`, nunca dada de alta en `channex_config` ni en
+  `channex_room_type_map`) mandó webhooks reales a
+  `cataventotaiba.com/api/webhooks/channex` durante la sesión de
+  certificación del 2026-09-16, y el sistema los procesó sin objetar —
+  generando `unmapped_room_type`/`cancelled_unknown_booking` en logs de
+  producción que, vistos aislados, parecían una reserva real perdida
+  (investigado a fondo antes de descartarlo — ver el caso BDC-123 de esa
+  fecha).
+- No es una vulnerabilidad de seguridad hoy: `CHANNEX_API_KEY` es de
+  nuestra propia cuenta, así que como mucho procesa una property NUESTRA
+  no reconocida, nunca datos de un tercero. Es un problema de higiene
+  operativa: nada distingue "webhook de la property real" de "webhook de
+  cualquier otra property nuestra" (staging, certificación, o la que
+  venga), y esa ambigüedad ya costó una investigación completa de
+  incidente para descartar un falso positivo.
+- **RESUELTO (2026-09-17, rama `fix-channex-webhook-property-validation`):**
+  `webhooksChannex.ts` ahora compara `envelope.propertyId` contra
+  `channex_config.property_id` antes de pullear — un mismatch responde 200
+  sin procesar, con `fastify.log.warn`. Subido de prioridad (de "evaluar
+  antes de producción" a implementado ya) por un segundo incidente real
+  encontrado durante la certificación M12D (Test 11): producción interceptó
+  y ackeó automáticamente la cancelación de una reserva de prueba que solo
+  existía en `catavento_db_test` (vía `cancelled_unknown_booking`, que
+  siempre ackea) — ese ack es global en Channex, así que dejó a la propia
+  verificación manual de test sin forma de ver esa revisión nunca más. No
+  era solo "ruido en logs": bloqueaba activamente una certificación en
+  curso. Tests: `webhooksChannex.test.ts` cubre el caso de mismatch.
+
+### Checklist — activar una property nueva en channex_config
+- Antes de marcar una property como activa en `channex_config`, cargar
+  su `channex_room_type_map` completo (todos los room types reales de
+  ESA property, no reutilizar los IDs de otra). `channex_room_type_map`
+  es global (no tiene `property_id`), así que un mapeo pensado para una
+  property no sirve para otra aunque los nombres de cuarto coincidan.
+
 ## Flujo de ramas
 Ver CLAUDE.md raíz — regla de todo el repo, no solo del backend.
 
@@ -447,6 +492,21 @@ Ver CLAUDE.md raíz — regla de todo el repo, no solo del backend.
   estado de carga para siempre, sin ver el aviso de reintento/WhatsApp.
   Fix propio pendiente: agregar timeout con `AbortController`. Encontrado al
   cerrar `fix-public-payment-method-500`.
+- **`cancelled_unknown_booking` se ackeaba sin ninguna alarma, a diferencia
+  de `unmapped_room_type`.** `shouldAck` (`pullBookingRevisions.ts`) deja
+  `unmapped_room_type`/`multi_room_unsupported` sin ackear a propósito
+  para que Channex siga reintentando y dispare su email de "não
+  confirmado" a los 30 min — un segundo aviso útil para un humano.
+  `cancelled_unknown_booking` no tiene ese mismo mecanismo: se ackea
+  siempre, en el mismo pull, sin dejar ningún rastro accionable más que
+  el log. Si una reserva real llega a cancelarse sin haber sido creada
+  localmente (por el mismo tipo de gap de mapeo que la nota de arriba),
+  hoy no hay ninguna señal que lo saque a la superficie. Fix pendiente:
+  decidir qué alarma corresponde (¿mismo patrón de re-servir sin ack?
+  ¿notificación aparte?) — no mezclar con otro cambio. Nota: desde el fix
+  de validación de `property_id` en el webhook (ver "Módulo 12B" más
+  arriba), este outcome solo puede darse ya para la property realmente
+  configurada — deja de ser alcanzable por webhooks de otra property.
 - `createOrReusePayment` (rama "Asaas ya tiene el pago recibido"): el
   UPDATE que marca el pago local `received` corre en la misma
   transacción que el `throw PaymentAlreadyReceivedError` inmediatamente
