@@ -99,7 +99,7 @@ export class CommercialWarningError extends Error {
   }
 }
 
-interface ReservationRow {
+export interface ReservationRow {
   id: number;
   status: string;
   room_id: number;
@@ -111,7 +111,7 @@ interface ReservationRow {
   check_out: string;
 }
 
-async function fetchReservationByCode(db: Kysely<DB>, code: string): Promise<ReservationRow | undefined> {
+export async function fetchReservationByCode(db: Kysely<DB>, code: string): Promise<ReservationRow | undefined> {
   return db
     .selectFrom('reservations')
     .select([
@@ -160,7 +160,7 @@ async function fetchDestinationUnit(db: Kysely<DB>, toUnitId: number) {
  * the Postgres side via `::date`, never a JS Date param — see that file's
  * comment for why).
  */
-async function assertNightsFree(
+export async function assertNightsFree(
   db: Kysely<DB>,
   toUnitId: number,
   fromNight: string,

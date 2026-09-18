@@ -25,6 +25,12 @@ import {
   HardSpaceRuleViolationError,
   CommercialWarningError,
 } from '../panel/moveReservation.js';
+import {
+  moveReservationDates,
+  DateRangeOverlapError,
+  CheckInImmutableError,
+  ConcurrentNightWriteError,
+} from '../panel/moveReservationDates.js';
 import { getMoveOptions } from '../panel/moveOptionsQuery.js';
 import { getReservationDetail } from '../panel/reservationDetailQuery.js';
 import { reservationDetailResponseSchema } from './panelTapeChart.js';
@@ -44,7 +50,17 @@ const moveStayBodySchema = z.object({
   force_commercial: z.boolean().optional(),
 });
 
+const moveDatesBodySchema = z.object({
+  check_in: dateSchema,
+  check_out: dateSchema,
+  recalculate_price: z.boolean(),
+});
+
 const errorResponseSchema = z.object({ error: z.string() });
+
+const moveDates200ResponseSchema = reservationDetailResponseSchema.extend({
+  warnings: z.array(z.object({ code: z.literal('BELOW_MIN_STAY'), message: z.string() })),
+});
 
 const move422ResponseSchema = z.object({
   error: z.literal('COMMERCIAL_WARNING'),
@@ -185,6 +201,49 @@ const panelMoveReservationPlugin: FastifyPluginAsync<PanelMoveReservationPluginO
         const detail = await getReservationDetailByCode(db, code);
         reply.status(200);
         return detail;
+      },
+    );
+
+    typed.post(
+      '/panel/reservations/:code/move-dates',
+      {
+        schema: {
+          params: codeParamsSchema,
+          body: moveDatesBodySchema,
+          response: {
+            200: moveDates200ResponseSchema,
+            400: errorResponseSchema,
+            404: errorResponseSchema,
+            409: errorResponseSchema,
+          },
+        },
+      },
+      async (request, reply) => {
+        const { code } = request.params;
+        const { check_in, check_out, recalculate_price } = request.body;
+
+        let warnings;
+        try {
+          const result = await moveReservationDates(db, {
+            code,
+            checkIn: check_in,
+            checkOut: check_out,
+            recalculatePrice: recalculate_price,
+          });
+          warnings = result.warnings;
+        } catch (err) {
+          if (err instanceof ReservationNotFoundError) throw httpError(404, 'RESERVATION_NOT_FOUND');
+          if (err instanceof ReservationNotMovableError) throw httpError(409, 'RESERVATION_NOT_MOVABLE');
+          if (err instanceof DateRangeOverlapError) throw httpError(400, 'DATE_RANGE_OVERLAPS_CURRENT');
+          if (err instanceof CheckInImmutableError) throw httpError(409, 'CHECK_IN_IMMUTABLE');
+          if (err instanceof PhysicalConflictError) throw httpError(409, 'PHYSICAL_CONFLICT');
+          if (err instanceof ConcurrentNightWriteError) throw httpError(409, 'CONCURRENT_MODIFICATION');
+          throw err;
+        }
+
+        const detail = await getReservationDetailByCode(db, code);
+        reply.status(200);
+        return { ...detail, warnings };
       },
     );
   });
