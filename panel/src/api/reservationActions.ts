@@ -1,4 +1,5 @@
 import { apiFetch } from "./client";
+import type { ReservationDetail } from "./tapeChart";
 
 export type PanelPaymentKind = "deposit" | "balance" | "extra";
 export type PanelPaymentMethod = "asaas_pix" | "asaas_card" | "cash" | "external" | "pix_manual";
@@ -27,4 +28,22 @@ export function checkIn(code: string): Promise<{ status: "checked_in" }> {
 
 export function checkOut(code: string): Promise<{ status: "checked_out" }> {
   return apiFetch(`/panel/reservations/${code}/check-out`, { method: "POST" });
+}
+
+export interface MoveDateWarning {
+  code: "BELOW_MIN_STAY";
+  message: string;
+}
+
+export interface MoveDatesInput {
+  check_in: string;
+  check_out: string;
+  recalculate_price: boolean;
+}
+
+export function moveDates(
+  code: string,
+  input: MoveDatesInput,
+): Promise<ReservationDetail & { warnings: MoveDateWarning[] }> {
+  return apiFetch(`/panel/reservations/${code}/move-dates`, { method: "POST", body: JSON.stringify(input) });
 }
