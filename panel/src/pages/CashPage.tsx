@@ -132,7 +132,7 @@ export default function CashPage({ can }: CashPageProps) {
         <div className="flex items-end gap-3">
           <div className="flex flex-col gap-1">
             <span className="text-[12.5px] font-medium text-panel-700">De</span>
-            <DatePicker value={from} onChange={setFrom} label="Início do período" />
+            <DatePicker value={from} onChange={setFrom} label="Início do período" align="left" />
           </div>
           <div className="flex flex-col gap-1">
             <span className="text-[12.5px] font-medium text-panel-700">Até</span>
