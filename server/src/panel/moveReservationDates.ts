@@ -37,18 +37,21 @@ import {
   ReservationNotMovableError,
 } from './moveReservation.js';
 
-/** pending_payment/confirmed: full range editable. checked_in: check_in is immutable (see CheckInImmutableError). */
+/**
+ * pending_payment/confirmed only. `checked_in` is excluded ENTIRELY (not
+ * "check_out only"): the overlap rule below always rejects a request that
+ * keeps check_in fixed (any check_out-only change necessarily overlaps the
+ * current range when check_in is unchanged), so a check_out-only carve-out
+ * for checked_in would be unreachable dead code. A checked_in guest's date
+ * change is really "extend/shorten stay", which is an explicit non-goal of
+ * this feature (future "Estender estadia") — decided by the project owner
+ * after this exact contradiction was found during PR 1's implementation.
+ */
 const MOVABLE_DATE_STATUSES = new Set(['pending_payment', 'confirmed']);
 
 export class DateRangeOverlapError extends Error {
   constructor() {
     super("Requested range overlaps the reservation's current range");
-  }
-}
-
-export class CheckInImmutableError extends Error {
-  constructor() {
-    super('check_in is immutable once the reservation has checked in');
   }
 }
 
@@ -81,12 +84,8 @@ export interface MoveReservationDatesResult {
   warnings: MoveDateWarning[];
 }
 
-function assertMovableStatus(status: string, currentCheckIn: string, requestedCheckIn: string): void {
+function assertMovableStatus(status: string): void {
   if (MOVABLE_DATE_STATUSES.has(status)) return;
-  if (status === 'checked_in') {
-    if (requestedCheckIn !== currentCheckIn) throw new CheckInImmutableError();
-    return;
-  }
   throw new ReservationNotMovableError(status);
 }
 
@@ -100,7 +99,7 @@ export async function moveReservationDates(
   // Status gate is on `reservations.status` alone, never a date-vs-today
   // comparison (spec: "Status-Based Field Gating") — a past-dated
   // `confirmed` reservation keeps full-range edit rights.
-  assertMovableStatus(reservation.status, reservation.check_in, input.checkIn);
+  assertMovableStatus(reservation.status);
 
   // Overlap rule, against the CURRENT range: reject before touching anything.
   if (input.checkIn < reservation.check_out && input.checkOut > reservation.check_in) {
@@ -123,7 +122,7 @@ export async function moveReservationDates(
       .select(['status', sql<string>`check_in::text`.as('check_in')])
       .where('id', '=', reservation.id)
       .executeTakeFirstOrThrow();
-    assertMovableStatus(fresh.status, fresh.check_in, input.checkIn);
+    assertMovableStatus(fresh.status);
 
     // Reuse the reservation's existing physical unit (unit assigned to its
     // current check-in night) — a date move never reassigns the unit.

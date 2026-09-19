@@ -28,7 +28,6 @@ import {
 import {
   moveReservationDates,
   DateRangeOverlapError,
-  CheckInImmutableError,
   ConcurrentNightWriteError,
 } from '../panel/moveReservationDates.js';
 import { getMoveOptions } from '../panel/moveOptionsQuery.js';
@@ -235,7 +234,6 @@ const panelMoveReservationPlugin: FastifyPluginAsync<PanelMoveReservationPluginO
           if (err instanceof ReservationNotFoundError) throw httpError(404, 'RESERVATION_NOT_FOUND');
           if (err instanceof ReservationNotMovableError) throw httpError(409, 'RESERVATION_NOT_MOVABLE');
           if (err instanceof DateRangeOverlapError) throw httpError(400, 'DATE_RANGE_OVERLAPS_CURRENT');
-          if (err instanceof CheckInImmutableError) throw httpError(409, 'CHECK_IN_IMMUTABLE');
           if (err instanceof PhysicalConflictError) throw httpError(409, 'PHYSICAL_CONFLICT');
           if (err instanceof ConcurrentNightWriteError) throw httpError(409, 'CONCURRENT_MODIFICATION');
           throw err;

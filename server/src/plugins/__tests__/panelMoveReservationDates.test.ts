@@ -197,7 +197,15 @@ describe('POST /panel/reservations/:code/move-dates', () => {
     ]);
   });
 
-  it('409 CHECK_IN_IMMUTABLE when checked_in and check_in changes', async () => {
+  it('409 RESERVATION_NOT_MOVABLE when the reservation is checked_in — excluded entirely, not just check_in-locked', async () => {
+    // Owner decision (post-PR-1): checked_in is NOT eligible for move-dates
+    // at all. The overlap rule always rejects a request that keeps check_in
+    // fixed, so a "check_out only" carve-out for checked_in would have been
+    // unreachable dead code — a checked_in guest's date change is really
+    // "extend/shorten stay", an explicit non-goal of this feature (future
+    // "Estender estadia"). Covers both a check_in change AND a check_out-only
+    // change — both must be rejected the same way, before ever reaching the
+    // overlap check.
     const token = await insertSessionCookie();
     const roomId = await insertRoom('Casal');
     const unit = await insertUnit(roomId, 'B1');
@@ -210,30 +218,28 @@ describe('POST /panel/reservations/:code/move-dates', () => {
     });
     const app = buildApp();
 
-    const blocked = await app.inject({
+    const changingCheckIn = await app.inject({
       method: 'POST',
       url: `/panel/reservations/${reservation.code}/move-dates`,
       cookies: { [SESSION_COOKIE_NAME]: token },
       payload: { check_in: '2026-10-02', check_out: '2026-10-04', recalculate_price: false },
     });
-    expect(blocked.statusCode).toBe(409);
-    expect(blocked.json().error).toBe('CHECK_IN_IMMUTABLE');
+    expect(changingCheckIn.statusCode).toBe(409);
+    expect(changingCheckIn.json().error).toBe('RESERVATION_NOT_MOVABLE');
+
+    const checkOutOnly = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/move-dates`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { check_in: '2026-10-01', check_out: '2026-10-06', recalculate_price: false },
+    });
+    expect(checkOutOnly.statusCode).toBe(409);
+    expect(checkOutOnly.json().error).toBe('RESERVATION_NOT_MOVABLE');
+
     expect(await nightsOf(reservation.id)).toEqual([
       { night: '2026-10-01', room_unit_id: unit },
       { night: '2026-10-02', room_unit_id: unit },
     ]);
-
-    // NOTE (found while implementing, not in original design/tasks scope):
-    // a checked_in reservation extending/shortening ONLY check_out (same
-    // check_in) is status-gate-eligible per the spec's "Status-Based Field
-    // Gating" requirement, but the design's literal overlap formula
-    // (newCheckIn < oldCheckOut && newCheckOut > oldCheckIn) ALWAYS overlaps
-    // when check_in is unchanged — so that path is unreachable through this
-    // endpoint as specified. Confirmed empirically (a same-check_in,
-    // extended-check_out request returns 400 DATE_RANGE_OVERLAPS_CURRENT,
-    // not 200) rather than asserted here as a requirement, since neither the
-    // spec's scenarios nor tasks T1-T9 test a successful check_out-only
-    // change. Flagged for the design/spec owner, not resolved unilaterally.
   });
 
   it('400 DATE_RANGE_OVERLAPS_CURRENT when the requested range overlaps the current range; nothing written', async () => {
