@@ -3,18 +3,28 @@ import { getReservationDetail, type ReservationDetail } from "../../api/tapeChar
 import {
   checkIn,
   checkOut,
+  moveDates,
   registerPayment,
+  type MoveDateWarning,
   type PanelPaymentKind,
   type PanelPaymentMethod,
   type RegisterPaymentResult,
 } from "../../api/reservationActions";
 import { retryOtaConflict } from "../../api/channex";
 import { ApiError } from "../../api/client";
-import { formatDateDisplay, formatMoneyCents } from "../../lib/dateUtils";
+import { addDaysUTC, eachNightUTC, formatDateDisplay, formatDateUTC, formatMoneyCents, parseDateUTC } from "../../lib/dateUtils";
 import Button from "../ui/Button";
 import Card from "../ui/Card";
+import DatePicker from "../ui/DatePicker";
 import StatusBadge from "../ui/StatusBadge";
 import { SelectField, TextField } from "../ui/Field";
+
+// Only these two statuses can have their dates moved (design §"Status
+// gate"): `checked_in` is excluded entirely — a flat 409
+// RESERVATION_NOT_MOVABLE from the backend, deferred to the future
+// "estender/encurtar estadia" feature. The button must never render for
+// any other status, including checked_in.
+const MOVABLE_DATE_STATUSES = new Set(["pending_payment", "confirmed"]);
 
 interface ReservationDrawerProps {
   reservationId: number;
@@ -66,6 +76,30 @@ function describeActionError(err: unknown, fallback: string): string {
   return fallback;
 }
 
+// Move-dates has its own error codes (design § "Interfaces / Contracts") that
+// deserve friendlier PT-BR copy than the raw code describeActionError would
+// otherwise show — e.g. CONCURRENT_MODIFICATION must read as "tente
+// novamente", never as the wrong "unidade já ocupada" copy from a different
+// endpoint's PHYSICAL_CONFLICT.
+function describeMoveDatesError(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 403) return NO_PERMISSION_MESSAGE;
+    switch (err.message) {
+      case "RESERVATION_NOT_MOVABLE":
+        return "Esta reserva não pode ter as datas alteradas neste status.";
+      case "DATE_RANGE_OVERLAPS_CURRENT":
+        return "As novas datas se sobrepõem à estadia atual.";
+      case "PHYSICAL_CONFLICT":
+        return "A unidade já está ocupada nas novas datas.";
+      case "CONCURRENT_MODIFICATION":
+        return "A reserva foi alterada em paralelo — tente novamente.";
+      default:
+        return err.message;
+    }
+  }
+  return "Não foi possível alterar as datas.";
+}
+
 function whatsappHref(phone: string): string {
   const digits = phone.replace(/\D/g, "");
   return `https://wa.me/${digits}`;
@@ -91,6 +125,15 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged, c
   // and dedupe server-side, while closing and reopening the form to register
   // a second, legitimately identical payment gets a fresh key.
   const [paymentIdempotencyKey, setPaymentIdempotencyKey] = useState<string | null>(null);
+
+  const [showMoveDatesForm, setShowMoveDatesForm] = useState(false);
+  const [moveDatesStep, setMoveDatesStep] = useState<"form" | "confirm">("form");
+  const [newCheckIn, setNewCheckIn] = useState("");
+  const [newCheckOut, setNewCheckOut] = useState("");
+  // No default: the submit path stays disabled until the operator picks one
+  // explicitly (design § "UI flow" — no silent default submitted).
+  const [recalculatePrice, setRecalculatePrice] = useState<boolean | null>(null);
+  const [moveDatesWarnings, setMoveDatesWarnings] = useState<MoveDateWarning[]>([]);
 
   useEffect(() => {
     const raf = requestAnimationFrame(() => setEntered(true));
@@ -222,6 +265,54 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged, c
     // A pix/card charge only settles later via webhook — reload now so the
     // ficha shows the fresh 'pending' payment even before it's received.
     reload();
+  }
+
+  function openMoveDatesForm() {
+    setNewCheckIn(detail!.arrival);
+    setNewCheckOut(detail!.departure);
+    setRecalculatePrice(null);
+    setMoveDatesStep("form");
+    setMoveDatesWarnings([]);
+    setActionError(null);
+    setShowMoveDatesForm(true);
+  }
+
+  function closeMoveDatesForm() {
+    setShowMoveDatesForm(false);
+    setMoveDatesStep("form");
+    setActionError(null);
+  }
+
+  // Keeps the current stay length when the operator shifts check-in — the
+  // design's "derived dates inside the form" fix: UTC-safe utils only, never
+  // a `Date`/`toISOString` round-trip (see design § "Timezone boundary").
+  function onNewCheckInChange(next: string) {
+    setNewCheckIn(next);
+    const nights = eachNightUTC(detail!.arrival, detail!.departure).length;
+    setNewCheckOut(formatDateUTC(addDaysUTC(parseDateUTC(next), nights)));
+  }
+
+  const moveDatesInvalidRange = newCheckOut <= newCheckIn;
+  const moveDatesNights = moveDatesInvalidRange ? 0 : eachNightUTC(newCheckIn, newCheckOut).length;
+
+  async function handleMoveDates() {
+    if (recalculatePrice === null || moveDatesInvalidRange) return;
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      const result = await moveDates(detail!.code!, {
+        check_in: newCheckIn,
+        check_out: newCheckOut,
+        recalculate_price: recalculatePrice,
+      });
+      setMoveDatesWarnings(result.warnings);
+      closeMoveDatesForm();
+      reload();
+    } catch (err) {
+      setActionError(describeMoveDatesError(err));
+    } finally {
+      setActionBusy(false);
+    }
   }
 
   // SPEC § 6C.4: cierra con Escape, con clic fuera y con botón explícito.
@@ -385,6 +476,17 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged, c
                   </Button>
                 )}
 
+                {MOVABLE_DATE_STATUSES.has(detail.status) && (
+                  <Button
+                    size="sm"
+                    onClick={() => (showMoveDatesForm ? closeMoveDatesForm() : openMoveDatesForm())}
+                    disabled={actionBusy || !can("reservations.move")}
+                    title={!can("reservations.move") ? NO_PERMISSION_MESSAGE : undefined}
+                  >
+                    Alterar datas
+                  </Button>
+                )}
+
                 {detail.status === "ota_conflict" && (
                   <Button
                     size="sm"
@@ -489,6 +591,86 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged, c
                         </Button>
                       </div>
                     </form>
+                  )}
+                </Card>
+              )}
+
+              {moveDatesWarnings.length > 0 && (
+                <p className="text-xs text-warning-700 bg-warning-50 rounded-panel-sm px-2 py-1.5">
+                  {moveDatesWarnings.map((w) => w.message).join(" ")}
+                </p>
+              )}
+
+              {showMoveDatesForm && (
+                <Card className="p-3 flex flex-col gap-3">
+                  {moveDatesStep === "form" ? (
+                    <>
+                      <div className="flex flex-wrap gap-3">
+                        <DatePicker label="Nova data de check-in" value={newCheckIn} onChange={onNewCheckInChange} align="left" />
+                        <DatePicker label="Nova data de check-out" value={newCheckOut} onChange={setNewCheckOut} />
+                      </div>
+                      {moveDatesInvalidRange && (
+                        <p role="alert" className="text-xs text-danger-500">
+                          O check-out deve ser depois do check-in.
+                        </p>
+                      )}
+                      <fieldset className="flex flex-col gap-1.5 text-xs text-panel-900">
+                        <legend className="text-panel-500 mb-0.5">Valor</legend>
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="radio"
+                            name="move-dates-price"
+                            checked={recalculatePrice === true}
+                            onChange={() => setRecalculatePrice(true)}
+                          />
+                          Recalcular pelas tarifas das novas datas
+                        </label>
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="radio"
+                            name="move-dates-price"
+                            checked={recalculatePrice === false}
+                            onChange={() => setRecalculatePrice(false)}
+                          />
+                          Manter o valor original ({formatMoneyCents(detail.money.total_cents)})
+                        </label>
+                      </fieldset>
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          disabled={recalculatePrice === null || moveDatesInvalidRange}
+                          onClick={() => setMoveDatesStep("confirm")}
+                        >
+                          Continuar
+                        </Button>
+                        <Button size="sm" onClick={closeMoveDatesForm}>
+                          Cancelar
+                        </Button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-xs text-panel-700">
+                        {formatDateDisplay(detail.arrival)} → {formatDateDisplay(detail.departure)}
+                        {" ⟶ "}
+                        {formatDateDisplay(newCheckIn)} → {formatDateDisplay(newCheckOut)} · {moveDatesNights}{" "}
+                        {moveDatesNights === 1 ? "noite" : "noites"}
+                      </p>
+                      <p className="text-xs text-panel-700">
+                        {recalculatePrice
+                          ? "O valor será recalculado pelas tarifas das novas datas."
+                          : `O valor original será mantido (${formatMoneyCents(detail.money.total_cents)}).`}
+                      </p>
+                      <div className="flex gap-2">
+                        <Button size="sm" variant="primary" disabled={actionBusy} onClick={handleMoveDates}>
+                          Confirmar
+                        </Button>
+                        <Button size="sm" disabled={actionBusy} onClick={() => setMoveDatesStep("form")}>
+                          Voltar
+                        </Button>
+                      </div>
+                    </>
                   )}
                 </Card>
               )}
