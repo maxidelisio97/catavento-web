@@ -3,16 +3,16 @@
  * POST /panel/reservations/:code/move-dates.
  *
  * Scope: T5-T9 (status gate, overlap, physical conflict, both price paths,
- * min-stay non-blocking warning). Concurrency tests (T10-T11a) and Channex
- * push tests (T12-T13) are separate PRs in this chain — not covered here.
+ * min-stay non-blocking warning) + T10-T11a (concurrency, PR 2 of this
+ * chain). Channex push tests (T12-T13) are a separate PR — not covered here.
  */
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from '@fastify/type-provider-zod';
 import cookiePlugin from '@fastify/cookie';
-import { Kysely, sql } from 'kysely';
+import { Kysely, PostgresDialect, sql, type KyselyPlugin, type RootOperationNode } from 'kysely';
 import { randomBytes } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { testDb } from '../../db/testClient.js';
+import { testDb, testPool } from '../../db/testClient.js';
 import type { DB } from '../../db/types.js';
 import { registerErrorHandler } from '../../errorHandler.js';
 import panelMoveReservationPlugin from '../panelMoveReservation.js';
@@ -20,6 +20,7 @@ import { hashPassword } from '../../auth/hashPassword.js';
 import { getDueñoRoleId } from '../../test-support/permissionFixtures.js';
 import { SESSION_COOKIE_NAME } from '../../auth/cookie.js';
 import { eachNightUTC } from '../../shared/dateUtils.js';
+import { createQueryStartSignal, createQueryTimingPlugin, rawSqlContains } from '../../test-support/queryBarrier.js';
 
 function buildApp(db: Kysely<DB> = testDb) {
   const app = Fastify().withTypeProvider<ZodTypeProvider>();
@@ -160,6 +161,66 @@ async function reservationRow(reservationId: number) {
     ])
     .where('id', '=', reservationId)
     .executeTakeFirstOrThrow();
+}
+
+/**
+ * True when a DELETE's FROM clause targets `reservation_nights` — used to
+ * fingerprint `releaseReservationNights`'s DELETE inside `moveReservationDates`
+ * (the only DELETE in its write path). Mirrors `selectReferencesTable`'s
+ * approach (queryBarrier.ts) but for `DeleteQueryNode`, which has no
+ * ready-made helper there.
+ */
+function isDeleteFromReservationNights(node: RootOperationNode): boolean {
+  if (node.kind !== 'DeleteQueryNode') return false;
+  const fromNode = (node as unknown as { from?: { froms?: { kind: string; table?: { identifier?: { name?: string } } }[] } })
+    .from;
+  return (fromNode?.froms ?? []).some((t) => t.kind === 'TableNode' && t.table?.identifier?.name === 'reservation_nights');
+}
+
+/**
+ * Asymmetric, single-sided pause — deliberately NOT `createQueryBarrierPlugin`
+ * (queryBarrier.ts). That plugin's `arity` is a rendezvous between N callers
+ * that all go through the SAME instrumented Kysely instance and all release
+ * together; Test B's concurrent writer is a plain, uninstrumented connection
+ * (`testDb`) that must commit BEFORE the paused side is allowed to continue —
+ * there's no second matched caller to pair against. Local to this file: a
+ * one-off variant of the same transformQuery/transformResult convention, not
+ * a general-purpose tool (see this file's Test B for why the design's literal
+ * `arity: 1` doesn't actually pause — an empirically-verified deviation,
+ * documented in the apply-progress writeup).
+ */
+function createPauseGate(match: (node: RootOperationNode) => boolean): {
+  plugin: KyselyPlugin;
+  reached: Promise<void>;
+  release: () => void;
+} {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let markReached!: () => void;
+  const reached = new Promise<void>((resolve) => {
+    markReached = resolve;
+  });
+  const markedQueryIds = new Set<string>();
+
+  const plugin: KyselyPlugin = {
+    transformQuery(args) {
+      if (match(args.node)) markedQueryIds.add(args.queryId.queryId);
+      return args.node;
+    },
+    async transformResult(args) {
+      const id = args.queryId.queryId;
+      if (markedQueryIds.has(id)) {
+        markedQueryIds.delete(id);
+        markReached();
+        await gate;
+      }
+      return args.result;
+    },
+  };
+
+  return { plugin, reached, release };
 }
 
 beforeEach(async () => {
@@ -379,4 +440,226 @@ describe('POST /panel/reservations/:code/move-dates', () => {
     expect(row.check_out).toBe('2026-11-03');
     expect(await nightsOf(reservation.id)).toHaveLength(2);
   });
+});
+
+describe('concurrency: move-dates and move-night on the SAME reservation share the SAME advisory-lock key (T10)', () => {
+  // Design (sdd/move-reservation-dates § "2. reservation_nights_..._unique",
+  // Test A): a real two-endpoint Promise.all race. moveReservationDates and
+  // moveNight both take `pg_advisory_xact_lock(reservationId)` as the first
+  // statement inside their own transaction — same key, same codebase-wide
+  // lock order (see moveReservationDates.ts's and moveReservation.ts's
+  // module doc comments) — so Postgres itself fully serializes them.
+  //
+  // TWO VERIFIED, DOCUMENTED DEVIATIONS from the design's literal Test A:
+  //
+  // (1) The design's example races moveDates(R:[10,13) -> [11,14)) against
+  // moveNight(night 11). [11,14) INTERSECTS [10,13) (shares nights 11-12) —
+  // the overlap rule (this same design's own Architecture Decisions table)
+  // rejects ANY new range that intersects the current one with a 400,
+  // BEFORE the lock is ever taken. That 400 is a real, confirmed outcome
+  // (reproduced while writing this test), not a hypothetical — the design's
+  // own example can never reach the lock as written. Fixed by moving to a
+  // range that doesn't intersect the current one at all: [20,23).
+  // `releaseReservationNights` deletes ALL of the reservation's rows
+  // unconditionally (not just a delta), so moveNight's target night is still
+  // fully in play regardless of which new range is chosen.
+  //
+  // (2) Given (1), night 11 can never survive in BOTH the pre-move and
+  // post-move state at once (the two ranges are now provably disjoint) — so
+  // the two orderings of a genuinely uncontrolled Promise.all are NOT
+  // equally valid: if moveDates commits FIRST, moveNight's later write
+  // becomes a night the reservation's CURRENT range no longer contains, and
+  // `assertReservationNightsConsistency` (a real, existing invariant this
+  // change does not touch) legitimately rejects it inside moveNight's own
+  // transaction (row count no longer matches `check_out - check_in`) — a
+  // correct outcome given moveNight (unmodified in this PR) never re-checks
+  // the night is still in-range post-lock, but NOT what "both 200" should
+  // assert, and NOT the class of bug this test exists to catch. A bare,
+  // uncontrolled `Promise.all` here would be genuinely racy on WHICH of the
+  // two orderings happens — exactly the failure mode server/CLAUDE.md's
+  // concurrency-test section requires a rendezvous for, not chance. Fixed by
+  // sequencing the two real requests deterministically with
+  // `createQueryStartSignal` on the SHARED `pg_advisory_xact_lock` raw SQL:
+  // moveNight's request is dispatched first and awaited only up to "its lock
+  // query has been sent" (not full completion) before moveDates's request is
+  // dispatched — guaranteeing moveNight always wins the race for the lock,
+  // the one ordering that is actually self-consistent, while moveDates is
+  // still genuinely blocked on a REAL, contended advisory lock (proven via
+  // `createQueryTimingPlugin` on the same raw SQL) for the entire time
+  // moveNight's transaction remains open.
+  it('DETERMINISTIC: moveNight (winning the lock race) commits first, moveDates blocks on the SAME lock and then overwrites cleanly — both 200, final state consistent', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom('Casal');
+    const unitA = await insertUnit(roomId, 'H1');
+    const unitB = await insertUnit(roomId, 'H2');
+    const reservation = await insertReservation({
+      roomId,
+      checkIn: '2026-11-10',
+      checkOut: '2026-11-13', // nights 10, 11, 12
+      unitId: unitA,
+    });
+
+    // moveNight's db: resolves `moveNightLockSent` as soon as ITS
+    // pg_advisory_xact_lock query is dispatched — the rendezvous point that
+    // lets the test dispatch moveDates only once moveNight is guaranteed to
+    // have already claimed the lock.
+    const { plugin: startSignalPlugin, started: moveNightLockSent } = createQueryStartSignal({
+      match: (node) => rawSqlContains(node, 'pg_advisory_xact_lock'),
+    });
+    const moveNightDb = new Kysely<DB>({ dialect: new PostgresDialect({ pool: testPool }), plugins: [startSignalPlugin] });
+    const moveNightApp = buildApp(moveNightDb);
+
+    // moveDates's db: records how long ITS OWN lock-acquisition call takes —
+    // proof that it genuinely waited on the contended lock, not that it just
+    // happened to run after moveNight for unrelated reasons.
+    const { plugin: timingPlugin, timings: moveDatesLockTimings } = createQueryTimingPlugin({
+      match: (node) => rawSqlContains(node, 'pg_advisory_xact_lock'),
+    });
+    const moveDatesDb = new Kysely<DB>({ dialect: new PostgresDialect({ pool: testPool }), plugins: [timingPlugin] });
+    const moveDatesApp = buildApp(moveDatesDb);
+
+    const moveNightPromise = moveNightApp.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/move-night`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { night: '2026-11-11', toUnitId: unitB },
+    });
+    moveNightPromise.catch(() => {});
+
+    // Guarantees moveNight has already sent its lock-acquisition query
+    // before moveDates's request is even dispatched — moveNight wins the
+    // race for the lock deterministically, every run.
+    await moveNightLockSent;
+
+    const moveDatesPromise = moveDatesApp.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/move-dates`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { check_in: '2026-11-20', check_out: '2026-11-23', recalculate_price: false }, // nights 20, 21, 22
+    });
+
+    const [moveNightResponse, moveDatesResponse] = await Promise.all([moveNightPromise, moveDatesPromise]);
+
+    expect(moveNightResponse.statusCode).toBe(200);
+    expect(moveDatesResponse.statusCode).toBe(200);
+
+    // moveDates's lock query actually blocked waiting for moveNight's
+    // transaction to release it — not a coincidence of ordering.
+    expect(moveDatesLockTimings).toHaveLength(1);
+    expect(moveDatesLockTimings[0]!.durationMs).toBeGreaterThan(0);
+
+    // moveDates fully replaces the reservation's rows (reusing its existing
+    // unit), so moveNight's earlier change is cleanly overwritten, never
+    // left as a stray/orphaned row — the final state matches ONLY the new
+    // range, one row per night, no duplicates or gaps.
+    const finalRow = await reservationRow(reservation.id);
+    const finalNights = await nightsOf(reservation.id);
+    expect(finalRow.check_in).toBe('2026-11-20');
+    expect(finalRow.check_out).toBe('2026-11-23');
+    expect(finalNights).toEqual([
+      { night: '2026-11-20', room_unit_id: unitA },
+      { night: '2026-11-21', room_unit_id: unitA },
+      { night: '2026-11-22', room_unit_id: unitA },
+    ]);
+  }, 15000);
+});
+
+describe('concurrency: constraint translation for a concurrent (reservation_id, night) write (T11)', () => {
+  // Design (Test B), WITH TWO VERIFIED, DOCUMENTED DEVIATIONS from its
+  // literal text — see below for why.
+  //
+  // (1) Same overlap-rule finding as Test A above: the design's example
+  // moves [10,13) -> [11,14), which intersects the current range and is
+  // rejected with 400 before the lock/DELETE are ever reached (reproduced
+  // while writing this test — the first version of it hung until timeout
+  // because `reached` never resolved: the request never got past the
+  // overlap check). Fixed the same way as Test A: a genuinely
+  // non-overlapping new range, [20,23).
+  //
+  // (2) The design's concurrent writer targets night 11 — a night in BOTH
+  // the OLD range and (in the design's now-corrected-away overlap) the new
+  // one. Empirically verified (scratch probe against catavento_db_test,
+  // plain Postgres UNIQUE(k) table, DELETE left uncommitted in txn1, INSERT
+  // of the SAME key from txn2): a concurrent INSERT for a key an in-flight,
+  // uncommitted DELETE is ALSO removing does NOT proceed uncontested —
+  // Postgres's unique-index insert path calls XactLockTableWait and BLOCKS
+  // the writer until the deleting transaction resolves, then re-checks. That
+  // contradicts the design's "that writer is not blocked" premise for any
+  // night `releaseReservationNights` is concurrently, un-committedly
+  // deleting — using one would deadlock the test (it awaits the writer's
+  // INSERT before calling `release()`, but that INSERT can't resolve until
+  // the paused transaction is released). Fixed: target night 22 — inside the
+  // NEW range only, never part of the CURRENT range, so the DELETE never
+  // touches key (reservation_id, 22) and the writer's INSERT has nothing to
+  // wait on. The barrier still forces genuine concurrency (the writer
+  // commits WHILE moveReservationDates's transaction is open, parked between
+  // its DELETE and its bulk INSERT). The underlying claim under test — a
+  // concurrent write to (reservation_id, night) is caught and translated to
+  // 409 CONCURRENT_MODIFICATION, not a raw 500, and NOT mistaken for
+  // PHYSICAL_CONFLICT — is unaffected by which night carries it.
+  it('DETERMINISTIC: a concurrent write to (reservation_id, night) mid-transaction is translated to 409 CONCURRENT_MODIFICATION, never PHYSICAL_CONFLICT or a raw 500', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom('Casal');
+    const unit = await insertUnit(roomId, 'J1');
+    const otherUnit = await insertUnit(roomId, 'J2');
+    const reservation = await insertReservation({
+      roomId,
+      checkIn: '2026-11-10',
+      checkOut: '2026-11-13', // nights 10, 11, 12
+      unitId: unit,
+    });
+
+    const { plugin: pausePlugin, reached, release } = createPauseGate(isDeleteFromReservationNights);
+    const pausedDb = new Kysely<DB>({ dialect: new PostgresDialect({ pool: testPool }), plugins: [pausePlugin] });
+    const app = buildApp(pausedDb);
+
+    const responsePromise = app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/move-dates`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      // Non-overlapping with [10,13) — see this block's deviation (1) above.
+      payload: { check_in: '2026-11-20', check_out: '2026-11-23', recalculate_price: false }, // nights 20, 21, 22
+    });
+    // Never let this leak as an unhandled rejection if something below throws
+    // before we `await responsePromise` — same rationale as
+    // panelMoveReservation.test.ts's advisory-lock test.
+    responsePromise.catch(() => {});
+
+    // Waits for `releaseReservationNights`'s DELETE to have returned its
+    // result and parked — moveReservationDates is now suspended between the
+    // DELETE and its bulk INSERT, mid-transaction, uncommitted.
+    await reached;
+
+    // Concurrent writer, on a completely separate, uninstrumented connection
+    // (testDb): (reservation_id: R, night: 22, room_unit_id: otherUnit) —
+    // (otherUnit, 22) is free, so `unit_night` structurally CANNOT be the
+    // constraint that fires later; only `reservation_nights_reservation_night_unique`
+    // can. Not blocked (see deviation (2) above): night 22 was never one of
+    // R's rows, so the paused DELETE holds nothing this key depends on.
+    await testDb
+      .insertInto('reservation_nights')
+      .values({ reservation_id: reservation.id, night: '2026-11-22', room_unit_id: otherUnit })
+      .execute();
+
+    release();
+    const response = await responsePromise;
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toBe('CONCURRENT_MODIFICATION');
+
+    // moveReservationDates's transaction rolled back entirely (atomic) — the
+    // reservation's original range is untouched, its 3 original rows are
+    // intact, and the writer's independently-committed row (same
+    // reservation_id, different unit) is the only addition — never a
+    // duplicate, never touched by the rollback (separate connection/txn).
+    const row = await reservationRow(reservation.id);
+    expect(row.check_in).toBe('2026-11-10');
+    expect(row.check_out).toBe('2026-11-13');
+    expect(await nightsOf(reservation.id)).toEqual([
+      { night: '2026-11-10', room_unit_id: unit },
+      { night: '2026-11-11', room_unit_id: unit },
+      { night: '2026-11-12', room_unit_id: unit },
+      { night: '2026-11-22', room_unit_id: otherUnit },
+    ]);
+  }, 15000);
 });
