@@ -606,7 +606,7 @@ export default function ReservationDrawer({ reservationId, onClose, onChanged, c
                   {moveDatesStep === "form" ? (
                     <>
                       <div className="flex flex-wrap gap-3">
-                        <DatePicker label="Nova data de check-in" value={newCheckIn} onChange={onNewCheckInChange} />
+                        <DatePicker label="Nova data de check-in" value={newCheckIn} onChange={onNewCheckInChange} align="left" />
                         <DatePicker label="Nova data de check-out" value={newCheckOut} onChange={setNewCheckOut} />
                       </div>
                       {moveDatesInvalidRange && (

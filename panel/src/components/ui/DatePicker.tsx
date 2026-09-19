@@ -30,9 +30,20 @@ interface DatePickerProps {
   value: string;
   onChange: (date: string) => void;
   label: string;
+  /**
+   * Which edge the popover's own edge aligns to, relative to the trigger
+   * button. Defaults to "right" (existing behavior, unchanged for every
+   * pre-existing caller). A narrow container that clips horizontal overflow
+   * (e.g. a side-drawer panel with `overflow-y-auto`, which per the CSS spec
+   * forces `overflow-x` away from `visible` too) can silently cut off the
+   * calendar on whichever side it extends toward — pass "left" for a field
+   * near the left edge of such a container so the popover grows into the
+   * open space on its right instead.
+   */
+  align?: "left" | "right";
 }
 
-export default function DatePicker({ value, onChange, label }: DatePickerProps) {
+export default function DatePicker({ value, onChange, label, align = "right" }: DatePickerProps) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -89,7 +100,10 @@ export default function DatePicker({ value, onChange, label }: DatePickerProps) 
           ref={popoverRef}
           role="dialog"
           aria-label={label}
-          className="absolute z-30 right-0 top-full mt-1.5 rounded-panel-md border border-panel-200 bg-white p-2 shadow-panel-md"
+          className={[
+            "absolute z-[60] top-full mt-1.5 rounded-panel-md border border-panel-200 bg-white p-2 shadow-panel-md",
+            align === "left" ? "left-0" : "right-0",
+          ].join(" ")}
         >
           <DayPicker
             mode="single"
