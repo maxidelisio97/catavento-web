@@ -4,14 +4,14 @@
  *
  * Scope: T5-T9 (status gate, overlap, physical conflict, both price paths,
  * min-stay non-blocking warning) + T10-T11a (concurrency, PR 2 of this
- * chain). Channex push tests (T12-T13) are a separate PR — not covered here.
+ * chain) + T13 (Channex push, PR 3 of this chain).
  */
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from '@fastify/type-provider-zod';
 import cookiePlugin from '@fastify/cookie';
 import { Kysely, PostgresDialect, sql, type KyselyPlugin, type RootOperationNode } from 'kysely';
 import { randomBytes } from 'node:crypto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { testDb, testPool } from '../../db/testClient.js';
 import type { DB } from '../../db/types.js';
 import { registerErrorHandler } from '../../errorHandler.js';
@@ -21,6 +21,21 @@ import { getDueñoRoleId } from '../../test-support/permissionFixtures.js';
 import { SESSION_COOKIE_NAME } from '../../auth/cookie.js';
 import { eachNightUTC } from '../../shared/dateUtils.js';
 import { createQueryStartSignal, createQueryTimingPlugin, rawSqlContains } from '../../test-support/queryBarrier.js';
+import { setRoomTypeMap } from '../../channex/channexRoomTypeMap.js';
+import { updateChannexConfig } from '../../channex/channexConfig.js';
+
+// T13 (sdd/move-reservation-dates, PR 3): proves moveReservationDates fires
+// TWO separate Channex pushes (old range freed + new range occupied), never
+// merged into one call — mirrors pushAvailability.triggers.test.ts's mocking
+// convention. Every other test in this file never configures channex_config,
+// so `pushRange` short-circuits on `!channexConfig.isActive` for them — this
+// mock is safe to apply file-wide.
+const pushAvailabilityMock = vi.fn().mockResolvedValue(undefined);
+
+vi.mock('../../channex/channexClient.js', () => ({
+  pushAvailability: (...args: unknown[]) => pushAvailabilityMock(...args),
+  pushRestrictions: vi.fn().mockResolvedValue(undefined),
+}));
 
 function buildApp(db: Kysely<DB> = testDb) {
   const app = Fastify().withTypeProvider<ZodTypeProvider>();
@@ -33,7 +48,7 @@ function buildApp(db: Kysely<DB> = testDb) {
 }
 
 async function resetDb(): Promise<void> {
-  await sql`TRUNCATE TABLE payments, reservation_nights, reservations, room_rates, room_units, rooms, sessions, users RESTART IDENTITY CASCADE`.execute(
+  await sql`TRUNCATE TABLE payments, reservation_nights, reservations, room_rates, room_units, channex_room_type_map, channex_config, rooms, sessions, users RESTART IDENTITY CASCADE`.execute(
     testDb,
   );
 }
@@ -225,6 +240,7 @@ function createPauseGate(match: (node: RootOperationNode) => boolean): {
 
 beforeEach(async () => {
   await resetDb();
+  pushAvailabilityMock.mockClear();
 });
 
 describe('POST /panel/reservations/:code/move-dates', () => {
@@ -662,4 +678,50 @@ describe('concurrency: constraint translation for a concurrent (reservation_id, 
       { night: '2026-11-22', room_unit_id: otherUnit },
     ]);
   }, 15000);
+});
+
+describe('Channex sync: moveReservationDates pushes both the freed OLD range and the occupied NEW range (T13)', () => {
+  const ROOM_TYPE_ID = '7f1fe757-cf66-4878-82fe-ae25920e8d1f';
+
+  it('fires two separate pushAvailability calls, one per range, never merged', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom('Casal');
+    const unit = await insertUnit(roomId, 'K1');
+    await updateChannexConfig(testDb, { propertyId: 'f6a1bdf1-cef7-4e16-bc4e-a4799510d23f', isActive: true });
+    await setRoomTypeMap(testDb, { roomId, channexRoomTypeId: ROOM_TYPE_ID, channexRatePlanId: null });
+
+    const reservation = await insertReservation({
+      roomId,
+      checkIn: '2026-11-10',
+      checkOut: '2026-11-13', // OLD range: nights 10, 11, 12
+      unitId: unit,
+    });
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/move-dates`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { check_in: '2026-11-20', check_out: '2026-11-23', recalculate_price: false }, // NEW range: nights 20, 21, 22
+    });
+
+    expect(response.statusCode).toBe(200);
+
+    // schedulePushAvailability is fire-and-forget (never awaited by
+    // moveReservationDates itself) — vi.waitFor proves both pushes were
+    // genuinely attempted, not that they merely could have been.
+    await vi.waitFor(() => expect(pushAvailabilityMock).toHaveBeenCalledTimes(2));
+
+    // Two calls, each carrying exactly its own range's nights — never one
+    // call covering both ranges (the two ranges aren't even contiguous:
+    // [10,13) and [20,23) can't be a single push by accident).
+    const calls = pushAvailabilityMock.mock.calls as [{ date: string }[]][];
+    const datesPerCall = calls.map((args) => args[0].map((v) => v.date).sort());
+    expect(datesPerCall).toEqual(
+      expect.arrayContaining([
+        ['2026-11-10', '2026-11-11', '2026-11-12'],
+        ['2026-11-20', '2026-11-21', '2026-11-22'],
+      ]),
+    );
+  });
 });

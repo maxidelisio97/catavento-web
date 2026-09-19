@@ -29,6 +29,7 @@ import { releaseReservationNights } from '../availability/releaseReservationNigh
 import { fetchRoomStayData } from '../availability/repository.js';
 import { calculatePrice, type CalculatePriceInput } from '../pricing/calculatePrice.js';
 import { eachNightUTC } from '../shared/dateUtils.js';
+import { schedulePushAvailability } from '../channex/pushAvailability.js';
 import {
   fetchReservationByCode,
   assertNightsFree,
@@ -206,6 +207,19 @@ export async function moveReservationDates(
 
     await assertReservationNightsConsistency(trx, reservation.id);
   });
+
+  // SPEC-modulo-12C § 3.2, same reasoning as moveNight/moveStay
+  // (moveReservation.ts): a date move never changes `reservations.room_id`
+  // (the unit is reused, see this file's header comment), so both the freed
+  // OLD range and the newly-occupied NEW range live on the same room type —
+  // no `schedulePushAvailabilityForReservation` re-read is needed, both
+  // ranges are already in hand. `reservation.check_in`/`check_out` were read
+  // BEFORE the transaction's UPDATE overwrote them, so they still hold the
+  // pre-move range here.
+  schedulePushAvailability(db, [
+    { roomId: reservation.room_id, checkIn: reservation.check_in, checkOut: reservation.check_out },
+    { roomId: reservation.room_id, checkIn: input.checkIn, checkOut: input.checkOut },
+  ]);
 
   return { warnings };
 }
