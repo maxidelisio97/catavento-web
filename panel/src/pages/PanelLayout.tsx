@@ -9,6 +9,8 @@ import UsersListPage from "./UsersListPage";
 import RolesListPage from "./RolesListPage";
 import CashPage from "./CashPage";
 import OtaPage from "./OtaPage";
+import NewReservationPage from "./NewReservationPage";
+import type { ReservationDetail } from "../api/tapeChart";
 
 interface PanelLayoutProps {
   user: PanelUser;
@@ -16,7 +18,16 @@ interface PanelLayoutProps {
   onLogoutAll: () => Promise<void>;
 }
 
-type PanelSection = "tape-chart" | "geral" | "precos" | "calendario" | "caixa" | "otas" | "usuarios" | "papeis";
+type PanelSection =
+  | "tape-chart"
+  | "nova-reserva"
+  | "geral"
+  | "precos"
+  | "calendario"
+  | "caixa"
+  | "otas"
+  | "usuarios"
+  | "papeis";
 
 // Flat items for now, grouped only by a visual divider — once there are
 // enough sections under "Configuração" to earn a real submenu, promote this
@@ -32,6 +43,7 @@ const CONFIG_SECTIONS: { key: PanelSection; label: string; permission: string }[
 ];
 
 const SECTION_TITLES: Record<Exclude<PanelSection, "tape-chart">, string> = {
+  "nova-reserva": "Nova reserva",
   geral: "Geral",
   precos: "Preços",
   calendario: "Calendário",
@@ -74,6 +86,10 @@ export default function PanelLayout({ user, onLogout, onLogoutAll }: PanelLayout
   // resolves). Each item gates independently: a user can have admin.users
   // without admin.roles, or config.settings without config.calendar.
   const showMapa = permissions.has("reservations.view");
+  // T3.9 — this is the first thing that makes "Nova reserva" reachable at
+  // all: PR 3a built the page but never mounted/linked it (deliberately
+  // dark until the picker+conflict handling landed here).
+  const showNovaReserva = permissions.has("reservations.create_manual");
   const showCaixa = permissions.has("cash.view");
   const showOtas = permissions.has("ota.manage");
   const showUsuarios = permissions.has("admin.users");
@@ -86,6 +102,7 @@ export default function PanelLayout({ user, onLogout, onLogoutAll }: PanelLayout
   // because the nav button that would have led there is hidden.
   const accessibleSectionsOrdered: PanelSection[] = [
     ...(showMapa ? (["tape-chart"] as const) : []),
+    ...(showNovaReserva ? (["nova-reserva"] as const) : []),
     ...visibleConfigSections.map((s) => s.key),
     ...(showCaixa ? (["caixa"] as const) : []),
     ...(showOtas ? (["otas"] as const) : []),
@@ -136,7 +153,13 @@ export default function PanelLayout({ user, onLogout, onLogoutAll }: PanelLayout
               </NavButton>
             )}
 
-            {(showMapa || visibleConfigSections.length > 0) && (
+            {showNovaReserva && (
+              <NavButton active={section === "nova-reserva"} onClick={() => setSection("nova-reserva")}>
+                Nova reserva
+              </NavButton>
+            )}
+
+            {(showMapa || showNovaReserva || visibleConfigSections.length > 0) && (
               <span className="w-px h-5 bg-panel-200 mx-1" aria-hidden="true" />
             )}
 
@@ -227,6 +250,12 @@ export default function PanelLayout({ user, onLogout, onLogoutAll }: PanelLayout
             <h1 className="text-[22px] font-semibold tracking-tight text-panel-900 mb-4">
               {SECTION_TITLES[section]}
             </h1>
+            {section === "nova-reserva" && (
+              <NewReservationPage
+                onSaved={(_detail: ReservationDetail) => setSection("tape-chart")}
+                onCancel={() => setSection("tape-chart")}
+              />
+            )}
             {section === "geral" && <GeneralSettingsPage />}
             {section === "precos" && <RoomRatesTable />}
             {section === "calendario" && <RateOverridesCalendar />}

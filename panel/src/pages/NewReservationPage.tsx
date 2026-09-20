@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { createManualReservation } from "../api/manualReservation";
-import { getRoomRates, type RoomRatesGroup } from "../api/roomRates";
+import { createManualReservation, type CreateManualReservationInput } from "../api/manualReservation";
+import { getFreeUnits, getRoomTypes, type RoomFreeUnit, type RoomType } from "../api/rooms";
 import type { ReservationDetail } from "../api/tapeChart";
 import { ApiError } from "../api/client";
 import { todayISO, addDaysUTC, formatDateUTC, parseDateUTC } from "../lib/dateUtils";
@@ -8,16 +8,23 @@ import Card from "../components/ui/Card";
 import Button from "../components/ui/Button";
 import { TextField, SelectField } from "../components/ui/Field";
 import DatePicker from "../components/ui/DatePicker";
+import UnitPicker from "../components/reservations/UnitPicker";
 
-// SDD "Nova reserva" panel change, PR 3a — form skeleton + any-unit
-// submission. Unit selection (UnitPicker, PR 3b) is NOT part of this page
-// yet: every submit sends `preferred_room_unit_id: undefined`, which is
-// byte-identical to today's manual-reservation behavior (auto-assign
-// `freeUnits[0]`). Field list frozen to exactly what
+// SDD "Nova reserva" panel change. PR 3a shipped the form skeleton + any-unit
+// submission (every submit sent `preferred_room_unit_id: undefined`,
+// byte-identical to today's manual-reservation behavior). PR 3b (this file,
+// now) adds the specific-unit picker plus the two conflict/warning flows the
+// picker makes reachable: 409 PREFERRED_UNIT_TAKEN and 422
+// COMMERCIAL_WARNING. Field list frozen to exactly what
 // `panelManualReservation.ts` accepts — see `api/manualReservation.ts`.
 //
 // Size reference: CashMovementFormPage.tsx (closest existing form of
 // comparable shape/complexity in this codebase).
+
+interface CommercialWarning {
+  code: string;
+  message: string;
+}
 
 const MAX_CHILDREN = 8;
 const MAX_BABIES = 4;
@@ -40,12 +47,31 @@ interface NewReservationPageProps {
 }
 
 export default function NewReservationPage({ onSaved, onCancel }: NewReservationPageProps) {
-  const [rooms, setRooms] = useState<RoomRatesGroup[] | null>(null);
+  const [rooms, setRooms] = useState<RoomType[] | null>(null);
   const [roomsError, setRoomsError] = useState<string | null>(null);
 
   const [roomId, setRoomId] = useState("");
   const [checkIn, setCheckIn] = useState(todayISO());
   const [checkOut, setCheckOut] = useState(formatDateUTC(addDaysUTC(parseDateUTC(todayISO()), 1)));
+
+  // Unit picker (T3.4/T3.5 remainder) — null means "Qualquer unidade" (no
+  // preference), the same as omitting `preferred_room_unit_id` entirely.
+  const [freeUnits, setFreeUnits] = useState<RoomFreeUnit[] | null>(null);
+  const [freeUnitsLoading, setFreeUnitsLoading] = useState(false);
+  const [freeUnitsError, setFreeUnitsError] = useState<string | null>(null);
+  const [preferredUnitId, setPreferredUnitId] = useState<number | null>(null);
+  // 409 PREFERRED_UNIT_TAKEN / 404 PREFERRED_UNIT_NOT_FOUND surface here,
+  // scoped to the picker — distinct from the form-wide `error` below so a
+  // unit conflict doesn't read like a generic submit failure.
+  const [unitError, setUnitError] = useState<string | null>(null);
+
+  // 422 COMMERCIAL_WARNING two-step confirm, mirroring ReservationDrawer's
+  // moveDatesStep state machine (design § "Panel form structure"). `pendingPayload`
+  // freezes the exact payload that triggered the warning so "Confirmar mesmo
+  // assim" resubmits byte-identical data plus `force_commercial: true`.
+  const [step, setStep] = useState<"form" | "confirm">("form");
+  const [commercialWarnings, setCommercialWarnings] = useState<CommercialWarning[]>([]);
+  const [pendingPayload, setPendingPayload] = useState<CreateManualReservationInput | null>(null);
 
   const [guestName, setGuestName] = useState("");
   const [guestEmail, setGuestEmail] = useState("");
@@ -67,9 +93,9 @@ export default function NewReservationPage({ onSaved, onCancel }: NewReservation
 
   useEffect(() => {
     let cancelled = false;
-    getRoomRates()
+    getRoomTypes()
       .then((data) => {
-        if (!cancelled) setRooms(data);
+        if (!cancelled) setRooms(data.rooms);
       })
       .catch(() => {
         if (!cancelled) setRoomsError("Não foi possível carregar os tipos de quarto.");
@@ -78,6 +104,40 @@ export default function NewReservationPage({ onSaved, onCancel }: NewReservation
       cancelled = true;
     };
   }, []);
+
+  // Auto-fetches free units whenever room type or dates change (T3.5
+  // remainder). Invalid ranges (checkOut <= checkIn) never hit the network —
+  // same client-side guard as the submit handler. Resets any previously
+  // chosen unit back to "Qualquer unidade": a unit id picked for a different
+  // room/date combo has no meaning here, and silently keeping it selected
+  // would be exactly the "silent substitution" the design forbids.
+  useEffect(() => {
+    setPreferredUnitId(null);
+    setUnitError(null);
+
+    if (!roomId || checkOut <= checkIn) {
+      setFreeUnits(null);
+      setFreeUnitsError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setFreeUnitsLoading(true);
+    setFreeUnitsError(null);
+    getFreeUnits(Number(roomId), checkIn, checkOut)
+      .then((result) => {
+        if (!cancelled) setFreeUnits(result.units);
+      })
+      .catch(() => {
+        if (!cancelled) setFreeUnitsError("Não foi possível carregar as unidades.");
+      })
+      .finally(() => {
+        if (!cancelled) setFreeUnitsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [roomId, checkIn, checkOut]);
 
   // Keeps `children_ages` the exact length the backend requires
   // (`children_ages.length === children`, enforced by the same Zod refine
@@ -98,9 +158,24 @@ export default function NewReservationPage({ onSaved, onCancel }: NewReservation
     setChildrenAges((prev) => prev.map((age, i) => (i === index ? value : age)));
   }
 
+  // Re-used by both the 409 PREFERRED_UNIT_TAKEN and 404
+  // PREFERRED_UNIT_NOT_FOUND handlers (design § "409 PREFERRED_UNIT_TAKEN":
+  // refetch free-units, reopen the picker). Never auto-retries the POST —
+  // this only refreshes the picker's data, staff must pick and submit again.
+  function refetchFreeUnits() {
+    if (!roomId || checkOut <= checkIn) return;
+    setFreeUnitsLoading(true);
+    setFreeUnitsError(null);
+    getFreeUnits(Number(roomId), checkIn, checkOut)
+      .then((result) => setFreeUnits(result.units))
+      .catch(() => setFreeUnitsError("Não foi possível carregar as unidades."))
+      .finally(() => setFreeUnitsLoading(false));
+  }
+
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     setError(null);
+    setUnitError(null);
 
     if (!roomId) {
       setError("Selecione um tipo de quarto.");
@@ -108,9 +183,8 @@ export default function NewReservationPage({ onSaved, onCancel }: NewReservation
     }
     if (checkOut <= checkIn) {
       // Client-side equivalent of the GET free-units endpoint's
-      // INVALID_DATE_RANGE (that endpoint isn't wired into this page until
-      // PR 3b) — the manual-reservation POST itself has no such error code,
-      // so this never reaches the server.
+      // INVALID_DATE_RANGE — the manual-reservation POST itself has no such
+      // error code, so this never reaches the server.
       setError("A data de saída deve ser posterior à data de entrada.");
       return;
     }
@@ -149,40 +223,135 @@ export default function NewReservationPage({ onSaved, onCancel }: NewReservation
       return;
     }
 
+    const payload: CreateManualReservationInput = {
+      room_id: Number(roomId),
+      check_in: checkIn,
+      check_out: checkOut,
+      adults: adultsValue,
+      children: childrenValue,
+      children_ages: parsedChildrenAges,
+      babies: babiesValue,
+      pets,
+      guest_name: guestName.trim(),
+      guest_email: guestEmail.trim() || undefined,
+      guest_phone: guestPhone.trim() || undefined,
+      notes: notes.trim() || undefined,
+      payment_status: paymentStatus,
+      payment_method: paymentMethod || undefined,
+      override_total_cents: overrideTotalCents,
+      // null ("Qualquer unidade") maps to omitting the field entirely —
+      // byte-identical to the pre-picker PR 3a behavior (auto-assign
+      // freeUnits[0]).
+      preferred_room_unit_id: preferredUnitId ?? undefined,
+    };
+
     setSaving(true);
     try {
-      const detail = await createManualReservation({
-        room_id: Number(roomId),
-        check_in: checkIn,
-        check_out: checkOut,
-        adults: adultsValue,
-        children: childrenValue,
-        children_ages: parsedChildrenAges,
-        babies: babiesValue,
-        pets,
-        guest_name: guestName.trim(),
-        guest_email: guestEmail.trim() || undefined,
-        guest_phone: guestPhone.trim() || undefined,
-        notes: notes.trim() || undefined,
-        payment_status: paymentStatus,
-        payment_method: paymentMethod || undefined,
-        override_total_cents: overrideTotalCents,
-        // No picker yet (PR 3b) — every submission from this page is "any
-        // unit", matching today's freeUnits[0] auto-assignment.
-        preferred_room_unit_id: undefined,
-      });
+      const detail = await createManualReservation(payload);
       onSaved(detail);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409 && err.message === "NO_AVAILABILITY") {
-        setError("Não há disponibilidade para este quarto nas datas selecionadas.");
-      } else if (err instanceof ApiError && err.status === 404 && err.message === "ROOM_NOT_FOUND") {
-        setError("Este tipo de quarto não está mais disponível.");
-      } else {
-        setError("Erro inesperado ao criar a reserva.");
-      }
+      handleSubmitError(err, payload);
     } finally {
       setSaving(false);
     }
+  }
+
+  // Shared between the initial submit and the post-confirm resubmit — same
+  // error taxonomy applies either way (design § "409 PREFERRED_UNIT_TAKEN" /
+  // "COMMERCIAL_WARNING").
+  function handleSubmitError(err: unknown, payload: CreateManualReservationInput) {
+    if (err instanceof ApiError && err.status === 422 && err.message === "COMMERCIAL_WARNING") {
+      const warnings = (err.details as { warnings?: CommercialWarning[] } | undefined)?.warnings ?? [];
+      setCommercialWarnings(warnings);
+      setPendingPayload(payload);
+      setStep("confirm");
+      return;
+    }
+    if (err instanceof ApiError && err.status === 409 && err.message === "PREFERRED_UNIT_TAKEN") {
+      // Never auto-retry (design § "409 PREFERRED_UNIT_TAKEN") — refresh the
+      // picker and let staff choose again explicitly.
+      setStep("form");
+      setUnitError("A unidade escolhida acabou de ser ocupada. Selecione outra.");
+      setPreferredUnitId(null);
+      refetchFreeUnits();
+      return;
+    }
+    if (err instanceof ApiError && err.status === 404 && err.message === "PREFERRED_UNIT_NOT_FOUND") {
+      setStep("form");
+      setUnitError("A unidade escolhida não está mais disponível para este tipo de quarto.");
+      setPreferredUnitId(null);
+      refetchFreeUnits();
+      return;
+    }
+    if (err instanceof ApiError && err.status === 409 && err.message === "NO_AVAILABILITY") {
+      setStep("form");
+      setError("Não há disponibilidade para este quarto nas datas selecionadas.");
+      return;
+    }
+    if (err instanceof ApiError && err.status === 404 && err.message === "ROOM_NOT_FOUND") {
+      setStep("form");
+      setError("Este tipo de quarto não está mais disponível.");
+      return;
+    }
+    setStep("form");
+    setError("Erro inesperado ao criar a reserva.");
+  }
+
+  // 422 COMMERCIAL_WARNING confirm step — resubmits the EXACT payload that
+  // triggered the warning, plus `force_commercial: true` (design §
+  // "Commercial warning retry preserved" spec scenario). A fresh
+  // PREFERRED_UNIT_TAKEN/NOT_FOUND discovered even after confirming still
+  // routes back to the form, never silently substitutes another unit.
+  async function handleConfirmCommercialWarning() {
+    if (!pendingPayload) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const detail = await createManualReservation({ ...pendingPayload, force_commercial: true });
+      onSaved(detail);
+    } catch (err) {
+      handleSubmitError(err, pendingPayload);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function handleCancelCommercialWarning() {
+    setStep("form");
+    setCommercialWarnings([]);
+    setPendingPayload(null);
+  }
+
+  if (step === "confirm") {
+    return (
+      <div className="max-w-2xl">
+        <Card className="p-6 flex flex-col gap-3">
+          <h2 className="text-[15px] font-semibold text-panel-900">Confirmar reserva</h2>
+          <p className="text-sm text-panel-700">
+            O sistema encontrou os seguintes avisos comerciais para esta reserva. Confirme para criar a reserva mesmo
+            assim, ou volte para ajustar os dados.
+          </p>
+          <ul className="text-xs text-warning-700 bg-warning-50 rounded-panel-sm px-2 py-1.5 flex flex-col gap-1">
+            {commercialWarnings.map((warning) => (
+              <li key={warning.code}>{warning.message}</li>
+            ))}
+          </ul>
+          {error && (
+            <p role="alert" className="text-sm text-danger-500">
+              {error}
+            </p>
+          )}
+          <div className="flex gap-2 mt-1">
+            <Button variant="primary" disabled={saving} onClick={handleConfirmCommercialWarning}>
+              {saving ? "Salvando..." : "Confirmar mesmo assim"}
+            </Button>
+            <Button disabled={saving} onClick={handleCancelCommercialWarning}>
+              Voltar
+            </Button>
+          </div>
+        </Card>
+      </div>
+    );
   }
 
   return (
@@ -200,8 +369,8 @@ export default function NewReservationPage({ onSaved, onCancel }: NewReservation
           >
             <option value="">{rooms ? "Selecione..." : "Carregando..."}</option>
             {(rooms ?? []).map((room) => (
-              <option key={room.room_id} value={room.room_id}>
-                {room.room_name}
+              <option key={room.id} value={room.id}>
+                {room.name}
               </option>
             ))}
           </SelectField>
@@ -217,6 +386,14 @@ export default function NewReservationPage({ onSaved, onCancel }: NewReservation
             </div>
           </div>
         </div>
+
+        <UnitPicker
+          units={freeUnits}
+          loading={freeUnitsLoading}
+          error={freeUnitsError ?? unitError}
+          value={preferredUnitId}
+          onChange={setPreferredUnitId}
+        />
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <TextField
