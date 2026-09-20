@@ -15,8 +15,14 @@ import panelManualReservationPlugin from '../panelManualReservation.js';
 import { hashPassword } from '../../auth/hashPassword.js';
 import { createRoleWithPermissions, createSessionCookieForRole, getDueñoRoleId } from '../../test-support/permissionFixtures.js';
 import { SESSION_COOKIE_NAME } from '../../auth/cookie.js';
-import { createReservation, NoAvailabilityError } from '../../availability/createReservation.js';
-import { createQueryTimingPlugin, getProcessId, selectReferencesTable, waitForLockWait } from '../../test-support/queryBarrier.js';
+import { createReservation, NoAvailabilityError, PreferredUnitTakenError } from '../../availability/createReservation.js';
+import {
+  createQueryBarrierPlugin,
+  createQueryTimingPlugin,
+  getProcessId,
+  selectReferencesTable,
+  waitForLockWait,
+} from '../../test-support/queryBarrier.js';
 
 function buildApp(db: Kysely<DB> = testDb) {
   const app = Fastify().withTypeProvider<ZodTypeProvider>();
@@ -735,6 +741,169 @@ describe('POST /panel/reservations/manual — preferred_room_unit_id (T1.8 HTTP 
     expect(response.statusCode).toBe(409);
     expect(response.json().error).toBe('PREFERRED_UNIT_TAKEN');
   });
+});
+
+describe('POST /panel/reservations/manual — preferred_room_unit_id race tests (T1.4/T1.5)', () => {
+  // Identifies createReservation's OWN `.selectFrom('rooms')...forUpdate()`
+  // query specifically — same fingerprint as the pre-existing DETERMINISTIC
+  // test above (see that test's own doc comment for why the column-list
+  // check is needed to disambiguate it from fetchRoomStayData's separate,
+  // unlocked `rooms` read). Duplicated here (not imported) because the
+  // original is a function declaration local to the other `describe`
+  // callback's scope.
+  function isRoomsForUpdateQuery(node: RootOperationNode): boolean {
+    if (!selectReferencesTable(node, 'rooms')) return false;
+    const selections = (node as { selections?: { selection?: { column?: { column?: { name?: string } } } }[] })
+      .selections;
+    return (selections?.length ?? 0) === 1 && selections![0]!.selection?.column?.column?.name === 'id';
+  }
+
+  // T1.4 — BARRIER. Rendezvous point: the `getBusinessSettings` SELECT
+  // inside `createManualReservation`, which runs BEFORE `createReservation`
+  // opens its transaction — matching anywhere inside the `rooms FOR UPDATE`
+  // section instead would self-deadlock (no fallback timer on
+  // `createQueryBarrierPlugin`), so this must stay pinned to `settings`.
+  // Confirmed by direct source read: `getBusinessSettings` is the ONLY
+  // query in this request's path that selects from `settings`, and it runs
+  // exactly once per request (after the hard/commercial checks, before the
+  // transaction), so two concurrent requests hit it exactly twice — arity 2.
+  it('T1.4 BARRIER: two concurrent creates racing for the SAME preferred unit — winner 201, loser 409 PREFERRED_UNIT_TAKEN, never both 201, never a silent fallback to the spare unit', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom('Casal', { capacity: 2 });
+    const preferredUnitId = await insertUnit(roomId, 'C1');
+    // Spare unit — the room never sells out, so a 409 here can ONLY come
+    // from the preferred-unit guard, never from NoAvailabilityError.
+    await insertUnit(roomId, 'C2');
+
+    const barrierPlugin = createQueryBarrierPlugin({
+      arity: 2,
+      match: (node) => selectReferencesTable(node, 'settings'),
+    });
+    const barrierDb = new Kysely<DB>({ dialect: new PostgresDialect({ pool: testPool }), plugins: [barrierPlugin] });
+    const app = buildApp(barrierDb);
+
+    const [first, second] = await Promise.all([
+      app.inject({
+        method: 'POST',
+        url: '/panel/reservations/manual',
+        cookies: { [SESSION_COOKIE_NAME]: token },
+        payload: { ...basePayload, room_id: roomId, preferred_room_unit_id: preferredUnitId },
+      }),
+      app.inject({
+        method: 'POST',
+        url: '/panel/reservations/manual',
+        cookies: { [SESSION_COOKIE_NAME]: token },
+        payload: { ...basePayload, room_id: roomId, preferred_room_unit_id: preferredUnitId },
+      }),
+    ]);
+
+    const responses = [first, second];
+    const statusCodes = responses.map((r) => r.statusCode).sort();
+    expect(statusCodes).toEqual([201, 409]);
+
+    const rejected = responses.find((r) => r.statusCode === 409)!;
+    expect(rejected.json()).toEqual({ error: 'PREFERRED_UNIT_TAKEN' });
+
+    // No silent fallback to the spare unit: every night landed on C1 only.
+    const rows = await testDb.selectFrom('reservation_nights').select('room_unit_id').distinct().execute();
+    expect(rows.map((r) => r.room_unit_id)).toEqual([preferredUnitId]);
+  });
+
+  // T1.5 — DETERMINISTIC hand-lock + timing, same technique as the
+  // pre-existing test above but with two units and a `preferredRoomUnitId`.
+  // The FOR UPDATE lock still blocks (proved by `sawGenuineLockWait` +
+  // `timings`) regardless of the guard, since the lock is unconditional —
+  // the guard's OWN proof is the rejection type and the unit assignment,
+  // not the lock timing (that asymmetry is exactly what T1.6 documents).
+  it('T1.5 DETERMINISTIC: createReservation blocks on the SAME room-row FOR UPDATE lock, then rejects PreferredUnitTakenError instead of silently taking the spare unit', async () => {
+    const roomId = await insertRoom('Casal', { capacity: 2 });
+    const preferredUnitId = await insertUnit(roomId, 'C1');
+    const spareUnitId = await insertUnit(roomId, 'C2');
+
+    // Warm the pool first — same rationale as the pre-existing hand-lock test.
+    await Promise.all([
+      testDb.selectFrom('reservations').select('id').limit(1).execute(),
+      testDb.selectFrom('reservations').select('id').limit(1).execute(),
+    ]);
+
+    const holder = await testPool.connect();
+    const { plugin: timingPlugin, timings } = createQueryTimingPlugin({ match: isRoomsForUpdateQuery });
+    const measuredDb = new Kysely<DB>({ dialect: new PostgresDialect({ pool: testPool }), plugins: [timingPlugin] });
+
+    let firstReservationId!: number;
+    let createPromise!: ReturnType<typeof createReservation>;
+    let sawGenuineLockWait = false;
+    let waitObservedMs = 0;
+    try {
+      await holder.query('BEGIN');
+      await holder.query('SELECT id FROM rooms WHERE id = $1 FOR UPDATE', [roomId]);
+
+      createPromise = createReservation(measuredDb, {
+        roomId,
+        checkIn: basePayload.check_in,
+        checkOut: basePayload.check_out,
+        guests: 2,
+        preferredRoomUnitId: preferredUnitId,
+      });
+      // Same rationale as the pre-existing test: never let this leak as an
+      // unhandled rejection if the holder's own setup below throws first.
+      createPromise.catch(() => {});
+
+      const startedWaitingAt = Date.now();
+      sawGenuineLockWait = await waitForLockWait(testPool, {
+        excludePids: [getProcessId(holder)],
+        queryContains: 'rooms',
+      });
+      waitObservedMs = Date.now() - startedWaitingAt;
+
+      // Finish what a real createReservation does, still holding the lock:
+      // insert the winner's reservation on the PREFERRED unit.
+      const inserted = await holder.query<{ id: number }>(
+        `INSERT INTO reservations (room_id, room_unit_id, check_in, check_out, guests, status, total_cents)
+         VALUES ($1, $2, $3::date, $4::date, 2, 'confirmed', 20000) RETURNING id`,
+        [roomId, preferredUnitId, basePayload.check_in, basePayload.check_out],
+      );
+      firstReservationId = inserted.rows[0]!.id;
+      await holder.query(
+        `INSERT INTO reservation_nights (reservation_id, night, room_unit_id)
+         VALUES ($1, '2026-10-05'::date, $2), ($1, '2026-10-06'::date, $2)`,
+        [firstReservationId, preferredUnitId],
+      );
+      await holder.query('COMMIT');
+    } catch (err) {
+      await holder.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      holder.release();
+    }
+
+    // The proof of the lock: some connection was genuinely observed parked
+    // in Postgres's own lock-wait state — not inferred from an outer
+    // promise's timing.
+    expect(sawGenuineLockWait).toBe(true);
+
+    // The proof of the GUARD (not the lock): rejects with the specific
+    // taken-unit error, never resolves onto the spare unit.
+    await expect(createPromise).rejects.toBeInstanceOf(PreferredUnitTakenError);
+
+    // Confirms the wait was on the SPECIFIC FOR UPDATE query, and that its
+    // measured duration is consistent with the real wait observed live
+    // (never a guessed constant), with a sanity floor.
+    expect(timings).toHaveLength(1);
+    expect(timings[0]!.durationMs).toBeGreaterThanOrEqual(waitObservedMs);
+    expect(timings[0]!.durationMs).toBeGreaterThanOrEqual(50);
+
+    const reservations = await testDb.selectFrom('reservations').selectAll().execute();
+    expect(reservations).toHaveLength(1); // only the holder's — the blocked create never committed
+    expect(reservations[0]!.id).toBe(firstReservationId);
+
+    const spareNights = await testDb
+      .selectFrom('reservation_nights')
+      .selectAll()
+      .where('room_unit_id', '=', spareUnitId)
+      .execute();
+    expect(spareNights).toHaveLength(0); // spare unit untouched
+  }, 15000);
 });
 
 describe('authorization (reservations.create_manual)', () => {
