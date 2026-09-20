@@ -27,6 +27,8 @@ import {
   ManualCommercialWarningError,
   NoAvailabilityError,
   MinStayNotMetError,
+  PreferredUnitNotFoundError,
+  PreferredUnitTakenError,
 } from '../panel/createManualReservation.js';
 import { getReservationDetail } from '../panel/reservationDetailQuery.js';
 import { reservationDetailResponseSchema } from './panelTapeChart.js';
@@ -57,6 +59,7 @@ const manualReservationBodySchema = z
     payment_method: z.enum(['cash', 'external', 'pix_manual']).optional(),
     override_total_cents: z.number().int().min(0).optional(),
     force_commercial: z.boolean().optional(),
+    preferred_room_unit_id: z.number().int().positive().optional(),
   })
   .refine((data) => data.children_ages.length === data.children, {
     message: 'children_ages must have exactly one age per child',
@@ -131,6 +134,7 @@ const panelManualReservationPlugin: FastifyPluginAsync<PanelManualReservationPlu
             overrideTotalCents: body.override_total_cents,
             forceCommercial: body.force_commercial,
             createdBy: request.user!.id,
+            preferredRoomUnitId: body.preferred_room_unit_id,
           });
 
           const detail = await getReservationDetail(db, result.id);
@@ -145,6 +149,8 @@ const panelManualReservationPlugin: FastifyPluginAsync<PanelManualReservationPlu
           if (err instanceof PetsNotAllowedRoomError) throw httpError(409, 'PETS_NOT_ALLOWED');
           if (err instanceof MissingPaymentMethodError) throw httpError(400, 'PAYMENT_METHOD_REQUIRED');
           if (err instanceof NoAvailabilityError) throw httpError(409, 'NO_AVAILABILITY');
+          if (err instanceof PreferredUnitNotFoundError) throw httpError(404, 'PREFERRED_UNIT_NOT_FOUND');
+          if (err instanceof PreferredUnitTakenError) throw httpError(409, 'PREFERRED_UNIT_TAKEN');
           if (err instanceof MinStayNotMetError) {
             throw httpError(
               400,

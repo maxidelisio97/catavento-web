@@ -14,7 +14,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { testDb, testPool } from '../../db/testClient.js';
 import { fetchRoomStayData } from '../repository.js';
 import { calculateAvailability } from '../calculateAvailability.js';
-import { createReservation, NoAvailabilityError } from '../createReservation.js';
+import {
+  createReservation,
+  NoAvailabilityError,
+  PreferredUnitNotFoundError,
+  PreferredUnitTakenError,
+} from '../createReservation.js';
 import { eachNightUTC } from '../../shared/dateUtils.js';
 
 async function resetDb(): Promise<void> {
@@ -209,6 +214,132 @@ describe('room_units — assignment', () => {
       .where('check_out', '=', new Date('2026-09-04'))
       .executeTakeFirstOrThrow();
     expect(Number(count.count)).toBe(0);
+  });
+});
+
+describe('room_units — preferred unit (T1.1 regression baseline, before any preferred-unit change)', () => {
+  it('Public web flow omits preferred unit: still assigns freeUnits[0] unchanged', async () => {
+    const casalId = await insertRoom('Casal', 2);
+    await insertUnits(casalId, ['103', '101', '102']);
+
+    const result = await createReservation(testDb, {
+      roomId: casalId,
+      checkIn: '2026-09-01',
+      checkOut: '2026-09-03',
+      guests: 2,
+    });
+
+    const row = await testDb
+      .selectFrom('reservations')
+      .innerJoin('room_units', 'room_units.id', 'reservations.room_unit_id')
+      .select(['room_units.label as label'])
+      .where('reservations.id', '=', result.id)
+      .executeTakeFirstOrThrow();
+
+    expect(row.label).toBe('101'); // lowest-label free unit — freeUnits[0] semantics, no preferred field passed
+  });
+});
+
+describe('room_units — preferred unit (T1.2 happy path)', () => {
+  it('preferred unit free at insert time: reservation is created on that unit, price unaffected by unit choice', async () => {
+    const casalId = await insertRoom('Casal', 2);
+    const [unitA, unitB] = await insertUnits(casalId, ['101', '102']);
+
+    // freeUnits[0] would normally be unitA (lowest label) — request unitB
+    // explicitly to prove the preferred unit, not the default, wins.
+    const result = await createReservation(testDb, {
+      roomId: casalId,
+      checkIn: '2026-09-01',
+      checkOut: '2026-09-03',
+      guests: 2,
+      preferredRoomUnitId: unitB,
+    });
+
+    const row = await testDb
+      .selectFrom('reservations')
+      .select(['room_unit_id', 'total_cents'])
+      .where('id', '=', result.id)
+      .executeTakeFirstOrThrow();
+
+    expect(row.room_unit_id).toBe(unitB);
+    expect(row.room_unit_id).not.toBe(unitA);
+    expect(row.total_cents).toBe(20000); // 2 nights * weekday_cents — price depends on room type only
+
+    const nights = await testDb
+      .selectFrom('reservation_nights')
+      .select('room_unit_id')
+      .where('reservation_id', '=', result.id)
+      .execute();
+    expect(nights.every((n) => n.room_unit_id === unitB)).toBe(true);
+  });
+});
+
+describe('room_units — preferred unit (T1.3 error taxonomy)', () => {
+  it('preferred unit not in this room type: rejects with PreferredUnitNotFoundError (404 semantics)', async () => {
+    const casalId = await insertRoom('Casal', 2);
+    await insertUnits(casalId, ['101', '102']);
+    const triploId = await insertRoom('Triplo', 3);
+    const [triploUnit] = await insertUnits(triploId, ['7']);
+
+    await expect(
+      createReservation(testDb, {
+        roomId: casalId,
+        checkIn: '2026-09-01',
+        checkOut: '2026-09-03',
+        guests: 2,
+        preferredRoomUnitId: triploUnit,
+      }),
+    ).rejects.toBeInstanceOf(PreferredUnitNotFoundError);
+
+    const count = await testDb
+      .selectFrom('reservations')
+      .select(({ fn }) => fn.countAll().as('count'))
+      .executeTakeFirstOrThrow();
+    expect(Number(count.count)).toBe(0);
+  });
+
+  it('preferred unit belongs to the room but is no longer free: rejects with PreferredUnitTakenError (409 semantics), never falls back to another unit', async () => {
+    const casalId = await insertRoom('Casal', 2);
+    const [unitA, unitB] = await insertUnits(casalId, ['101', '102']);
+    await insertReservation({ roomId: casalId, roomUnitId: unitA, checkIn: '2026-09-01', checkOut: '2026-09-03' });
+
+    await expect(
+      createReservation(testDb, {
+        roomId: casalId,
+        checkIn: '2026-09-01',
+        checkOut: '2026-09-03',
+        guests: 2,
+        preferredRoomUnitId: unitA,
+      }),
+    ).rejects.toBeInstanceOf(PreferredUnitTakenError);
+
+    // Room itself isn't full (unitB is free) — must not silently fall back to it.
+    const count = await testDb
+      .selectFrom('reservations')
+      .select(({ fn }) => fn.countAll().as('count'))
+      .where('room_unit_id', '=', unitB)
+      .executeTakeFirstOrThrow();
+    expect(Number(count.count)).toBe(0);
+  });
+
+  it('room fully occupied AND a preferred unit was also requested: NoAvailabilityError wins, never PreferredUnitTakenError/NotFoundError — precedence proven at runtime, not just by source order (risk-review finding)', async () => {
+    const casalId = await insertRoom('Casal', 2);
+    const [unitA, unitB] = await insertUnits(casalId, ['101', '102']);
+    await insertReservation({ roomId: casalId, roomUnitId: unitA, checkIn: '2026-09-01', checkOut: '2026-09-03' });
+    await insertReservation({ roomId: casalId, roomUnitId: unitB, checkIn: '2026-09-01', checkOut: '2026-09-03' });
+
+    // Room is full (both units occupied) AND the preferred unit belongs to
+    // this room type — if precedence were wrong, this could resolve as
+    // PreferredUnitTakenError instead of the room-full error.
+    await expect(
+      createReservation(testDb, {
+        roomId: casalId,
+        checkIn: '2026-09-01',
+        checkOut: '2026-09-03',
+        guests: 2,
+        preferredRoomUnitId: unitA,
+      }),
+    ).rejects.toBeInstanceOf(NoAvailabilityError);
   });
 });
 

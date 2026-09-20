@@ -38,6 +38,22 @@ export class MinStayNotMetError extends Error {
   }
 }
 
+/** D3: `preferredRoomUnitId` doesn't belong to this room type at all — a client bug, not a race. */
+export class PreferredUnitNotFoundError extends Error {
+  readonly code = 'PREFERRED_UNIT_NOT_FOUND' as const;
+  constructor(readonly preferredRoomUnitId: number) {
+    super(`Unit ${preferredRoomUnitId} does not belong to the requested room type`);
+  }
+}
+
+/** D3: `preferredRoomUnitId` belongs to the room but is no longer free — a stale picker, refresh and retry. */
+export class PreferredUnitTakenError extends Error {
+  readonly code = 'PREFERRED_UNIT_TAKEN' as const;
+  constructor(readonly preferredRoomUnitId: number) {
+    super(`Unit ${preferredRoomUnitId} is no longer free for the requested dates`);
+  }
+}
+
 export interface CreateReservationInput {
   roomId: number;
   checkIn: string;
@@ -61,6 +77,15 @@ export interface CreateReservationInput {
   children?: number;
   /** Never counts toward capacity — informational only. Defaults to 0. */
   babies?: number;
+  /**
+   * D1: operational preference for a specific physical unit within the
+   * requested room type. Undefined = legacy behavior (`freeUnits[0]`),
+   * unchanged for every caller that doesn't pass it. When present, resolved
+   * and validated inside the same `FOR UPDATE`-locked section as the rest of
+   * this function (D2) — see `PreferredUnitNotFoundError`/
+   * `PreferredUnitTakenError` above.
+   */
+  preferredRoomUnitId?: number;
   /** One integer per child, range [3, 17]. Defaults to []. */
   childrenAges?: number[];
   /**
@@ -195,12 +220,28 @@ async function runCreateReservation(
       throw new NoAvailabilityError(firstFullNight ? firstFullNight.date : input.checkIn);
     }
 
-    // availability.available guarantees freeUnits.length >= 1 (see
-    // combinedAvailability.ts), but TS can't infer that from the type — the
-    // guard below is defensive, not a real "no room" path.
-    const chosenUnit = availability.freeUnits[0];
-    if (!chosenUnit) {
-      throw new NoAvailabilityError(input.checkIn);
+    // D2/D3/D4: preferred-unit resolution, still inside the FOR UPDATE lock
+    // taken above — this is what makes the 409 below race-free instead of a
+    // TOCTOU. D4: the room-full NoAvailabilityError above already ran and
+    // won if it applied; this guard never reorders ahead of it.
+    let chosenUnit;
+    if (input.preferredRoomUnitId === undefined) {
+      // availability.available guarantees freeUnits.length >= 1 (see
+      // combinedAvailability.ts), but TS can't infer that from the type —
+      // the guard below is defensive, not a real "no room" path.
+      chosenUnit = availability.freeUnits[0];
+      if (!chosenUnit) {
+        throw new NoAvailabilityError(input.checkIn);
+      }
+    } else {
+      const belongsToRoom = stayData.roomUnits.some((u) => u.id === input.preferredRoomUnitId);
+      if (!belongsToRoom) {
+        throw new PreferredUnitNotFoundError(input.preferredRoomUnitId);
+      }
+      chosenUnit = availability.freeUnits.find((u) => u.id === input.preferredRoomUnitId);
+      if (!chosenUnit) {
+        throw new PreferredUnitTakenError(input.preferredRoomUnitId);
+      }
     }
 
     const price = calculatePrice({
