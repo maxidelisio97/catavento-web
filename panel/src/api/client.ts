@@ -6,6 +6,12 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    // Additive, optional (D10 — SDD "Nova reserva" panel change): carries the
+    // parsed 4xx error body verbatim (e.g. `{ error: 'COMMERCIAL_WARNING',
+    // warnings: [...] }`) for callers that need more than the `error` code
+    // already folded into `message`. No existing caller passes this, so every
+    // existing `new ApiError(status, message)` call site is unaffected.
+    public details?: unknown,
   ) {
     super(message);
   }
@@ -36,7 +42,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
       window.dispatchEvent(new Event("panel:unauthorized"));
     }
 
-    throw new ApiError(response.status, body?.error ?? "Erro inesperado");
+    throw new ApiError(response.status, body?.error ?? "Erro inesperado", body ?? undefined);
   }
 
   if (response.status === 204) return undefined as T;
