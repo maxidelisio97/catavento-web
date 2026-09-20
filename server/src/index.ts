@@ -17,6 +17,7 @@ import panelReservationActionsPlugin from './plugins/panelReservationActions.js'
 import panelMoveReservationPlugin from './plugins/panelMoveReservation.js';
 import panelManualReservationPlugin from './plugins/panelManualReservation.js';
 import panelRoomFreeUnitsPlugin from './plugins/panelRoomFreeUnits.js';
+import panelRoomTypesPlugin from './plugins/panelRoomTypes.js';
 import panelUsersPlugin from './plugins/panelUsers.js';
 import panelRolesPlugin from './plugins/panelRoles.js';
 import panelPermissionsPlugin from './plugins/panelPermissions.js';
@@ -65,6 +66,7 @@ app.register(panelReservationActionsPlugin);
 app.register(panelMoveReservationPlugin);
 app.register(panelManualReservationPlugin);
 app.register(panelRoomFreeUnitsPlugin);
+app.register(panelRoomTypesPlugin);
 app.register(panelUsersPlugin);
 app.register(panelRolesPlugin);
 app.register(panelPermissionsPlugin);
