@@ -18,10 +18,15 @@ async function resetDb(): Promise<void> {
   );
 }
 
+let reservationCounter = 0;
+
 async function insertTestReservation(): Promise<number> {
+  reservationCounter += 1;
+  const suffix = String(reservationCounter).padStart(4, '0');
+
   const room = await testDb
     .insertInto('rooms')
-    .values({ name: 'TestRoom', capacity: 2, pets_allowed: false, default_min_stay: 1, total_units: 1 })
+    .values({ name: `TestRoom${suffix}`, capacity: 2, pets_allowed: false, default_min_stay: 1, total_units: 1 })
     .returning('id')
     .executeTakeFirstOrThrow();
 
@@ -29,7 +34,7 @@ async function insertTestReservation(): Promise<number> {
     .insertInto('reservations')
     .values({
       room_id: room.id,
-      code: 'PROV0001',
+      code: `PROV${suffix}`,
       status: 'pending_payment',
       check_in: '2026-09-01',
       check_out: '2026-09-03',
@@ -49,6 +54,7 @@ async function insertTestReservation(): Promise<number> {
 
 beforeEach(async () => {
   await resetDb();
+  reservationCounter = 0;
 });
 
 describe('payments.provider / payments.provider_payment_id (migration 1785800000000)', () => {
