@@ -636,6 +636,107 @@ describe('POST /panel/reservations/manual', () => {
   });
 });
 
+describe('POST /panel/reservations/manual — preferred unit (T1.1 regression baseline, before any preferred-unit change)', () => {
+  it('Manual/panel flow omits preferred unit: still assigns freeUnits[0] unchanged', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom('Triplo', { capacity: 3 });
+    await insertUnit(roomId, 'T1');
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/reservations/manual',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { ...basePayload, room_id: roomId },
+    });
+
+    expect(response.statusCode).toBe(201);
+  });
+});
+
+describe('POST /panel/reservations/manual — preferred_room_unit_id (T1.8 HTTP wiring)', () => {
+  it('201s and uses the preferred unit when it is free', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom('Casal', { capacity: 2 });
+    await insertUnit(roomId, 'C1');
+    const preferredUnitId = await insertUnit(roomId, 'C2');
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/reservations/manual',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { ...basePayload, room_id: roomId, preferred_room_unit_id: preferredUnitId },
+    });
+
+    expect(response.statusCode).toBe(201);
+    const row = await testDb
+      .selectFrom('reservations')
+      .select('room_unit_id')
+      .where('code', '=', response.json().code)
+      .executeTakeFirstOrThrow();
+    expect(row.room_unit_id).toBe(preferredUnitId);
+  });
+
+  it('404 PREFERRED_UNIT_NOT_FOUND when the unit does not belong to the requested room', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom('Casal', { capacity: 2 });
+    await insertUnit(roomId, 'C1');
+    const otherRoomId = await insertRoom('Triplo', { capacity: 3 });
+    const foreignUnitId = await insertUnit(otherRoomId, 'T1');
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/reservations/manual',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { ...basePayload, room_id: roomId, preferred_room_unit_id: foreignUnitId },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json().error).toBe('PREFERRED_UNIT_NOT_FOUND');
+  });
+
+  it('409 PREFERRED_UNIT_TAKEN when the unit belongs to the room but is already occupied', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom('Casal', { capacity: 2 });
+    const takenUnitId = await insertUnit(roomId, 'C1');
+    await insertUnit(roomId, 'C2'); // spare unit — room isn't full, proves this isn't NO_AVAILABILITY
+    const other = await testDb
+      .insertInto('reservations')
+      .values({
+        room_id: roomId,
+        room_unit_id: takenUnitId,
+        check_in: '2026-10-05',
+        check_out: '2026-10-07',
+        guests: 2,
+        status: 'confirmed',
+        total_cents: 20000,
+        code: 'CAT-TAKEN',
+      })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+    await testDb
+      .insertInto('reservation_nights')
+      .values([
+        { reservation_id: other.id, night: '2026-10-05', room_unit_id: takenUnitId },
+        { reservation_id: other.id, night: '2026-10-06', room_unit_id: takenUnitId },
+      ])
+      .execute();
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/panel/reservations/manual',
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { ...basePayload, room_id: roomId, preferred_room_unit_id: takenUnitId },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toBe('PREFERRED_UNIT_TAKEN');
+  });
+});
+
 describe('authorization (reservations.create_manual)', () => {
   it('403s a session without reservations.create_manual', async () => {
     const roleId = await createRoleWithPermissions(testDb, []);

@@ -28,7 +28,12 @@
  */
 import type { Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
-import { NoAvailabilityError, MinStayNotMetError } from '../availability/createReservation.js';
+import {
+  NoAvailabilityError,
+  MinStayNotMetError,
+  PreferredUnitNotFoundError,
+  PreferredUnitTakenError,
+} from '../availability/createReservation.js';
 import { createReservationWithCode } from '../reservations/createReservationWithCode.js';
 import { getBusinessSettings } from '../settings/settings.js';
 
@@ -64,7 +69,7 @@ export class ManualCommercialWarningError extends Error {
   }
 }
 
-export { NoAvailabilityError, MinStayNotMetError };
+export { NoAvailabilityError, MinStayNotMetError, PreferredUnitNotFoundError, PreferredUnitTakenError };
 
 export type ManualPaymentMethod = 'cash' | 'external' | 'pix_manual';
 export type ManualPaymentStatus = 'none' | 'deposit_paid' | 'paid_full';
@@ -88,6 +93,8 @@ export interface CreateManualReservationInput {
   overrideTotalCents?: number;
   forceCommercial?: boolean;
   createdBy: number;
+  /** D1: forwarded as-is to `createReservation` — see its own doc comment. */
+  preferredRoomUnitId?: number;
 }
 
 export class MissingPaymentMethodError extends Error {
@@ -166,6 +173,7 @@ export async function createManualReservation(
       createdBy: input.createdBy,
       allowBelowMinStay: input.forceCommercial ?? false,
       overrideTotalCents: input.overrideTotalCents,
+      preferredRoomUnitId: input.preferredRoomUnitId,
     });
 
     let paymentId: number | null = null;

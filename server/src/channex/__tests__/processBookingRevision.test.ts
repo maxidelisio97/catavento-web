@@ -100,6 +100,25 @@ describe('processBookingRevision — camino feliz', () => {
     expect(new Set(nights.map((n) => n.room_unit_id)).size).toBe(1);
   });
 
+  it('T1.1 regression baseline: OTA/Channex flow omits preferred unit, still assigns freeUnits[0] unchanged, Channex sync unaffected', async () => {
+    const { roomId, channexRoomTypeId } = await insertMappedRoom(2);
+
+    const outcome = await processBookingRevision(testDb, revision({ channexRoomTypeId }));
+
+    expect(outcome.kind).toBe('created');
+    const reservationId = (outcome as { reservationId: number }).reservationId;
+    const row = await testDb.selectFrom('reservations').selectAll().where('id', '=', reservationId).executeTakeFirstOrThrow();
+    expect(row.origin).toBe('ota');
+    expect(row.channex_booking_id).toBe('BK-1');
+
+    const nights = await testDb
+      .selectFrom('reservation_nights')
+      .select('room_unit_id')
+      .where('reservation_id', '=', reservationId)
+      .execute();
+    expect(new Set(nights.map((n) => n.room_unit_id)).size).toBe(1);
+  });
+
   it('modified: actualiza fechas/huéspedes/monto de la reserva existente y reasigna reservation_nights', async () => {
     const { channexRoomTypeId } = await insertMappedRoom();
     await processBookingRevision(testDb, revision({ channexRoomTypeId }));
