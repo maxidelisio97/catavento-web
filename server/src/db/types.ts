@@ -93,6 +93,8 @@ export interface Payments {
   idempotency_key: string | null;
   kind: Generated<string>;
   method: string;
+  provider: string | null;
+  provider_payment_id: string | null;
   raw_last_event: Json | null;
   received_at: Timestamp | null;
   reservation_id: number;

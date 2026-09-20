@@ -580,9 +580,14 @@ describe('GET /api/reservations/:code', () => {
       // ADD CONSTRAINT re-validates every existing row, including the one
       // just inserted above — delete it first or the restore itself fails.
       await sql`DELETE FROM payments WHERE asaas_payment_id = ${'pay_unknown'}`.execute(testDb);
+      // Mirror the CURRENT payments_method_check exactly (widened by
+      // migrations/1785800000000_add-payment-provider-columns.ts to add
+      // pagarme_pix/pagarme_card) — restoring the pre-migration 5-value
+      // version here would silently downgrade the real constraint for
+      // every test file that runs after this one in the same suite run.
       await sql`
         ALTER TABLE payments ADD CONSTRAINT payments_method_check
-        CHECK (method IN ('asaas_pix','asaas_card','cash','external','pix_manual'))
+        CHECK (method IN ('asaas_pix','asaas_card','pagarme_pix','pagarme_card','cash','external','pix_manual'))
       `.execute(testDb);
     }
   });
