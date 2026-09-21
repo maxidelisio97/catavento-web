@@ -25,7 +25,10 @@ const SECRET = process.env.PAGARME_WEBHOOK_SECRET;
 
 function buildApp() {
   const app = Fastify();
-  app.register(webhooksPagarmePlugin);
+  // Registered with the same `/api` prefix as `src/index.ts` so these tests
+  // exercise the real served path (`/api/webhooks/pagarme`), not a path
+  // that only exists in isolation.
+  app.register(webhooksPagarmePlugin, { prefix: '/api' });
   registerErrorHandler(app);
   return app;
 }
@@ -102,7 +105,7 @@ describe('POST /webhooks/pagarme — signature gate rejects before any DB write'
     const body = JSON.stringify({ type: 'order.paid', data: { id: 'or_test_1' } });
     const response = await app.inject({
       method: 'POST',
-      url: '/webhooks/pagarme',
+      url: '/api/webhooks/pagarme',
       headers: { 'content-type': 'application/json' },
       payload: body,
     });
@@ -123,7 +126,7 @@ describe('POST /webhooks/pagarme — signature gate rejects before any DB write'
 
     const response = await app.inject({
       method: 'POST',
-      url: '/webhooks/pagarme',
+      url: '/api/webhooks/pagarme',
       headers: { 'content-type': 'application/json', [PAGARME_SIGNATURE_HEADER]: signature },
       payload: actuallySentBody,
     });
@@ -143,7 +146,7 @@ describe('POST /webhooks/pagarme — signature gate rejects before any DB write'
 
     const response = await app.inject({
       method: 'POST',
-      url: '/webhooks/pagarme',
+      url: '/api/webhooks/pagarme',
       headers: { 'content-type': 'application/json', [PAGARME_SIGNATURE_HEADER]: wrongSignature },
       payload: body,
     });
@@ -165,7 +168,7 @@ describe('POST /webhooks/pagarme — valid signature reaches the event-routing s
 
     const response = await app.inject({
       method: 'POST',
-      url: '/webhooks/pagarme',
+      url: '/api/webhooks/pagarme',
       headers: { 'content-type': 'application/json', [PAGARME_SIGNATURE_HEADER]: signature },
       payload: body,
     });
@@ -188,7 +191,7 @@ describe('POST /webhooks/pagarme — valid signature reaches the event-routing s
 
       const response = await app.inject({
         method: 'POST',
-        url: '/webhooks/pagarme',
+        url: '/api/webhooks/pagarme',
         headers: { 'content-type': 'application/json', [PAGARME_SIGNATURE_HEADER]: signature },
         payload: body,
       });
@@ -205,7 +208,7 @@ describe('POST /webhooks/pagarme — valid signature reaches the event-routing s
 
     const response = await app.inject({
       method: 'POST',
-      url: '/webhooks/pagarme',
+      url: '/api/webhooks/pagarme',
       headers: { 'content-type': 'application/json', [PAGARME_SIGNATURE_HEADER]: signature },
       payload: body,
     });
