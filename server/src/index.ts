@@ -3,6 +3,13 @@ import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from '@fa
 import cookie from '@fastify/cookie';
 import { config } from './config.js';
 import { registerErrorHandler } from './errorHandler.js';
+// sdd/asaas-pagarme-migration (PR 4, task A11) — side-effect imports: both
+// adapters self-register via registerProvider() at module load (see
+// payments/provider.ts's registry). MUST run before any route handler calls
+// getProvider()/getActiveProvider() — every call site that dispatches
+// through the payment-provider port depends on this having already run.
+import './payments/asaasAdapter.js';
+import './payments/pagarmeAdapter.js';
 import paymentsPlugin from './plugins/payments.js';
 import webhooksPlugin from './plugins/webhooks.js';
 import webhooksPagarmePlugin from './plugins/webhooksPagarme.js';
