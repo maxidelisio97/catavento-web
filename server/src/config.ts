@@ -16,6 +16,19 @@ type ChannexEnv = 'staging' | 'production';
 
 const channexEnv: ChannexEnv = process.env.CHANNEX_ENV === 'production' ? 'production' : 'staging';
 
+type PagarmeEnv = 'sandbox' | 'production';
+
+const pagarmeEnv: PagarmeEnv = process.env.PAGARME_ENV === 'production' ? 'production' : 'sandbox';
+
+type PaymentsProvider = 'asaas' | 'pagarme';
+
+// Fail-safe default: an unset or unrecognized PAYMENTS_PROVIDER value must
+// never silently route new charges to an unconfigured/unknown provider —
+// 'asaas' is the only provider with a live, credentialed account today
+// (sdd/asaas-pagarme-migration design, obs #257, "Feature-flagged hard
+// cutover").
+const paymentsProvider: PaymentsProvider = process.env.PAYMENTS_PROVIDER === 'pagarme' ? 'pagarme' : 'asaas';
+
 export const config = {
   port: Number(process.env.PORT) || 3001,
   databaseUrl: process.env.DATABASE_URL as string,
@@ -60,5 +73,29 @@ export const config = {
     // Asaas"). Deliberately not in `required` above, same reasoning as
     // CHANNEX_API_KEY: M12 is still being wired up by hand.
     webhookSecret: process.env.CHANNEX_WEBHOOK_SECRET,
+  },
+  pagarme: {
+    env: pagarmeEnv,
+    // Deliberately NOT in `required` above (same reasoning as
+    // CHANNEX_API_KEY/webhookSecret): the Pagar.me account activates
+    // 2026-09-21 (see server/CLAUDE.md and the migration design's "Buildable
+    // today vs. blocked on the account"). The server, dev environment, and
+    // test suite must keep working before that credential exists.
+    // pagarmeClient.ts (PR 2/3) throws a clear PagarmeNotConfiguredError at
+    // call time instead of failing at boot.
+    secretKey: process.env.PAGARME_SECRET_KEY || undefined,
+    publicKey: process.env.PAGARME_PUBLIC_KEY || undefined,
+    webhookSecret: process.env.PAGARME_WEBHOOK_SECRET || undefined,
+    baseUrl:
+      pagarmeEnv === 'production'
+        ? 'https://api.pagar.me/core/v5'
+        : 'https://sdx-api.pagar.me/core/v5',
+  },
+  payments: {
+    // Feature flag for the hard cutover (design D2/A10). Read once at
+    // process start, same as every other env-sourced value here — flipping
+    // it requires an env var change + `pm2 restart` (see design's
+    // Rollback section), never a hot reload.
+    provider: paymentsProvider,
   },
 };
