@@ -16,7 +16,7 @@ import { createRoleWithPermissions, createSessionCookieForRole, getDueñoRoleId 
 import { SESSION_COOKIE_NAME } from '../../auth/cookie.js';
 import { checkIn, registerPayment, InvalidReservationTransitionError } from '../../panel/reservationActions.js';
 import { OverpaymentError } from '../../reservations/overpaymentGuard.js';
-import { createOrReuseAsaasPayment } from '../../reservations/createOrReusePayment.js';
+import { createOrReuseProviderPayment } from '../../reservations/createOrReusePayment.js';
 import { createQueryStartSignal, createQueryTimingPlugin, rawSqlContains } from '../../test-support/queryBarrier.js';
 
 const createCustomer = vi.fn();
@@ -34,6 +34,13 @@ vi.mock('../../asaasClient.js', async (importOriginal) => {
     getPixQrCode: (...args: unknown[]) => getPixQrCode(...args),
   };
 });
+
+// sdd/asaas-pagarme-migration PR 4 (task A11/A16): registerPayment now
+// dispatches through the provider adapter registry — self-register the
+// real asaasAdapter (wraps the mocked asaasClient functions above) so
+// getActiveProvider()/getProvider('asaas') resolves. This file's fixtures
+// are all asaas_*, so pagarmeAdapter isn't needed here.
+await import('../../payments/asaasAdapter.js');
 
 const { default: panelReservationActionsPlugin } = await import('../panelReservationActions.js');
 
@@ -110,11 +117,14 @@ async function insertReservation(options: ReservationFixtureOptions): Promise<{ 
 }
 
 async function insertPayment(reservationId: number, amountCents: number, status: string): Promise<void> {
+  const paymentId = `pay_${randomBytes(6).toString('hex')}`;
   await testDb
     .insertInto('payments')
     .values({
       reservation_id: reservationId,
-      asaas_payment_id: `pay_${randomBytes(6).toString('hex')}`,
+      asaas_payment_id: paymentId,
+      provider: 'asaas',
+      provider_payment_id: paymentId,
       method: 'asaas_pix',
       kind: 'deposit',
       amount_cents: amountCents,
@@ -624,6 +634,55 @@ describe('POST /panel/reservations/:code/payment', () => {
     expect(row.method).toBe('asaas_pix');
   });
 
+  // sdd/asaas-pagarme-migration task A16/gap review: reservationActions.ts's
+  // own comment documents that a NEW charge always dispatches through
+  // getActiveProvider() (config.payments.provider), never the literal method
+  // the operator picked — an operator choosing 'pagarme_pix' while the flag
+  // is still 'asaas' (the current default, unset PAYMENTS_PROVIDER in every
+  // test env file) gets an asaas_pix charge, matching createOrReusePayment's
+  // "NEW charge: dispatch by the active flag" branch. This was never actually
+  // asserted anywhere before this test — the widened method enum only made
+  // 'pagarme_pix'/'pagarme_card' reachable as real request bodies in this PR.
+  it('pagarme_pix while the active provider flag is still asaas: dispatches an ASAAS charge (active-flag dispatch, not the literal method), response.provider === "asaas"', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId });
+    createCustomer.mockResolvedValue({ id: 'cus_1' });
+    createPayment.mockResolvedValue({ id: 'pay_bal_2', status: 'PENDING', invoiceUrl: 'https://asaas.test/inv/2' });
+    getPixQrCode.mockResolvedValue({ encodedImage: 'img', payload: 'copy', expirationDate: '2026-09-01T00:00:00Z' });
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'balance', method: 'pagarme_pix', amount_cents: 5000, cpf_cnpj: '12345678900' },
+    });
+
+    expect(response.statusCode).toBe(201);
+    const body = response.json();
+    expect(body.method).toBe('pix');
+    // The behavior this test exists to prove: provider follows the active
+    // flag ('asaas'), NOT the 'pagarme_pix' literal the operator selected.
+    expect(body.provider).toBe('asaas');
+    // Proves it actually went through the Asaas adapter, not a tautology
+    // that would pass with a fake/stubbed dispatch.
+    expect(createPayment).toHaveBeenCalledTimes(1);
+
+    const row = await testDb
+      .selectFrom('payments')
+      .selectAll()
+      .where('reservation_id', '=', reservation.id)
+      .executeTakeFirstOrThrow();
+    expect(row.kind).toBe('balance');
+    expect(row.status).toBe('pending');
+    // The DB row's own method column is also 'asaas_pix', not 'pagarme_pix'
+    // — dispatch-by-flag rewrites the persisted method too, not just the
+    // response shape.
+    expect(row.method).toBe('asaas_pix');
+    expect(row.provider).toBe('asaas');
+  });
+
   // --- Overpayment guard (overpaymentGuard.ts) ---
 
   it('cash: 422 OVERPAYMENT when amount_cents exceeds balance_due_cents by even one cent, nothing inserted', async () => {
@@ -840,7 +899,7 @@ describe('POST /panel/reservations/:code/payment', () => {
   // hand: this is the one that actually needs assertNotOverpayingWithPendingAsaas
   // in registerPayment's cash branch — commenting it out makes THIS test
   // fail (cash succeeds with 201 instead of 422); it does NOT depend on the
-  // check inside createOrReuseAsaasPayment at all (disabling that one alone
+  // check inside createOrReuseProviderPayment at all (disabling that one alone
   // leaves this test passing).
   it('mixed order 1 — Asaas pending charge created first, then a cash payment that would push the total over: cash is rejected', async () => {
     const token = await insertSessionCookie();
@@ -887,7 +946,7 @@ describe('POST /panel/reservations/:code/payment', () => {
   // unconditionally before the ASAAS_METHODS branch even in the original
   // code) already sees the cash payment as `received` the instant it lands
   // — so it rejects the second request before ever reaching
-  // createOrReuseAsaasPayment. Verified by hand: commenting out
+  // createOrReuseProviderPayment. Verified by hand: commenting out
   // assertNotOverpayingWithPendingAsaas inside createOrReusePayment.ts does
   // NOT make this test fail. Kept anyway as an explicit regression guard for
   // this direction (the user asked for both orders covered, and "already
@@ -942,6 +1001,8 @@ describe('POST /panel/reservations/:code/payment', () => {
       .values({
         reservation_id: reservation.id,
         asaas_payment_id: 'pay_stale',
+        provider: 'asaas',
+        provider_payment_id: 'pay_stale',
         method: 'asaas_pix',
         kind: 'deposit',
         amount_cents: 20000,
@@ -991,6 +1052,8 @@ describe('POST /panel/reservations/:code/payment', () => {
       .values({
         reservation_id: reservation.id,
         asaas_payment_id: 'pay_today',
+        provider: 'asaas',
+        provider_payment_id: 'pay_today',
         method: 'asaas_pix',
         kind: 'deposit',
         amount_cents: 20000,
@@ -1020,10 +1083,10 @@ describe('POST /panel/reservations/:code/payment', () => {
   });
 
   // DETERMINISTIC, same technique as the two cash lock tests above: holds
-  // the SAME advisory-lock key createOrReuseAsaasPayment uses, on a raw
+  // the SAME advisory-lock key createOrReuseProviderPayment uses, on a raw
   // connection (simulating a first Asaas charge of kind 'deposit' already
   // pending, lock acquired, not yet committed), and calls
-  // createOrReuseAsaasPayment directly for a SECOND charge of a DIFFERENT
+  // createOrReuseProviderPayment directly for a SECOND charge of a DIFFERENT
   // kind ('balance') concurrently. Individually each 20000 fits the 20000
   // total; together they don't — only assertNotOverpayingWithPendingAsaas,
   // called AFTER the dedupe SELECT inside the SAME lock, catches it (proven
@@ -1031,7 +1094,7 @@ describe('POST /panel/reservations/:code/payment', () => {
   // without a thread race at all — this test proves the lock closes the
   // genuinely concurrent variant too). Measures the advisory-lock query
   // itself, same reasoning as the cash tests.
-  it('DETERMINISTIC: createOrReuseAsaasPayment blocks on the SAME advisory-lock key a concurrent Asaas charge holds, and rejects the overpaying second charge of a DIFFERENT kind', async () => {
+  it('DETERMINISTIC: createOrReuseProviderPayment blocks on the SAME advisory-lock key a concurrent Asaas charge holds, and rejects the overpaying second charge of a DIFFERENT kind', async () => {
     const roomId = await insertRoom();
     const reservation = await insertReservation({ roomId, totalCents: 20000 });
     createCustomer.mockResolvedValue({ id: 'cus_1' });
@@ -1057,12 +1120,12 @@ describe('POST /panel/reservations/:code/payment', () => {
     });
 
     let firstPaymentId!: number;
-    let paymentPromise!: ReturnType<typeof createOrReuseAsaasPayment>;
+    let paymentPromise!: ReturnType<typeof createOrReuseProviderPayment>;
     try {
       await holder.query('BEGIN');
       await holder.query('SELECT pg_advisory_xact_lock($1)', [reservation.id]);
 
-      paymentPromise = createOrReuseAsaasPayment(measuredDb, {
+      paymentPromise = createOrReuseProviderPayment(measuredDb, {
         reservationId: reservation.id,
         code: reservation.code,
         kind: 'balance',
@@ -1085,8 +1148,8 @@ describe('POST /panel/reservations/:code/payment', () => {
       // Finish what a real first Asaas deposit charge does, still holding
       // the lock: insert the pending payment row.
       const inserted = await holder.query<{ id: number }>(
-        `INSERT INTO payments (reservation_id, asaas_payment_id, kind, method, amount_cents, status)
-         VALUES ($1, $2, 'deposit', 'asaas_card', 20000, 'pending') RETURNING id`,
+        `INSERT INTO payments (reservation_id, asaas_payment_id, provider, provider_payment_id, kind, method, amount_cents, status)
+         VALUES ($1, $2, 'asaas', $2, 'deposit', 'asaas_card', 20000, 'pending') RETURNING id`,
         [reservation.id, `pay_${randomUUID()}`],
       );
       firstPaymentId = inserted.rows[0]!.id;

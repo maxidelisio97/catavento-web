@@ -88,13 +88,16 @@ export const asaasAdapter: PaymentProviderAdapter = {
       };
     }
 
-    // No `invoice_url`, no redirect — card confirmation happens exclusively
-    // via the webhook (design's Data Flow / security rule). Asaas's
-    // invoiceUrl is deliberately dropped here, never returned upward.
+    // sdd/asaas-pagarme-migration PR 4 (task A11) — invoiceUrl IS returned
+    // for Asaas: the tasks artifact's A20 explicitly requires the Asaas
+    // checkout redirect to stay byte-identical once call sites dispatch
+    // through this adapter. See provider.ts's CreateChargeResult docstring
+    // for the full reasoning (this was a real regression found while wiring
+    // A11, not a design ambiguity).
     return {
       providerPaymentId: payment.id,
       status,
-      details: { method: 'card' },
+      details: { method: 'card', invoiceUrl: payment.invoiceUrl },
     };
   },
 
@@ -106,6 +109,12 @@ export const asaasAdapter: PaymentProviderAdapter = {
   async fetchPixDetails(providerPaymentId: string): Promise<PixQrCode> {
     const qr = await getPixQrCode(providerPaymentId);
     return { payload: qr.payload, encodedImage: qr.encodedImage, expirationDate: qr.expirationDate };
+  },
+
+  /** Reuse of an existing pending asaas_card row re-fetches its live invoice_url — same remote call the public GET endpoint already made pre-migration. */
+  async fetchCardInvoiceUrl(providerPaymentId: string): Promise<string | undefined> {
+    const payment = await getPayment(providerPaymentId);
+    return payment.invoiceUrl;
   },
 };
 

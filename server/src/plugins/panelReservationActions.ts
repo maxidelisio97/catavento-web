@@ -8,6 +8,7 @@ import { requireAuth } from '../auth/requireAuth.js';
 import { blockIfMustChangePassword } from '../auth/blockIfMustChangePassword.js';
 import { requirePermission } from '../auth/requirePermission.js';
 import { AsaasApiError } from '../asaasClient.js';
+import { PagarmeApiError } from '../pagarmeClient.js';
 import { PaymentAlreadyReceivedError } from '../reservations/createOrReusePayment.js';
 import { OverpaymentError } from '../reservations/overpaymentGuard.js';
 import {
@@ -29,9 +30,11 @@ import {
 
 const paymentBodySchema = z.object({
   kind: z.enum(['deposit', 'balance', 'extra']),
-  method: z.enum(['asaas_pix', 'asaas_card', 'cash', 'external', 'pix_manual']),
+  method: z.enum(['asaas_pix', 'asaas_card', 'pagarme_pix', 'pagarme_card', 'cash', 'external', 'pix_manual']),
   amount_cents: z.number().int().positive(),
   cpf_cnpj: z.string().min(11).optional(),
+  // Only used for a Pagar.me card charge — see provider.ts's PCI note.
+  card_token: z.string().optional(),
   // Required for cash/external/pix_manual (enforced in registerPayment, not
   // here — the plugin doesn't know which methods need it, that's the
   // service's rule). Client generates it once per payment-form session, per
@@ -39,15 +42,31 @@ const paymentBodySchema = z.object({
   idempotency_key: z.string().uuid().optional(),
 });
 
+const providerNameSchema = z.enum(['asaas', 'pagarme']);
+
+// sdd/asaas-pagarme-migration task A16 — see reservations.ts's identical
+// schema for the full reasoning (encoded_image optional, qr_code_url added
+// for Pagar.me pix, Asaas's shape stays byte-identical).
 const pixDetailsSchema = z.object({
-  encoded_image: z.string(),
+  encoded_image: z.string().optional(),
   payload: z.string(),
   expiration_date: z.string(),
+  qr_code_url: z.string().optional(),
 });
 
 const paymentResponseSchema = z.discriminatedUnion('method', [
-  z.object({ method: z.literal('pix'), payment_id: z.string(), qr_code: pixDetailsSchema }),
-  z.object({ method: z.literal('card'), payment_id: z.string(), invoice_url: z.string() }),
+  z.object({ method: z.literal('pix'), payment_id: z.string(), provider: providerNameSchema, qr_code: pixDetailsSchema }),
+  z.object({
+    method: z.literal('card'),
+    payment_id: z.string(),
+    provider: providerNameSchema,
+    // invoice_url stays only on the asaas branch — same reasoning as the
+    // public endpoint (reservations.ts).
+    invoice_url: z.string().optional(),
+  }),
+  // A still-pending pagarme_card row reused: nothing to re-show, guest keeps
+  // waiting for the webhook (design's "Card reuse" note).
+  z.object({ method: z.literal('card_awaiting'), payment_id: z.string(), provider: providerNameSchema }),
   z.object({ method: z.literal('cash'), payment_id: z.number(), status: z.literal('received') }),
   z.object({ method: z.literal('external'), payment_id: z.number(), status: z.literal('received') }),
   z.object({ method: z.literal('pix_manual'), payment_id: z.number(), status: z.literal('received') }),
@@ -86,15 +105,20 @@ function paymentResultToResponse(result: RegisterPaymentResult) {
     return {
       method: 'pix' as const,
       payment_id: result.paymentId,
+      provider: result.provider,
       qr_code: {
         encoded_image: result.qrCode.encodedImage,
         payload: result.qrCode.payload,
         expiration_date: result.qrCode.expirationDate,
+        qr_code_url: result.qrCode.imageUrl,
       },
     };
   }
+  if (result.method === 'card_awaiting') {
+    return { method: 'card_awaiting' as const, payment_id: result.paymentId, provider: result.provider };
+  }
   if (result.method === 'card') {
-    return { method: 'card' as const, payment_id: result.paymentId, invoice_url: result.invoiceUrl };
+    return { method: 'card' as const, payment_id: result.paymentId, provider: result.provider, invoice_url: result.invoiceUrl };
   }
   return { method: result.method, payment_id: result.paymentId, status: result.status };
 }
@@ -132,7 +156,7 @@ const panelReservationActionsPlugin: FastifyPluginAsync<PanelReservationActionsP
       },
       async (request, reply) => {
         const { code } = request.params;
-        const { kind, method, amount_cents, cpf_cnpj, idempotency_key } = request.body;
+        const { kind, method, amount_cents, cpf_cnpj, card_token, idempotency_key } = request.body;
 
         try {
           const result = await registerPayment(db, {
@@ -141,6 +165,7 @@ const panelReservationActionsPlugin: FastifyPluginAsync<PanelReservationActionsP
             method,
             amountCents: amount_cents,
             cpfCnpj: cpf_cnpj,
+            cardToken: card_token,
             idempotencyKey: idempotency_key,
             changedBy: request.user!.id,
           });
@@ -160,6 +185,10 @@ const panelReservationActionsPlugin: FastifyPluginAsync<PanelReservationActionsP
             // echo back request data) but not out of our own logs.
             request.log.warn({ status: err.status, body: err.body }, 'asaas_request_failed');
             throw httpError(502, 'asaas_request_failed');
+          }
+          if (err instanceof PagarmeApiError) {
+            request.log.warn({ status: err.status, body: err.body }, 'pagarme_request_failed');
+            throw httpError(502, 'pagarme_request_failed');
           }
           throw err;
         }

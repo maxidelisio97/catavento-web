@@ -9,11 +9,14 @@ import { NoAvailabilityError, MinStayNotMetError } from '../availability/createR
 import { eachNightUTC, todayISO } from '../shared/dateUtils.js';
 import { getBusinessSettings } from '../settings/settings.js';
 import {
-  createOrReuseAsaasPayment,
+  createOrReuseProviderPayment,
   PaymentAlreadyReceivedError,
   type PaymentDetails,
 } from '../reservations/createOrReusePayment.js';
-import { getPayment, getPixQrCode, AsaasApiError } from '../asaasClient.js';
+import { getPayment, AsaasApiError } from '../asaasClient.js';
+import { PagarmeApiError } from '../pagarmeClient.js';
+import { getProvider, type ProviderName } from '../payments/provider.js';
+import { config } from '../config.js';
 
 const MAX_NIGHTS = 60;
 
@@ -86,10 +89,20 @@ const reservationResponseSchema = reservationPublicFieldsSchema.extend({
   children_ages: z.array(z.number()),
 });
 
+const providerNameSchema = z.enum(['asaas', 'pagarme']);
+
+// sdd/asaas-pagarme-migration task A15: widened for Pagar.me pix, which
+// returns `qr_code`/`qr_code_url` (see pagarmeAdapter.ts's PixQrCode
+// mapping) instead of Asaas's base64 `encoded_image` — `payload` (the EMV
+// copy-paste string) is the one field both providers always populate.
+// `encoded_image` becomes optional rather than removed: Asaas responses
+// keep sending it exactly as before (additive widening, not a breaking
+// change to the existing Asaas contract).
 const pixDetailsSchema = z.object({
-  encoded_image: z.string(),
+  encoded_image: z.string().optional(),
   payload: z.string(),
   expiration_date: z.string(),
+  qr_code_url: z.string().optional(),
 });
 
 const reservationDetailResponseSchema = reservationPublicFieldsSchema.extend({
@@ -106,28 +119,52 @@ const reservationDetailResponseSchema = reservationPublicFieldsSchema.extend({
 const createPaymentBodySchema = z.object({
   method: z.enum(['pix', 'card']),
   cpf_cnpj: z.string().min(11),
+  // Only used for a Pagar.me card charge (design's on-site tokenized card
+  // flow) — ignored for pix and for Asaas cards (Asaas's card flow doesn't
+  // use a token). See provider.ts's PCI note.
+  card_token: z.string().optional(),
 });
 
 const paymentResponseSchema = z.discriminatedUnion('method', [
   z.object({
     method: z.literal('pix'),
     payment_id: z.string(),
+    provider: providerNameSchema,
     qr_code: pixDetailsSchema,
   }),
   z.object({
     method: z.literal('card'),
     payment_id: z.string(),
-    invoice_url: z.string(),
+    provider: providerNameSchema,
+    // invoice_url stays only on the asaas branch (design's Call-site
+    // integration table) — optional here rather than removed, so the
+    // Asaas response shape is unchanged.
+    invoice_url: z.string().optional(),
+  }),
+  // sdd/asaas-pagarme-migration design's "Card reuse" note: a still-pending
+  // pagarme_card charge has nothing to re-show (no redirect, no live
+  // invoice) — this outcome tells the guest to keep waiting for the
+  // webhook instead of a duplicate order being silently created.
+  z.object({
+    method: z.literal('card_awaiting'),
+    payment_id: z.string(),
+    provider: providerNameSchema,
   }),
 ]);
 
+const paymentsConfigResponseSchema = z.object({
+  provider: providerNameSchema,
+  pagarme_public_key: z.string().optional(),
+});
+
 // Mirrors the CHECK constraint on payments.method (SPEC-modulo-7-gestion-
-// operativa.md § 5.1). kysely-codegen doesn't turn a CHECK constraint into a
-// TS literal union — payments.method is plain `string` at the type level —
-// so this local type is what gives toPublicPaymentMethod's switch its
-// exhaustiveness guarantee below: add a value to the CHECK constraint
-// without adding a case to the switch, and the build stops compiling
-// instead of silently dropping the new value.
+// operativa.md § 5.1, widened by sdd/asaas-pagarme-migration's migration to
+// add pagarme_pix/pagarme_card — task A15). kysely-codegen doesn't turn a
+// CHECK constraint into a TS literal union — payments.method is plain
+// `string` at the type level — so this local type is what gives
+// toPublicPaymentMethod's switch its exhaustiveness guarantee below: add a
+// value to the CHECK constraint without adding a case to the switch, and
+// the build stops compiling instead of silently dropping the new value.
 //
 // This exact class of gap — 7A widened payments.method from ('pix','card')
 // to this wider set, and this file kept comparing the raw DB value against
@@ -137,11 +174,13 @@ const paymentResponseSchema = z.discriminatedUnion('method', [
 // to: ConfirmationStep.tsx (~L46/57, decides whether to show the PIX QR or
 // the "awaiting card" state when the guest reloads) and ReservarPage.tsx
 // (initial fetch after the Asaas card-payment redirect).
-type KnownPaymentDbMethod = 'asaas_pix' | 'asaas_card' | 'cash' | 'external' | 'pix_manual';
+type KnownPaymentDbMethod = 'asaas_pix' | 'asaas_card' | 'pagarme_pix' | 'pagarme_card' | 'cash' | 'external' | 'pix_manual';
 
 const KNOWN_PAYMENT_DB_METHODS = new Set<string>([
   'asaas_pix',
   'asaas_card',
+  'pagarme_pix',
+  'pagarme_card',
   'cash',
   'external',
   'pix_manual',
@@ -151,12 +190,14 @@ function isKnownPaymentDbMethod(method: string): method is KnownPaymentDbMethod 
   return KNOWN_PAYMENT_DB_METHODS.has(method);
 }
 
-/** Only 'asaas_pix'/'asaas_card' have a live QR/invoice to show — manually-registered payments (§ 5.2 camino B) map to null on purpose. */
+/** Only asaas_pix/asaas_card/pagarme_pix/pagarme_card have a live QR/invoice to show — manually-registered payments (§ 5.2 camino B) map to null on purpose. */
 function toPublicPaymentMethod(dbMethod: KnownPaymentDbMethod): 'pix' | 'card' | null {
   switch (dbMethod) {
     case 'asaas_pix':
+    case 'pagarme_pix':
       return 'pix';
     case 'asaas_card':
+    case 'pagarme_card':
       return 'card';
     case 'cash':
     case 'external':
@@ -184,14 +225,24 @@ function paymentDetailsToResponse(details: PaymentDetails) {
     return {
       method: 'pix' as const,
       payment_id: details.paymentId,
+      provider: details.provider,
       qr_code: {
         encoded_image: details.qrCode.encodedImage,
         payload: details.qrCode.payload,
         expiration_date: details.qrCode.expirationDate,
+        qr_code_url: details.qrCode.imageUrl,
       },
     };
   }
-  return { method: 'card' as const, payment_id: details.paymentId, invoice_url: details.invoiceUrl };
+  if (details.method === 'card_awaiting') {
+    return { method: 'card_awaiting' as const, payment_id: details.paymentId, provider: details.provider };
+  }
+  return {
+    method: 'card' as const,
+    payment_id: details.paymentId,
+    provider: details.provider,
+    invoice_url: details.invoiceUrl,
+  };
 }
 
 export interface ReservationsPluginOptions {
@@ -354,34 +405,52 @@ const reservationsPlugin: FastifyPluginAsync<ReservationsPluginOptions> = async 
         } else {
           const publicMethod = toPublicPaymentMethod(activePayment.method);
 
-          // Only worth a live Asaas round-trip while the payment is still
-          // actionable by the guest (pending) — avoids hammering Asaas from
-          // frontend polling once the payment is settled either way. The
-          // asaas_payment_id null check is for manually-registered payments
-          // (SPEC-modulo-7 § 5.2 camino B) — those never touch Asaas, and per
-          // that same section are always inserted as 'received', never
-          // 'pending', so this is defensive rather than an expected path.
+          // Only worth a live round-trip while the payment is still
+          // actionable by the guest (pending) — avoids hammering the
+          // provider from frontend polling once the payment is settled
+          // either way. sdd/asaas-pagarme-migration task A15/A17: the
+          // provider-agnostic lookup now dispatches by `activePayment.provider`
+          // instead of assuming Asaas — both PR1's migration backfill and
+          // A11's writes guarantee `provider`/`provider_payment_id` are set
+          // on every row this branch can reach (isKnownPaymentDbMethod
+          // already excludes cash/external/pix_manual, per § 5.2 camino B,
+          // which are always inserted as 'received', never 'pending').
           if (publicMethod) {
             payment = { method: publicMethod };
 
-            if (activePayment.status === 'pending' && activePayment.asaas_payment_id) {
+            if (activePayment.status === 'pending' && activePayment.provider && activePayment.provider_payment_id) {
+              const providerName = activePayment.provider as ProviderName;
+              const providerPaymentId = activePayment.provider_payment_id;
               try {
                 if (publicMethod === 'pix') {
-                  const qr = await getPixQrCode(activePayment.asaas_payment_id);
-                  payment.pix = {
-                    encoded_image: qr.encodedImage,
-                    payload: qr.payload,
-                    expiration_date: qr.expirationDate,
-                  };
-                } else {
-                  const remote = await getPayment(activePayment.asaas_payment_id);
+                  const adapter = getProvider(providerName);
+                  const qr = await adapter.fetchPixDetails?.(providerPaymentId);
+                  if (qr) {
+                    payment.pix = {
+                      encoded_image: qr.encodedImage,
+                      payload: qr.payload,
+                      expiration_date: qr.expirationDate,
+                      qr_code_url: qr.imageUrl,
+                    };
+                  }
+                } else if (providerName === 'asaas') {
+                  // Only Asaas has a live invoice_url to re-show — Pagar.me
+                  // card confirms exclusively via webhook (design's Data
+                  // Flow / security rule), nothing to refresh here for a
+                  // pagarme_card row.
+                  const remote = await getPayment(providerPaymentId);
                   payment.invoice_url = remote.invoiceUrl;
                 }
               } catch (err) {
-                if (!(err instanceof AsaasApiError)) throw err;
-                // Don't log `err` whole — AsaasApiError.body carries the guest's
-                // PII (name/email/phone/CPF) echoed back by Asaas.
-                fastify.log.warn({ status: err.status }, 'failed to refresh live payment details from Asaas');
+                if (err instanceof AsaasApiError) {
+                  // Don't log `err` whole — AsaasApiError.body carries the
+                  // guest's PII (name/email/phone/CPF) echoed back by Asaas.
+                  fastify.log.warn({ status: err.status }, 'failed to refresh live payment details from Asaas');
+                } else if (err instanceof PagarmeApiError) {
+                  fastify.log.warn({ status: err.status }, 'failed to refresh live payment details from Pagar.me');
+                } else {
+                  throw err;
+                }
               }
             }
           }
@@ -420,7 +489,7 @@ const reservationsPlugin: FastifyPluginAsync<ReservationsPluginOptions> = async 
     },
     async (request, reply) => {
       const { code } = request.params;
-      const { method, cpf_cnpj } = request.body;
+      const { method, cpf_cnpj, card_token } = request.body;
 
       const row = await db
         .selectFrom('reservations')
@@ -441,7 +510,7 @@ const reservationsPlugin: FastifyPluginAsync<ReservationsPluginOptions> = async 
       const expiresAt = row.expires_at;
 
       try {
-        const details = await createOrReuseAsaasPayment(db, {
+        const details = await createOrReuseProviderPayment(db, {
           reservationId: row.id,
           code,
           kind: 'deposit',
@@ -452,6 +521,7 @@ const reservationsPlugin: FastifyPluginAsync<ReservationsPluginOptions> = async 
           guestEmail: row.guest_email ?? '',
           guestPhone: row.guest_phone ?? '',
           cpfCnpj: cpf_cnpj,
+          cardToken: card_token,
         });
 
         reply.status(201);
@@ -468,9 +538,30 @@ const reservationsPlugin: FastifyPluginAsync<ReservationsPluginOptions> = async 
           request.log.warn({ status: err.status, body: err.body }, 'asaas_request_failed');
           throw httpError(502, 'asaas_request_failed');
         }
+        if (err instanceof PagarmeApiError) {
+          // Same reasoning as AsaasApiError above — PagarmeApiError carries
+          // the RESPONSE body only (never the request body, which can hold
+          // a card_token — see pagarmeClient.ts's PCI note), but still not
+          // safe to echo to the client.
+          request.log.warn({ status: err.status, body: err.body }, 'pagarme_request_failed');
+          throw httpError(502, 'pagarme_request_failed');
+        }
         throw err;
       }
     },
+  );
+
+  // sdd/asaas-pagarme-migration task A15 — lets the frontend learn the
+  // active provider from the API rather than a Vite build-time flag
+  // (design decision A4): a rollback is then one backend env var + restart,
+  // never a frontend rebuild+deploy.
+  fastify.withTypeProvider<ZodTypeProvider>().get(
+    '/payments/config',
+    { schema: { response: { 200: paymentsConfigResponseSchema } } },
+    async () => ({
+      provider: config.payments.provider,
+      pagarme_public_key: config.payments.provider === 'pagarme' ? config.pagarme.publicKey : undefined,
+    }),
   );
 };
 

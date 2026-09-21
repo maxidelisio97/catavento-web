@@ -34,8 +34,8 @@
  */
 import { sql, type Kysely, type Transaction } from 'kysely';
 import type { DB } from '../db/types.js';
-import { getPayment } from '../asaasClient.js';
 import { processPaymentReceived } from '../availability/confirmPendingReservation.js';
+import { getProvider, type ProviderName } from '../payments/provider.js';
 
 export class OverpaymentError extends Error {
   constructor(
@@ -45,9 +45,6 @@ export class OverpaymentError extends Error {
     super(`Payment of ${attemptedAmountCents} cents exceeds balance due of ${balanceDueCents} cents`);
   }
 }
-
-/** Asaas statuses that mean "money has moved" (received or on its way to us) — same set createOrReusePayment.ts uses. */
-const RECEIVED_LIKE_STATUSES = new Set(['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH']);
 
 /**
  * Cheap pre-check against `reservation_balances` (RECEIVED payments only) —
@@ -73,20 +70,37 @@ export async function assertNotOverpaying(db: Kysely<DB>, reservationId: number,
 }
 
 /**
- * Reconciles `pending` Asaas payments (any kind) that are old enough to
+ * sdd/asaas-pagarme-migration design (obs #257), decision A12 — THE danger
+ * site this PR exists to fix (task brief's flagged risk #1). This used to
+ * filter `.where('method', 'in', ['asaas_pix', 'asaas_card'])` — a plain
+ * runtime string array with ZERO compile-time protection. The moment
+ * Pagar.me payments exist with `method IN ('pagarme_pix','pagarme_card')`,
+ * that filter would silently stop seeing them, reopening the exact
+ * overpayment gap this guard exists to close for an entire provider. Fixed
+ * per the design's exact specified condition: `provider IS NOT NULL`
+ * (`provider_payment_id IS NOT NULL` is the same predicate here, since the
+ * `payments_provider_pairing_check` constraint makes the two co-nullable —
+ * kept as its own clause for clarity, not redundancy). This closes the gap
+ * for BOTH providers uniformly — it does not special-case Pagar.me by
+ * adding it to a method list (that would just repeat the same fragile
+ * pattern this fix removes).
+ *
+ * Reconciles `pending` payments (any provider, any kind) that are old enough to
  * plausibly have expired — `created_at < current_date` — against their real
- * Asaas status, so a dangling pending row from a different kind doesn't
- * either (a) silently inflate the "money at risk" sum and block a
- * legitimate new charge, or (b) get marked `failed` when Asaas actually DID
- * receive it (a lost/delayed webhook), which would hide real money from
- * `reservation_balances` and make the balance look bigger than it is —
- * exactly the kind of bug this whole fix exists to prevent.
+ * remote status (per-row dispatch via `getProvider(row.provider)` — this is
+ * what keeps drain-era Asaas rows resolving against Asaas even after the
+ * flag flips to Pagar.me), so a dangling pending row from a different kind
+ * doesn't either (a) silently inflate the "money at risk" sum and block a
+ * legitimate new charge, or (b) get marked `failed` when the provider
+ * actually DID receive it (a lost/delayed webhook), which would hide real
+ * money from `reservation_balances` and make the balance look bigger than
+ * it is — exactly the kind of bug this whole fix exists to prevent.
  *
  * Bounded cost: a charge is created with `dueDate` = today, so `created_at`'s
  * date IS the due date — a row created today is never touched here (no
  * remote call), it's trusted as still legitimately outstanding. Only a
- * genuinely stale leftover pays the cost of one `getPayment` call. In the
- * normal flow (one charge per kind per day) this runs zero Asaas requests.
+ * genuinely stale leftover pays the cost of one `fetchStatus` call. In the
+ * normal flow (one charge per kind per day) this runs zero remote requests.
  *
  * Same 3-way branch createOrReusePayment.ts's same-kind reconciliation uses
  * (PENDING/AWAITING_RISK_ANALYSIS stays pending; RECEIVED-like -> received;
@@ -117,32 +131,37 @@ export async function assertNotOverpaying(db: Kysely<DB>, reservationId: number,
  * a new payment on top of a ledger that couldn't be brought up to date,
  * rather than silently proceeding.
  */
-export async function reconcileStalePendingAsaas(trx: Transaction<DB>, reservationId: number): Promise<void> {
+export async function reconcileStalePendingProviderPayments(trx: Transaction<DB>, reservationId: number): Promise<void> {
   const staleRows = await trx
     .selectFrom('payments')
-    .select(['id', 'asaas_payment_id'])
+    .select(['id', 'provider', 'provider_payment_id'])
     .where('reservation_id', '=', reservationId)
     .where('status', '=', 'pending')
-    .where('method', 'in', ['asaas_pix', 'asaas_card'])
-    .where('asaas_payment_id', 'is not', null)
+    .where('provider', 'is not', null)
+    .where('provider_payment_id', 'is not', null)
     .where('created_at', '<', sql<Date>`current_date`)
     .execute();
 
   for (const row of staleRows) {
-    // Guarded by the `where('asaas_payment_id', 'is not', null)` above, but
-    // the column type is still nullable — narrow it for getPayment's string param.
-    if (row.asaas_payment_id == null) continue;
+    // Guarded by the `where('provider', 'is not', null)` /
+    // `where('provider_payment_id', 'is not', null)` above, but the column
+    // types are still nullable — narrow them for getProvider/fetchStatus.
+    if (row.provider == null || row.provider_payment_id == null) continue;
 
-    const remote = await getPayment(row.asaas_payment_id);
+    const providerName = row.provider as ProviderName;
+    const providerPaymentId = row.provider_payment_id;
+    const adapter = getProvider(providerName);
+    const remoteStatus = await adapter.fetchStatus(providerPaymentId);
 
-    if (remote.status === 'PENDING' || remote.status === 'AWAITING_RISK_ANALYSIS') {
+    if (remoteStatus === 'pending') {
       continue; // still genuinely outstanding, keep counting it as pending
     }
 
-    if (RECEIVED_LIKE_STATUSES.has(remote.status)) {
+    if (remoteStatus === 'received') {
       await processPaymentReceived(trx, {
-        asaasPaymentId: row.asaas_payment_id,
-        rawEvent: { source: 'reconciliation', asaasStatus: remote.status },
+        provider: providerName,
+        providerPaymentId,
+        rawEvent: { source: 'reconciliation', provider: providerName, status: remoteStatus },
       });
     } else {
       await trx.updateTable('payments').set({ status: 'failed', updated_at: new Date() }).where('id', '=', row.id).execute();
@@ -151,19 +170,20 @@ export async function reconcileStalePendingAsaas(trx: Transaction<DB>, reservati
 }
 
 /**
- * The authoritative, race-safe check: reconciles stale pending Asaas rows
+ * The authoritative, race-safe check: reconciles stale pending provider rows
  * first, then rejects if `amountCents` would push RECEIVED + still-pending
- * Asaas (across ALL kinds, not just the one being charged) past total_cents.
- * MUST run inside the same pg_advisory_xact_lock(reservationId) transaction
- * the caller already holds, right before the charge/insert actually happens
- * — that's what closes the gap a lock-free check can't.
+ * provider payments (across ALL kinds AND providers, not just the one being
+ * charged) past total_cents. MUST run inside the same
+ * pg_advisory_xact_lock(reservationId) transaction the caller already holds,
+ * right before the charge/insert actually happens — that's what closes the
+ * gap a lock-free check can't.
  */
-export async function assertNotOverpayingWithPendingAsaas(
+export async function assertNotOverpayingWithPendingProvider(
   trx: Transaction<DB>,
   reservationId: number,
   amountCents: number,
 ): Promise<void> {
-  await reconcileStalePendingAsaas(trx, reservationId);
+  await reconcileStalePendingProviderPayments(trx, reservationId);
 
   const balance = await trx
     .selectFrom('reservation_balances')
@@ -171,17 +191,20 @@ export async function assertNotOverpayingWithPendingAsaas(
     .where('reservation_id', '=', reservationId)
     .executeTakeFirst();
 
-  const pendingAsaas = await trx
+  // sdd/asaas-pagarme-migration PR 4 (task A12) — was `.where('method', 'in',
+  // ['asaas_pix', 'asaas_card'])`, the SAME danger site as the query above:
+  // `provider IS NOT NULL` closes the gap uniformly for both providers.
+  const pendingProvider = await trx
     .selectFrom('payments')
     .select(sql<string>`COALESCE(SUM(amount_cents), 0)`.as('sum'))
     .where('reservation_id', '=', reservationId)
     .where('status', '=', 'pending')
-    .where('method', 'in', ['asaas_pix', 'asaas_card'])
+    .where('provider', 'is not', null)
     .executeTakeFirst();
 
   const balanceDueCents = Number(balance?.balance_due_cents ?? 0);
-  const pendingAsaasCents = Number(pendingAsaas?.sum ?? 0);
-  const availableCents = balanceDueCents - pendingAsaasCents;
+  const pendingProviderCents = Number(pendingProvider?.sum ?? 0);
+  const availableCents = balanceDueCents - pendingProviderCents;
 
   if (amountCents > availableCents) {
     throw new OverpaymentError(availableCents, amountCents);

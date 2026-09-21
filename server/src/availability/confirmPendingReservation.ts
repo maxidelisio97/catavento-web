@@ -33,6 +33,7 @@ import { releaseReservationNights } from './releaseReservationNights.js';
 import { eachNightUTC } from '../shared/dateUtils.js';
 import { assertReservationNightsConsistency } from './checkReservationNightsConsistency.js';
 import { schedulePushAvailabilityForReservation } from '../channex/pushAvailability.js';
+import type { ProviderName } from '../payments/provider.js';
 
 export type ConfirmOutcome =
   /** Payment row didn't exist locally — nothing to do (ack the webhook anyway). */
@@ -46,8 +47,18 @@ export type ConfirmOutcome =
   /** Reservation moved pending_payment -> payment_conflict (see module docstring). */
   | { kind: 'payment_conflict'; reservationId: number; overpaymentFlagged: boolean };
 
+/**
+ * sdd/asaas-pagarme-migration design (obs #257), decision A6/A13 —
+ * generalized from `{ asaasPaymentId }` to a provider-agnostic pair. Every
+ * caller (the Asaas webhook, the Pagar.me webhook, and both reconciliation
+ * sweeps) now identifies the payment being confirmed by `(provider,
+ * providerPaymentId)`, matching the `payments` table's new columns —
+ * `asaas_payment_id` stays dual-written for Asaas rows but is no longer
+ * read here.
+ */
 export interface ProcessPaymentReceivedInput {
-  asaasPaymentId: string;
+  provider: ProviderName;
+  providerPaymentId: string;
   rawEvent: unknown;
 }
 
@@ -92,7 +103,8 @@ async function runProcessPaymentReceived(
   const payment = await trx
     .selectFrom('payments')
     .selectAll()
-    .where('asaas_payment_id', '=', input.asaasPaymentId)
+    .where('provider', '=', input.provider)
+    .where('provider_payment_id', '=', input.providerPaymentId)
     .forUpdate()
     .executeTakeFirst();
 

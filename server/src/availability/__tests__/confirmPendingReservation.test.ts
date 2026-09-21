@@ -85,6 +85,8 @@ async function insertPayment(
     .values({
       reservation_id: reservationId,
       asaas_payment_id: asaasPaymentId,
+      provider: 'asaas',
+      provider_payment_id: asaasPaymentId,
       method: 'asaas_pix',
       amount_cents: 10000,
       status,
@@ -103,11 +105,58 @@ beforeEach(async () => {
 describe('processPaymentReceived', () => {
   it('returns unknown_payment when no local payment row matches', async () => {
     const outcome = await processPaymentReceived(testDb, {
-      asaasPaymentId: 'does-not-exist',
+      provider: 'asaas' as const,
+      providerPaymentId: 'does-not-exist',
       rawEvent: { event: 'PAYMENT_RECEIVED' },
     });
 
     expect(outcome).toEqual({ kind: 'unknown_payment' });
+  });
+
+  // sdd/asaas-pagarme-migration PR 4 (task A13) — provider-agnostic lookup
+  // (spec's "Cross-provider lookup" requirement): a Pagar.me row must
+  // resolve by (provider, provider_payment_id), never by asaas_payment_id
+  // (which stays null for it), and an Asaas row with the SAME
+  // provider_payment_id-shaped string but the OTHER provider must not
+  // cross-match.
+  it('resolves a Pagar.me payment by (provider, provider_payment_id) — never by asaas_payment_id', async () => {
+    const roomId = await insertTestRoom({ totalUnits: 1 });
+    const reservationId = await insertReservation({ roomId });
+    await testDb
+      .insertInto('payments')
+      .values({
+        reservation_id: reservationId,
+        asaas_payment_id: null,
+        provider: 'pagarme',
+        provider_payment_id: 'or_pagarme_1',
+        method: 'pagarme_pix',
+        amount_cents: 10000,
+        status: 'pending',
+        kind: 'deposit',
+      })
+      .execute();
+
+    const crossProviderMiss = await processPaymentReceived(testDb, {
+      provider: 'asaas' as const,
+      providerPaymentId: 'or_pagarme_1',
+      rawEvent: { type: 'order.paid' },
+    });
+    expect(crossProviderMiss).toEqual({ kind: 'unknown_payment' });
+
+    const outcome = await processPaymentReceived(testDb, {
+      provider: 'pagarme' as const,
+      providerPaymentId: 'or_pagarme_1',
+      rawEvent: { type: 'order.paid' },
+    });
+
+    expect(outcome).toEqual({ kind: 'confirmed', reservationId, overpaymentFlagged: false });
+
+    const reservation = await testDb
+      .selectFrom('reservations')
+      .select('status')
+      .where('id', '=', reservationId)
+      .executeTakeFirstOrThrow();
+    expect(reservation.status).toBe('confirmed');
   });
 
   it('confirms a pending reservation and marks the payment received', async () => {
@@ -116,7 +165,8 @@ describe('processPaymentReceived', () => {
     await insertPayment(reservationId, 'pay_1');
 
     const outcome = await processPaymentReceived(testDb, {
-      asaasPaymentId: 'pay_1',
+      provider: 'asaas' as const,
+      providerPaymentId: 'pay_1',
       rawEvent: { event: 'PAYMENT_RECEIVED' },
     });
 
@@ -144,11 +194,13 @@ describe('processPaymentReceived', () => {
     await insertPayment(reservationId, 'pay_2');
 
     const first = await processPaymentReceived(testDb, {
-      asaasPaymentId: 'pay_2',
+      provider: 'asaas' as const,
+      providerPaymentId: 'pay_2',
       rawEvent: { event: 'PAYMENT_RECEIVED' },
     });
     const second = await processPaymentReceived(testDb, {
-      asaasPaymentId: 'pay_2',
+      provider: 'asaas' as const,
+      providerPaymentId: 'pay_2',
       rawEvent: { event: 'PAYMENT_RECEIVED' },
     });
 
@@ -169,7 +221,8 @@ describe('processPaymentReceived', () => {
     await insertPayment(reservationId, 'pay_3');
 
     const outcome = await processPaymentReceived(testDb, {
-      asaasPaymentId: 'pay_3',
+      provider: 'asaas' as const,
+      providerPaymentId: 'pay_3',
       rawEvent: { event: 'PAYMENT_RECEIVED' },
     });
 
@@ -200,7 +253,8 @@ describe('processPaymentReceived', () => {
       .execute();
 
     const outcome = await processPaymentReceived(testDb, {
-      asaasPaymentId: 'pay_4',
+      provider: 'asaas' as const,
+      providerPaymentId: 'pay_4',
       rawEvent: { event: 'PAYMENT_RECEIVED' },
     });
 
@@ -271,7 +325,8 @@ describe('processPaymentReceived', () => {
 
     // The stale hold's late webhook finally arrives.
     const outcome = await processPaymentReceived(testDb, {
-      asaasPaymentId: 'pay_race',
+      provider: 'asaas' as const,
+      providerPaymentId: 'pay_race',
       rawEvent: { event: 'PAYMENT_RECEIVED' },
     });
 
@@ -308,7 +363,8 @@ describe('processPaymentReceived', () => {
     await insertPayment(reservationId, 'pay_5');
 
     const outcome = await processPaymentReceived(testDb, {
-      asaasPaymentId: 'pay_5',
+      provider: 'asaas' as const,
+      providerPaymentId: 'pay_5',
       rawEvent: { event: 'PAYMENT_RECEIVED' },
     });
 
@@ -346,7 +402,8 @@ describe('processPaymentReceived', () => {
       .execute();
 
     const outcome = await processPaymentReceived(testDb, {
-      asaasPaymentId: 'pay_balance_1',
+      provider: 'asaas' as const,
+      providerPaymentId: 'pay_balance_1',
       rawEvent: { event: 'PAYMENT_RECEIVED' },
     });
 
@@ -389,11 +446,13 @@ describe('processPaymentReceived', () => {
     await insertPayment(reservationId, 'pay_balance_2', 'pending', 'balance');
 
     const first = await processPaymentReceived(testDb, {
-      asaasPaymentId: 'pay_balance_2',
+      provider: 'asaas' as const,
+      providerPaymentId: 'pay_balance_2',
       rawEvent: { event: 'PAYMENT_RECEIVED' },
     });
     const second = await processPaymentReceived(testDb, {
-      asaasPaymentId: 'pay_balance_2',
+      provider: 'asaas' as const,
+      providerPaymentId: 'pay_balance_2',
       rawEvent: { event: 'PAYMENT_RECEIVED' },
     });
 
@@ -423,6 +482,8 @@ describe('processPaymentReceived', () => {
       .values({
         reservation_id: reservationId,
         asaas_payment_id: 'pay_deposit_full',
+        provider: 'asaas',
+        provider_payment_id: 'pay_deposit_full',
         method: 'asaas_pix',
         kind: 'deposit',
         amount_cents: 20000,
@@ -436,7 +497,8 @@ describe('processPaymentReceived', () => {
     await insertPayment(reservationId, 'pay_over', 'pending', 'balance');
 
     const outcome = await processPaymentReceived(testDb, {
-      asaasPaymentId: 'pay_over',
+      provider: 'asaas' as const,
+      providerPaymentId: 'pay_over',
       rawEvent: { event: 'PAYMENT_RECEIVED' },
     });
 

@@ -36,7 +36,7 @@ const webhooksPlugin: FastifyPluginAsync<WebhooksPluginOptions> = async (fastify
       return reply.status(200).send({ received: true });
     }
 
-    const outcome = await processPaymentReceived(db, { asaasPaymentId: payment.id, rawEvent: request.body });
+    const outcome = await processPaymentReceived(db, { provider: 'asaas', providerPaymentId: payment.id, rawEvent: request.body });
 
     if (outcome.kind === 'unknown_payment') {
       fastify.log.warn({ paymentId: payment.id }, 'asaas webhook for unknown local payment');

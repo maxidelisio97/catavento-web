@@ -1,27 +1,32 @@
 /**
- * sdd/asaas-pagarme-migration design (obs #257), decision A9 — POST
- * /webhooks/pagarme. Raw-body capture + HMAC signature preHandler +
- * event-routing SKELETON only (task A9, PR 3 of 6).
+ * sdd/asaas-pagarme-migration design (obs #257), decision A9/A14 — POST
+ * /webhooks/pagarme. Raw-body capture + HMAC signature preHandler + REAL
+ * event routing (task A14, PR 4 of 6 — replaces PR 3's log-only skeleton).
  *
  * ┌─────────────────────────────────────────────────────────────────────┐
- * │ Non-negotiable (server/CLAUDE.md, task brief): a request with a      │
- * │ missing/invalid signature is rejected BEFORE any DB read or write,   │
- * │ full stop. That check happens first in the handler below, before     │
- * │ `request.body` is even looked at. See webhooksPagarme.test.ts for    │
- * │ the tests proving this (zero payment rows written on 401).           │
+ * │ Non-negotiable (server/CLAUDE.md, spec's "Webhook signature           │
+ * │ verification" requirement): a request with a missing/invalid          │
+ * │ signature is rejected BEFORE any DB read or write, full stop. That    │
+ * │ check happens first in the handler below, before `request.body` is    │
+ * │ even looked at. `order.paid` is the ONLY event type allowed to move a │
+ * │ reservation to `confirmed` (spec's "Event → status mapping"           │
+ * │ requirement) — it is the ONLY branch below that calls                 │
+ * │ `processPaymentReceived`. Every other known event only updates        │
+ * │ `payments.status`, never `reservations.status`.                       │
  * └─────────────────────────────────────────────────────────────────────┘
  *
- * Deliberately does NOT call `processPaymentReceived`
- * (`confirmPendingReservation.ts`) yet: that function's
- * `ProcessPaymentReceivedInput` still only accepts `{ asaasPaymentId,
- * rawEvent }` (provider-specific). Generalizing it to `{ provider,
- * providerPaymentId, rawEvent }` and wiring the lookup by `(provider,
- * provider_payment_id)` is task A13 (PR 4) — reaching into that ahead of
- * schedule here would mean either lying about the provider or duplicating
- * A13's rename early, both explicitly out of this PR's scope per the task
- * brief. This route verifies the signature, parses and routes the event,
- * logs what it *would* do, and acks 200 — no DB write of any kind on this
- * path yet.
+ * `order.paid` routes through `processPaymentReceived` — the SAME function
+ * the Asaas webhook (webhooks.ts) uses, post-signature-verification only —
+ * so it gets the exact same rigor: advisory lock, idempotency, overpayment
+ * flag, `assertReservationNightsConsistency`, and `isReservationActive`
+ * (all inside confirmPendingReservation.ts, untouched by this file).
+ * `order.payment_failed`/`checkout.canceled` mark the local row `failed`
+ * (never touching `reservations.status`) so the guest can retry — a plain
+ * UPDATE, not `processPaymentReceived`, since there is no "money received"
+ * state transition on this path. `charge.refunded` is explicitly
+ * LOG-ONLY per the design's Open Questions ("refund business logic is out
+ * of scope for this migration") — it never confirms and never re-opens an
+ * already-cancelled/confirmed reservation.
  *
  * Raw-body capture: Pagar.me signs the exact bytes it sent, so this plugin
  * registers its OWN `application/json` content-type parser (Fastify plugin
@@ -34,17 +39,22 @@
  * docstring).
  */
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
+import type { Kysely } from 'kysely';
+import type { DB } from '../db/types.js';
+import { db as prodDb } from '../db/client.js';
 import { config } from '../config.js';
 import { isValidPagarmeSignature, PAGARME_SIGNATURE_HEADER } from './verifyPagarmeSignature.js';
+import { processPaymentReceived } from '../availability/confirmPendingReservation.js';
 
 /**
  * Per spec (obs #256) and design's event list. `order.paid` is the ONLY
- * event allowed to move a reservation toward confirmation, once task
- * A13/A14 wires that up — this route doesn't confirm anything yet, but the
- * distinction is already encoded here so the routing logic doesn't need to
- * change shape when A14 lands, only gain a real DB call.
+ * event allowed to move a reservation toward confirmation.
+ * `order.payment_failed`/`checkout.canceled` mark the local payment row
+ * failed without touching reservation state. `charge.refunded` is
+ * log-only (design's Open Questions — refund logic out of scope).
  */
 const CONFIRMING_EVENT = 'order.paid';
+const FAILURE_EVENTS = new Set(['order.payment_failed', 'checkout.canceled']);
 const KNOWN_EVENTS = new Set(['order.paid', 'order.payment_failed', 'charge.refunded', 'checkout.canceled']);
 
 interface PagarmeWebhookRequest extends FastifyRequest {
@@ -69,7 +79,14 @@ interface PagarmeWebhookBody {
   };
 }
 
-const webhooksPagarmePlugin: FastifyPluginAsync = async (fastify) => {
+export interface WebhooksPagarmePluginOptions {
+  /** Overridable for tests — production uses the shared db client by default. */
+  db?: Kysely<DB>;
+}
+
+const webhooksPagarmePlugin: FastifyPluginAsync<WebhooksPagarmePluginOptions> = async (fastify, opts) => {
+  const db = opts.db ?? prodDb;
+
   // Scoped to this plugin's encapsulation context only (Fastify's default
   // plugin behavior) — does not affect the global `application/json`
   // parser used by every other route in `index.ts`.
@@ -106,13 +123,76 @@ const webhooksPagarmePlugin: FastifyPluginAsync = async (fastify) => {
 
     const objectId = data?.order?.id ?? data?.charge?.id ?? data?.id;
 
+    if (!objectId) {
+      // Known event but no id anywhere in the envelope this type accepts
+      // (design's Open Questions — order-vs-charge id ambiguity is still
+      // covered defensively above; this is the case where NONE of the
+      // three shapes matched) — nothing to look up, ack and move on rather
+      // than 500 or retry-loop Pagar.me forever on an envelope we can't act on.
+      fastify.log.warn({ type }, 'pagarme webhook: known event but no object id found in envelope — nothing to do');
+      return reply.status(200).send({ received: true });
+    }
+
+    if (type === CONFIRMING_EVENT) {
+      // THE only path that can confirm a reservation — routed through the
+      // exact same function (and thus the exact same rigor: advisory lock,
+      // idempotency, overpayment flag, assertReservationNightsConsistency)
+      // the Asaas webhook uses. Never a shortcut.
+      const outcome = await processPaymentReceived(db, {
+        provider: 'pagarme',
+        providerPaymentId: objectId,
+        rawEvent: request.body,
+      });
+
+      if (outcome.kind === 'unknown_payment') {
+        fastify.log.warn({ objectId }, 'pagarme webhook: order.paid for unknown local payment');
+      } else if (outcome.kind === 'payment_conflict') {
+        fastify.log.error(
+          { objectId, reservationId: outcome.reservationId },
+          'pagarme payment received after the room became unavailable — reservation moved to payment_conflict, refund is manual',
+        );
+      }
+
+      if (
+        (outcome.kind === 'confirmed' || outcome.kind === 'payment_conflict' || outcome.kind === 'payment_marked_received_only') &&
+        outcome.overpaymentFlagged
+      ) {
+        fastify.log.error(
+          { objectId, reservationId: outcome.reservationId },
+          'pagarme payment received pushed balance_due_cents negative — flagged on the payment row, refund is manual',
+        );
+      }
+
+      return reply.status(200).send({ received: true });
+    }
+
+    if (FAILURE_EVENTS.has(type)) {
+      // Marks the local row failed so the guest can retry — never touches
+      // reservations.status. Scoped to 'pending' so an already-'received'
+      // row (e.g. a late/duplicate failure delivery racing a confirmed
+      // order.paid) can never be downgraded by an out-of-order webhook.
+      const result = await db
+        .updateTable('payments')
+        .set({ status: 'failed', updated_at: new Date() })
+        .where('provider', '=', 'pagarme')
+        .where('provider_payment_id', '=', objectId)
+        .where('status', '=', 'pending')
+        .executeTakeFirst();
+
+      fastify.log.info(
+        { type, objectId, updated: Number(result.numUpdatedRows) },
+        'pagarme webhook: payment marked failed',
+      );
+      return reply.status(200).send({ received: true });
+    }
+
+    // charge.refunded: log-only per the design's Open Questions ("refund
+    // business logic is out of scope for this migration") — never confirms,
+    // never re-opens an already-settled reservation, zero DB writes.
     fastify.log.info(
       { type, objectId },
-      type === CONFIRMING_EVENT
-        ? 'pagarme webhook: order.paid received — confirmation wiring pending (task A13/A14, PR 4)'
-        : `pagarme webhook: ${type} received — status-only wiring pending (task A13/A14, PR 4)`,
+      'pagarme webhook: charge.refunded received — log-only, no state change (refund logic out of scope)',
     );
-
     return reply.status(200).send({ received: true });
   });
 };

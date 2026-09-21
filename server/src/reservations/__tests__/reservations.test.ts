@@ -42,19 +42,32 @@ const EXPECTED_TOTAL_CENTS = (() => {
 
 const getPixQrCode = vi.fn();
 const getPayment = vi.fn();
+const createCustomer = vi.fn();
+const createPayment = vi.fn();
 
-// Only getPixQrCode/getPayment are mocked (createCustomer/createPayment
-// aren't touched by this file's tests) — the live-enrichment branch of
-// GET /api/reservations/:code is what regression-tests the method-mapping
-// fix below; no other test in this file reaches Asaas at all.
+// sdd/asaas-pagarme-migration PR 4 (task A11): createCustomer/createPayment
+// are now also mocked — the happy-path POST test below exercises the
+// generalized createOrReuseProviderPayment's create-path (via asaasAdapter,
+// which wraps these same asaasClient functions), proving the response
+// carries `provider` per the design's Call-site integration table.
 vi.mock('../../asaasClient.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../asaasClient.js')>();
   return {
     ...actual,
     getPixQrCode: (...args: unknown[]) => getPixQrCode(...args),
     getPayment: (...args: unknown[]) => getPayment(...args),
+    createCustomer: (...args: unknown[]) => createCustomer(...args),
+    createPayment: (...args: unknown[]) => createPayment(...args),
   };
 });
+
+// sdd/asaas-pagarme-migration PR 4 (task A11/A15): the GET endpoint's live
+// payment-detail refresh now dispatches through the provider adapter
+// registry instead of calling asaasClient.js directly — self-register the
+// real asaasAdapter (which wraps the mocked asaasClient functions above) so
+// getProvider('asaas') resolves. This file's payment fixtures are all
+// asaas_pix/asaas_card, so pagarmeAdapter isn't needed here.
+await import('../../payments/asaasAdapter.js');
 
 const { default: reservationsPlugin } = await import('../../plugins/reservations.js');
 
@@ -428,6 +441,8 @@ describe('GET /api/reservations/:code', () => {
       .values({
         reservation_id: reservation.id,
         asaas_payment_id: 'pay_regress_1',
+        provider: 'asaas',
+        provider_payment_id: 'pay_regress_1',
         method: 'asaas_pix',
         amount_cents: 10000,
         status: 'pending',
@@ -473,6 +488,8 @@ describe('GET /api/reservations/:code', () => {
       .values({
         reservation_id: reservation.id,
         asaas_payment_id: 'pay_regress_2',
+        provider: 'asaas',
+        provider_payment_id: 'pay_regress_2',
         method: 'asaas_card',
         amount_cents: 10000,
         status: 'pending',
@@ -661,6 +678,72 @@ describe('POST /api/reservations/:code/payment', () => {
 
     expect(response.statusCode).toBe(409);
     expect(response.json().error).toContain('RESERVATION_NOT_PAYABLE');
+  });
+
+  // sdd/asaas-pagarme-migration PR 4 (task A11/A15): happy-path proof that
+  // the response now carries `provider` (design's Call-site integration
+  // table) and that the default flag (PAYMENTS_PROVIDER unset in this test
+  // env) dispatches new charges to Asaas — the "default runtime behavior
+  // doesn't change yet" requirement from this PR's brief, proven, not
+  // assumed.
+  it('happy path (pix, default flag = asaas): 201, response carries provider: "asaas"', async () => {
+    const roomId = await insertTestRoom();
+    const inserted = await testDb
+      .insertInto('reservations')
+      .values({
+        room_id: roomId,
+        check_in: CHECK_IN,
+        check_out: CHECK_OUT,
+        guests: 2,
+        status: 'pending_payment',
+        expires_at: new Date(Date.now() + 30 * 60 * 1000),
+        total_cents: 20000,
+        deposit_cents: 10000,
+        guest_name: 'Maria Silva',
+        guest_email: 'maria@example.com',
+        guest_phone: '11999998888',
+        code: 'HAPPYPIX',
+      })
+      .returning('code')
+      .executeTakeFirstOrThrow();
+
+    createCustomer.mockResolvedValue({ id: 'cus_happy' });
+    createPayment.mockResolvedValue({ id: 'pay_happy', status: 'PENDING', invoiceUrl: 'https://asaas.test/inv/happy' });
+    getPixQrCode.mockResolvedValue({ encodedImage: 'img', payload: 'copy', expirationDate: '2026-09-01T00:00:00Z' });
+
+    const app = buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/reservations/${inserted.code}/payment`,
+      payload: { method: 'pix', cpf_cnpj: '12345678900' },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toEqual({
+      method: 'pix',
+      provider: 'asaas',
+      payment_id: 'pay_happy',
+      qr_code: { encoded_image: 'img', payload: 'copy', expiration_date: '2026-09-01T00:00:00Z' },
+    });
+
+    const row = await testDb
+      .selectFrom('payments')
+      .select(['provider', 'provider_payment_id', 'asaas_payment_id', 'method'])
+      .where('asaas_payment_id', '=', 'pay_happy')
+      .executeTakeFirstOrThrow();
+    expect(row.provider).toBe('asaas');
+    expect(row.provider_payment_id).toBe('pay_happy');
+    expect(row.method).toBe('asaas_pix');
+  });
+});
+
+describe('GET /api/payments/config', () => {
+  it('returns the active provider from config (default: asaas)', async () => {
+    const app = buildApp();
+    const response = await app.inject({ method: 'GET', url: '/api/payments/config' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ provider: 'asaas' });
   });
 });
 

@@ -105,7 +105,14 @@ describe('asaasAdapter', () => {
       });
     });
 
-    it('card: creates a customer + CREDIT_CARD payment, returns card details with no invoiceUrl leak, never calls getPixQrCode', async () => {
+    // sdd/asaas-pagarme-migration PR 4 (task A11, provider.ts's
+    // CreateChargeResult docstring): invoiceUrl DOES flow through now — the
+    // tasks artifact's A20 requires the Asaas checkout redirect to stay
+    // byte-identical once call sites dispatch through this adapter.
+    // Previously (PR 2) this asserted NO invoiceUrl leak; that assumption
+    // was wrong for Asaas specifically (right instinct for Pagar.me, which
+    // never gets one — see pagarmeAdapter.test.ts).
+    it('card: creates a customer + CREDIT_CARD payment, returns card details INCLUDING invoiceUrl (A20: asaas redirect stays byte-identical), never calls getPixQrCode', async () => {
       createCustomer.mockResolvedValue({ id: 'cus_1' });
       createPayment.mockResolvedValue({ id: 'pay_2', status: 'RECEIVED', invoiceUrl: 'https://asaas.test/inv/2' });
 
@@ -123,7 +130,7 @@ describe('asaasAdapter', () => {
       expect(result).toEqual({
         providerPaymentId: 'pay_2',
         status: 'received',
-        details: { method: 'card' },
+        details: { method: 'card', invoiceUrl: 'https://asaas.test/inv/2' },
       });
     });
   });
@@ -134,6 +141,15 @@ describe('asaasAdapter', () => {
 
       await expect(asaasAdapter.fetchStatus('pay_3')).resolves.toBe('received');
       expect(getPayment).toHaveBeenCalledWith('pay_3');
+    });
+  });
+
+  describe('fetchCardInvoiceUrl', () => {
+    it('refetches the live invoice_url for reuse of an existing pending card charge', async () => {
+      getPayment.mockResolvedValue({ id: 'pay_4', status: 'PENDING', invoiceUrl: 'https://asaas.test/inv/4' });
+
+      await expect(asaasAdapter.fetchCardInvoiceUrl!('pay_4')).resolves.toBe('https://asaas.test/inv/4');
+      expect(getPayment).toHaveBeenCalledWith('pay_4');
     });
   });
 

@@ -61,9 +61,19 @@ export type CreateChargeResult = {
   status: NormalizedRemoteStatus;
 } & (
   | { details: { method: 'pix'; qrCode: PixQrCode } }
-  // No `invoice_url`, no redirect — card confirmation happens exclusively
-  // via the provider's webhook (design's Data Flow / security rule).
-  | { details: { method: 'card' } }
+  // `invoiceUrl` is OPTIONAL and provider-specific: Asaas populates it (the
+  // existing card checkout redirect — sdd/asaas-pagarme-migration tasks
+  // artifact A20 explicitly requires "asaas path stays byte-identical", so
+  // this field must keep flowing through for Asaas). Pagar.me never
+  // populates it — card confirmation for Pagar.me happens exclusively via
+  // the provider's webhook (design's Data Flow / security rule), no
+  // redirect. Found during PR 4 (A11): the port originally had NO field
+  // here at all, which would have silently dropped Asaas's invoice_url the
+  // moment call sites started dispatching through this port — a real
+  // regression of the still-live production redirect flow. Fixed here
+  // rather than guessed at, since it's directly grounded in A20's explicit
+  // "byte-identical" requirement, not an invented business rule.
+  | { details: { method: 'card'; invoiceUrl?: string } }
 );
 
 export interface PaymentProviderAdapter {
@@ -73,6 +83,14 @@ export interface PaymentProviderAdapter {
   createCharge(input: CreateChargeInput): Promise<CreateChargeResult>;
   fetchStatus(providerPaymentId: string): Promise<NormalizedRemoteStatus>;
   fetchPixDetails?(providerPaymentId: string): Promise<PixQrCode>;
+  /**
+   * Refetches a live card checkout URL for REUSE of an existing pending
+   * charge (e.g. Asaas's invoice_url). Optional — a provider with no
+   * redirect-based card flow (Pagar.me) has nothing to re-show here; its
+   * pending card charges surface as a `card_awaiting` outcome instead (see
+   * createOrReusePayment.ts).
+   */
+  fetchCardInvoiceUrl?(providerPaymentId: string): Promise<string | undefined>;
 }
 
 /**
