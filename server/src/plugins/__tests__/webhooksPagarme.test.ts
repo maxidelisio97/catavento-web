@@ -301,3 +301,79 @@ describe('POST /webhooks/pagarme — task A14: order.paid is the ONLY event that
     expect(response.statusCode).toBe(200);
   });
 });
+
+/**
+ * SPECULATIVE — synthetic payloads only, per the route's own docstring
+ * ("UNVERIFIED — do not narrow this without a real captured webhook to
+ * confirm against", task B1 still open). These tests do NOT prove what
+ * Pagar.me actually sends; they only prove the fallback chain the code
+ * itself already implements (`data?.order?.id ?? data?.charge?.id ??
+ * data?.id`) behaves as written for each of the three accepted shapes, plus
+ * the "none matched" branch. Do not cite these as evidence of the real
+ * Pagar.me envelope shape.
+ */
+describe('POST /webhooks/pagarme — objectId fallback chain (SPECULATIVE, synthetic shapes only — see docstring)', () => {
+  it('id nested under data.order.id only (no data.id, no data.charge.id) -> extracted and processed (order.paid confirms)', async () => {
+    const paymentId = await seedPendingPayment();
+
+    const app = buildApp();
+    const body = JSON.stringify({ type: 'order.paid', data: { order: { id: 'or_test_1' } } });
+    const signature = sign(body);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/webhooks/pagarme',
+      headers: { 'content-type': 'application/json', [PAGARME_SIGNATURE_HEADER]: signature },
+      payload: body,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ received: true });
+    expect(await fetchPaymentStatus(paymentId)).toBe('received');
+  });
+
+  it('id nested under data.charge.id only (no data.id, no data.order.id) -> extracted and processed (order.paid confirms)', async () => {
+    const paymentId = await seedPendingPayment();
+
+    const app = buildApp();
+    const body = JSON.stringify({ type: 'order.paid', data: { charge: { id: 'or_test_1' } } });
+    const signature = sign(body);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/webhooks/pagarme',
+      headers: { 'content-type': 'application/json', [PAGARME_SIGNATURE_HEADER]: signature },
+      payload: body,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ received: true });
+    expect(await fetchPaymentStatus(paymentId)).toBe('received');
+  });
+
+  it('none of data.id/data.order.id/data.charge.id present for a known event type -> 200 ack, log-only, zero DB writes (documented "no object id found" branch)', async () => {
+    const paymentId = await seedPendingPayment();
+    const countBefore = await countPayments();
+
+    const app = buildApp();
+    // A known event type, but the envelope carries none of the three
+    // accepted id shapes anywhere under `data`.
+    const body = JSON.stringify({ type: 'order.paid', data: { unrelated_field: 'no id here' } });
+    const signature = sign(body);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/webhooks/pagarme',
+      headers: { 'content-type': 'application/json', [PAGARME_SIGNATURE_HEADER]: signature },
+      payload: body,
+    });
+
+    // No crash, no retry-loop trigger (500), no silent confirmation: safe
+    // 200 ack with zero DB writes, exactly as the route's own comment
+    // ("nothing to look up, ack and move on") describes.
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ received: true });
+    expect(await countPayments()).toBe(countBefore);
+    expect(await fetchPaymentStatus(paymentId)).toBe('pending');
+  });
+});
