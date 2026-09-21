@@ -634,6 +634,55 @@ describe('POST /panel/reservations/:code/payment', () => {
     expect(row.method).toBe('asaas_pix');
   });
 
+  // sdd/asaas-pagarme-migration task A16/gap review: reservationActions.ts's
+  // own comment documents that a NEW charge always dispatches through
+  // getActiveProvider() (config.payments.provider), never the literal method
+  // the operator picked — an operator choosing 'pagarme_pix' while the flag
+  // is still 'asaas' (the current default, unset PAYMENTS_PROVIDER in every
+  // test env file) gets an asaas_pix charge, matching createOrReusePayment's
+  // "NEW charge: dispatch by the active flag" branch. This was never actually
+  // asserted anywhere before this test — the widened method enum only made
+  // 'pagarme_pix'/'pagarme_card' reachable as real request bodies in this PR.
+  it('pagarme_pix while the active provider flag is still asaas: dispatches an ASAAS charge (active-flag dispatch, not the literal method), response.provider === "asaas"', async () => {
+    const token = await insertSessionCookie();
+    const roomId = await insertRoom();
+    const reservation = await insertReservation({ roomId });
+    createCustomer.mockResolvedValue({ id: 'cus_1' });
+    createPayment.mockResolvedValue({ id: 'pay_bal_2', status: 'PENDING', invoiceUrl: 'https://asaas.test/inv/2' });
+    getPixQrCode.mockResolvedValue({ encodedImage: 'img', payload: 'copy', expirationDate: '2026-09-01T00:00:00Z' });
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/panel/reservations/${reservation.code}/payment`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { kind: 'balance', method: 'pagarme_pix', amount_cents: 5000, cpf_cnpj: '12345678900' },
+    });
+
+    expect(response.statusCode).toBe(201);
+    const body = response.json();
+    expect(body.method).toBe('pix');
+    // The behavior this test exists to prove: provider follows the active
+    // flag ('asaas'), NOT the 'pagarme_pix' literal the operator selected.
+    expect(body.provider).toBe('asaas');
+    // Proves it actually went through the Asaas adapter, not a tautology
+    // that would pass with a fake/stubbed dispatch.
+    expect(createPayment).toHaveBeenCalledTimes(1);
+
+    const row = await testDb
+      .selectFrom('payments')
+      .selectAll()
+      .where('reservation_id', '=', reservation.id)
+      .executeTakeFirstOrThrow();
+    expect(row.kind).toBe('balance');
+    expect(row.status).toBe('pending');
+    // The DB row's own method column is also 'asaas_pix', not 'pagarme_pix'
+    // — dispatch-by-flag rewrites the persisted method too, not just the
+    // response shape.
+    expect(row.method).toBe('asaas_pix');
+    expect(row.provider).toBe('asaas');
+  });
+
   // --- Overpayment guard (overpaymentGuard.ts) ---
 
   it('cash: 422 OVERPAYMENT when amount_cents exceeds balance_due_cents by even one cent, nothing inserted', async () => {
