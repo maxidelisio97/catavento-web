@@ -114,6 +114,15 @@ export async function createOrReuseAsaasPayment(
   db: Kysely<DB>,
   input: CreateOrReuseAsaasPaymentInput,
 ): Promise<PaymentDetails> {
+  // sdd/asaas-pagarme-migration PR 2 (obs #257/#258, task A3) — rollback-bug
+  // fix. The "Asaas already has the money" branch below now COMMITS the
+  // "mark received" UPDATE with the rest of the transaction: instead of
+  // throwing PaymentAlreadyReceivedError from inside the trx callback (which
+  // made Kysely roll that UPDATE back along with everything else), it sets
+  // this flag and returns `null` from the callback so the transaction
+  // commits normally, then the error is thrown AFTER commit, below.
+  let alreadyReceivedByProvider = false;
+
   const result = await db.transaction().execute(async (trx) => {
     await sql`SELECT pg_advisory_xact_lock(${input.reservationId})`.execute(trx);
 
@@ -152,19 +161,22 @@ export async function createOrReuseAsaasPayment(
           .where('id', '=', existing.id)
           .execute();
       } else if (RECEIVED_LIKE_STATUSES.has(remote.status)) {
-        // KNOWN BUG (pre-M7, not fixed here — see server/CLAUDE.md "deuda
-        // conocida"): this UPDATE and the throw below run in the same
-        // transaction, so Kysely rolls the UPDATE back along with everything
-        // else before rethrowing. The local row stays 'pending' even though
-        // Asaas already has the money — it does NOT get aligned. Harmless
-        // today because the webhook is the real confirmation path, but don't
-        // build new logic on top of assuming this persists.
+        // FIXED (was: KNOWN BUG, pre-M7 — see server/CLAUDE.md "Deuda
+        // conocida" / sdd/asaas-pagarme-migration task A3): this UPDATE must
+        // survive even though the caller still needs PaymentAlreadyReceivedError
+        // to reach it. Throwing here would make Kysely roll this UPDATE back
+        // with everything else in the transaction. Instead: let the UPDATE
+        // commit as part of this transaction, record that the caller must be
+        // told via `alreadyReceivedByProvider`, and return early (skipping the
+        // overpayment re-check / new-charge creation below) — the actual
+        // throw happens AFTER the transaction commits, outside this callback.
         await trx
           .updateTable('payments')
           .set({ status: 'received', received_at: new Date(), updated_at: new Date() })
           .where('id', '=', existing.id)
           .execute();
-        throw new PaymentAlreadyReceivedError();
+        alreadyReceivedByProvider = true;
+        return null;
       } else {
         // Overdue/failed/etc in Asaas: mark it failed locally and fall through to create a new one.
         await trx
@@ -235,6 +247,15 @@ export async function createOrReuseAsaasPayment(
     return buildDetails(input.method, payment);
   });
 
+  if (alreadyReceivedByProvider) {
+    // Thrown here, AFTER the transaction above committed — see the comment
+    // on `alreadyReceivedByProvider`'s declaration. Deliberately does NOT
+    // call schedulePushAvailabilityForReservation below: nothing about
+    // availability/nights changed on this path, only a payment's status,
+    // matching this function's pre-fix behavior on every other exit.
+    throw new PaymentAlreadyReceivedError();
+  }
+
   // SPEC-modulo-12C § 3.2 (gap found in fresh-context risk review, not one
   // of the spec's 6 named triggers): `assertNotOverpayingWithPendingAsaas`
   // above can silently confirm this reservation via
@@ -245,5 +266,7 @@ export async function createOrReuseAsaasPayment(
   // ONE transaction, so pushing unconditionally after it commits is always
   // safe (a no-op re-sync when nothing actually changed, correct when it did).
   schedulePushAvailabilityForReservation(db, [input.reservationId]);
-  return result;
+  // `result` is only null on the alreadyReceivedByProvider path, which
+  // already returned via the throw above.
+  return result as PaymentDetails;
 }
