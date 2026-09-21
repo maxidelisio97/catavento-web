@@ -5,6 +5,16 @@
  * needed (per task brief: the Pagar.me account isn't live yet).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { PagarmeCardPaymentRequest } from '../pagarmeClient.js';
+
+// Type-level PCI assertion (design's "PCI type-level enforcement"): this
+// file fails `tsc --noEmit` if `credit_card` ever gains a raw PAN/CVV/
+// expiry field beyond `card_token`. `card_token` is the ONLY entry point
+// for card data anywhere in pagarmeClient.ts's types.
+type CreditCardKeys = keyof PagarmeCardPaymentRequest['credit_card'];
+type OnlyCardTokenField = CreditCardKeys extends 'card_token' ? true : false;
+const _assertOnlyCardTokenField: OnlyCardTokenField = true;
+void _assertOnlyCardTokenField;
 
 const originalEnv = { ...process.env };
 
