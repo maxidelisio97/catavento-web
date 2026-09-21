@@ -14,25 +14,39 @@
 import { sql, type Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
 import {
-  createOrReuseAsaasPayment,
+  createOrReuseProviderPayment,
   type AsaasPaymentKind,
   type PaymentDetails,
-  type PaymentMethod as AsaasClientMethod,
+  type PaymentMethod as ProviderPaymentMethod,
 } from '../reservations/createOrReusePayment.js';
 import { assertValidTransition, InvalidReservationTransitionError, type ReservationStatus } from '../reservations/reservationStateMachine.js';
-import { assertNotOverpaying, assertNotOverpayingWithPendingAsaas } from '../reservations/overpaymentGuard.js';
+import { assertNotOverpaying, assertNotOverpayingWithPendingProvider } from '../reservations/overpaymentGuard.js';
 import { releaseReservationNights } from '../availability/releaseReservationNights.js';
 import { assertReservationNightsConsistency } from '../availability/checkReservationNightsConsistency.js';
 import { todayISO } from '../shared/dateUtils.js';
 import { schedulePushAvailabilityForReservation } from '../channex/pushAvailability.js';
 
-export type PanelPaymentMethod = 'asaas_pix' | 'asaas_card' | 'cash' | 'external' | 'pix_manual';
+// sdd/asaas-pagarme-migration task A16 — widened for Pagar.me. NOTE (decision
+// made explicit here, not silently): `createOrReuseProviderPayment`'s
+// create-path ALWAYS dispatches a NEW charge via `getActiveProvider()`
+// (design's non-negotiable rule, same as the public endpoint) — an operator
+// picking `pagarme_pix` here while `config.payments.provider === 'asaas'`
+// still gets an asaas_pix charge, matching the flag, not the literal they
+// clicked. The provider-specific literal only matters for EXISTING rows
+// (per-row reuse/reconciliation dispatch) — this file never enforced a
+// caller-supplied provider for new charges even pre-migration (the choice
+// existed only because Asaas was the sole provider), so this doesn't
+// change any live behavior; it's a UX note for whoever builds the panel's
+// dual-provider selector, flagged in the PR result.
+export type PanelPaymentMethod = 'asaas_pix' | 'asaas_card' | 'pagarme_pix' | 'pagarme_card' | 'cash' | 'external' | 'pix_manual';
 
-const ASAAS_METHODS = new Set<PanelPaymentMethod>(['asaas_pix', 'asaas_card']);
+const PROVIDER_METHODS = new Set<PanelPaymentMethod>(['asaas_pix', 'asaas_card', 'pagarme_pix', 'pagarme_card']);
 
-const ASAAS_METHOD_MAP: Record<'asaas_pix' | 'asaas_card', AsaasClientMethod> = {
+const PROVIDER_METHOD_MAP: Record<'asaas_pix' | 'asaas_card' | 'pagarme_pix' | 'pagarme_card', ProviderPaymentMethod> = {
   asaas_pix: 'pix',
   asaas_card: 'card',
+  pagarme_pix: 'pix',
+  pagarme_card: 'card',
 };
 
 // Terminal or dead-end states can't take a new payment — there's nothing
@@ -131,8 +145,10 @@ export interface RegisterPaymentInput {
   method: PanelPaymentMethod;
   amountCents: number;
   cpfCnpj?: string;
-  /** Required for cash/external/pix_manual (see MissingIdempotencyKeyError); ignored for asaas_* (already deduped upstream). */
+  /** Required for cash/external/pix_manual (see MissingIdempotencyKeyError); ignored for asaas_pix, asaas_card, pagarme_pix, pagarme_card (already deduped upstream). */
   idempotencyKey?: string;
+  /** Only used for a Pagar.me card charge — see provider.ts's PCI note. */
+  cardToken?: string;
   changedBy: number;
 }
 
@@ -149,31 +165,32 @@ export async function registerPayment(db: Kysely<DB>, input: RegisterPaymentInpu
   }
 
   // Early guard against the obvious mistake (typo'd amount), before touching
-  // Asaas or opening a transaction. Cash/external/pix_manual and asaas_*
-  // both get a race-safe re-check under the advisory lock further down
-  // (assertNotOverpayingWithPendingAsaas) — this outer check alone only
-  // catches the single-request case against RECEIVED money.
+  // a provider or opening a transaction. Cash/external/pix_manual and
+  // asaas_*/pagarme_* both get a race-safe re-check under the advisory lock
+  // further down (assertNotOverpayingWithPendingProvider) — this outer
+  // check alone only catches the single-request case against RECEIVED money.
   await assertNotOverpaying(db, reservation.id, input.amountCents);
 
-  if (ASAAS_METHODS.has(input.method)) {
+  if (PROVIDER_METHODS.has(input.method)) {
     if (!input.cpfCnpj) throw new MissingCpfCnpjError();
 
-    return createOrReuseAsaasPayment(db, {
+    return createOrReuseProviderPayment(db, {
       reservationId: reservation.id,
       code: input.code,
       kind: input.kind,
-      method: ASAAS_METHOD_MAP[input.method as 'asaas_pix' | 'asaas_card'],
+      method: PROVIDER_METHOD_MAP[input.method as 'asaas_pix' | 'asaas_card' | 'pagarme_pix' | 'pagarme_card'],
       amountCents: input.amountCents,
       dueDate: todayISO(),
       guestName: reservation.guest_name ?? '',
       guestEmail: reservation.guest_email ?? '',
       guestPhone: reservation.guest_phone ?? '',
       cpfCnpj: input.cpfCnpj,
+      cardToken: input.cardToken,
     });
   }
 
-  // § 5.2 camino B: cash/external/pix_manual never touch Asaas — confirmed
-  // in the act by the authority of the logged-in operator.
+  // § 5.2 camino B: cash/external/pix_manual never touch a provider —
+  // confirmed in the act by the authority of the logged-in operator.
   if (!input.idempotencyKey) throw new MissingIdempotencyKeyError();
   const idempotencyKey = input.idempotencyKey;
   const method = input.method as 'cash' | 'external' | 'pix_manual';
@@ -202,9 +219,9 @@ export async function registerPayment(db: Kysely<DB>, input: RegisterPaymentInpu
 
     // Re-check under the lock, right before the insert: this is what
     // actually closes the race between two concurrent/near-simultaneous
-    // payments (cash or Asaas) — the outer assertNotOverpaying above only
-    // catches the single-request case.
-    await assertNotOverpayingWithPendingAsaas(trx, reservation.id, input.amountCents);
+    // payments (cash or a provider charge) — the outer assertNotOverpaying
+    // above only catches the single-request case.
+    await assertNotOverpayingWithPendingProvider(trx, reservation.id, input.amountCents);
 
     const row = await trx
       .insertInto('payments')
@@ -225,7 +242,7 @@ export async function registerPayment(db: Kysely<DB>, input: RegisterPaymentInpu
   });
 
   // SPEC-modulo-12C § 3.2 (gap found in fresh-context risk review): same
-  // reasoning as createOrReusePayment.ts — assertNotOverpayingWithPendingAsaas
+  // reasoning as createOrReusePayment.ts — assertNotOverpayingWithPendingProvider
   // above can silently confirm the reservation via a reentrant
   // processPaymentReceived(trx, ...) call, sharing this same transaction.
   // Unconditional push after commit is a safe no-op when nothing changed.
