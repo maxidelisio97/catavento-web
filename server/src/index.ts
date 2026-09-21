@@ -5,6 +5,7 @@ import { config } from './config.js';
 import { registerErrorHandler } from './errorHandler.js';
 import paymentsPlugin from './plugins/payments.js';
 import webhooksPlugin from './plugins/webhooks.js';
+import webhooksPagarmePlugin from './plugins/webhooksPagarme.js';
 import roomsPlugin from './plugins/rooms.js';
 import availabilityPlugin from './plugins/availability.js';
 import reservationsPlugin from './plugins/reservations.js';
@@ -54,6 +55,11 @@ app.get('/api/health', async () => ({ ok: true }));
 app.register(paymentsPlugin, { prefix: '/api' });
 app.register(webhooksPlugin, { prefix: '/api' });
 app.register(webhooksChannexPlugin, { prefix: '/api' });
+// sdd/asaas-pagarme-migration (PR 3 of 6, task A9): signature-gated
+// skeleton only — see webhooksPagarme.ts's docstring. Safe to register now
+// (it never confirms a reservation or writes to payments/reservations);
+// real event handling lands in PR 4 (task A13/A14).
+app.register(webhooksPagarmePlugin, { prefix: '/api' });
 app.register(roomsPlugin, { prefix: '/api' });
 app.register(availabilityPlugin, { prefix: '/api' });
 app.register(reservationsPlugin, { prefix: '/api' });
