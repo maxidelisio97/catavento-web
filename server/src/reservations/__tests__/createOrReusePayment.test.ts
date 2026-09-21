@@ -186,7 +186,7 @@ describe('createOrReuseAsaasPayment — deposit characterization (pre-7B baselin
     expect(rows).toHaveLength(1);
   });
 
-  it('throws PaymentAlreadyReceivedError when Asaas already has the money (known bug: the "mark received" UPDATE runs inside the same tx as the throw, so it rolls back and never persists — see server/CLAUDE.md "deuda conocida")', async () => {
+  it('throws PaymentAlreadyReceivedError when Asaas already has the money, but still persists the local row as received (rollback-bug fix, sdd/asaas-pagarme-migration PR 2)', async () => {
     const reservation = await insertTestReservation();
     await testDb
       .insertInto('payments')
@@ -212,15 +212,17 @@ describe('createOrReuseAsaasPayment — deposit characterization (pre-7B baselin
       }),
     ).rejects.toBeInstanceOf(PaymentAlreadyReceivedError);
 
-    // NOT 'received': the UPDATE that sets it happens right before the throw
-    // above, inside the same transaction — Kysely rolls it back along with
-    // everything else in this callback. This locks down actual behavior, not
-    // the intent in the code's comment.
+    // FIXED: the "mark received" UPDATE now commits with the rest of the
+    // transaction — PaymentAlreadyReceivedError is thrown AFTER commit,
+    // outside the transaction callback, so Kysely no longer rolls the
+    // UPDATE back. Previously this asserted status stayed 'pending' (see
+    // git history / server/CLAUDE.md "Deuda conocida" for the prior bug).
     const row = await testDb
       .selectFrom('payments')
       .selectAll()
       .where('asaas_payment_id', '=', 'pay_existing')
       .executeTakeFirstOrThrow();
-    expect(row.status).toBe('pending');
+    expect(row.status).toBe('received');
+    expect(row.received_at).not.toBeNull();
   });
 });
